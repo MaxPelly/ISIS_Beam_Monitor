@@ -1,6 +1,6 @@
 [DATA]
 mcr_news_url = https://www.isis.stfc.ac.uk/gallery/beam-status/mcrnews.txt
-isis_websocket_url = 
+isis_websocket_url = wss://ndaextweb4.nd.rl.ac.uk/pvws/pv
 
 [WEBHOOKS]
 news_teams_url = 
