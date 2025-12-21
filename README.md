@@ -1,4 +1,5 @@
-Very basic python scripts to monitor the status of the STFC ISIS Pulsed Neutron and Muon Source and send notifications via temas webhooks.
+Very basic python scripts to monitor the status of the STFC ISIS Pulsed Neutron and Muon Source and send notifications via teams webhooks.
+
 Currently implemented:
 - Notify on new MCR news published (mcr_news.py)
 - Notify on significant change in beam strength (beam_state.py)
