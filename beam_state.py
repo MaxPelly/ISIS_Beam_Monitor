@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+# Author: Max Pelly
+# Created: 02-DEC-2025
+# Licence: GNU AGPL 3
+
+
 import websocket
 import ssl
 import json
