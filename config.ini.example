@@ -1,4 +1,8 @@
+[DATA]
+mcr_news_url = https://www.isis.stfc.ac.uk/gallery/beam-status/mcrnews.txt
+isis_websocket_url = 
+
 [WEBHOOKS]
 news_teams_url = 
 beam_teams_url = 
-experiment_teams_url =
+experiment_teams_url = 
