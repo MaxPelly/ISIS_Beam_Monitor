@@ -8,3 +8,5 @@ Scripts are run as:
 ```
 python3 <script> <config file location> <args>
 ```
+
+--help lists available args
