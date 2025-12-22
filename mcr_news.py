@@ -82,7 +82,7 @@ while True:
     except requests.ConnectionError as e:
         now = datetime.now()
         print(f"{now}: Connection Error")
-        time.sleep(5*60)
+        sleep(5*60)
     if new_news != old_news:
         old_news = new_news
         print(new_news)
