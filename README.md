@@ -15,3 +15,6 @@ python3 <script> <config file location> <args>
 ```
 
 --help lists available args
+
+
+Note these are just some quick scripts pulled together on a beamtime that I have found useful. No promises they are well written or robust.
