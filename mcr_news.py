@@ -57,7 +57,7 @@ def send_teams_message(url, message):
 
 parser = argparse.ArgumentParser("ISIS MCR News Monitor")
 parser.add_argument("config", help="Configuration file to use for data and webhook urls.", type=str)
-parser.add_argument("-n", "--notify_current", help="Send a notification for the current news. Otherwise waits untill new news is posted.", type=bool, default=False)
+parser.add_argument("-n", "--notify_current", help="Send a notification for the current news. Otherwise waits until new news is posted.", action=argparse.BooleanOptionalAction)
 args = parser.parse_args()
 
 config = configparser.ConfigParser(interpolation=None)
