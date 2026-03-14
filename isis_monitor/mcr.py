@@ -11,10 +11,11 @@ from isis_monitor.notifiers import NotificationChannel
 logger = logging.getLogger(__name__)
 
 class MCRNewsMonitor:
-    def __init__(self, config: AppConfig, channel: NotificationChannel, notify_current: bool = False):
+    def __init__(self, config: AppConfig, channel: NotificationChannel, notify_current: bool = False, tui=None):
         self.url = config.mcr_news_url
         self.channel = channel
         self.notify_current = notify_current
+        self.tui = tui
         self.old_news: Optional[str] = None
 
     async def get_news(self, session: aiohttp.ClientSession) -> Optional[str]:
@@ -43,6 +44,8 @@ class MCRNewsMonitor:
                     self.old_news = await self.get_news(session)
                     if self.old_news:
                         logger.info(f"Current MCR News: {self.old_news}")
+                        if self.tui:
+                            self.tui.update_mcr_news(self.old_news)
                     else:
                         await asyncio.sleep(60)
             else:
@@ -57,6 +60,8 @@ class MCRNewsMonitor:
                     self.old_news = new_news
                     msg = f"New MCR Update: {new_news}"
                     logger.info(msg)
+                    if self.tui:
+                        self.tui.update_mcr_news(new_news)
                     await self.channel.broadcast(new_news)
                 elif new_news:
                     logger.debug("No new MCR news.")

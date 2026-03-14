@@ -9,11 +9,12 @@ from isis_monitor.config import load_config
 from isis_monitor.notifiers import NotificationChannel, TeamsNotifier, DummyNotifier
 from isis_monitor.beam import BeamMonitor
 from isis_monitor.mcr import MCRNewsMonitor
+from isis_monitor.tui import RichTUI
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING, # Reduced logging level to avoid interfering with TUI
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[logging.FileHandler("monitor.log")] # Log to file instead of stdout
 )
 logger = logging.getLogger("MAIN")
 
@@ -37,17 +38,23 @@ async def run_all(config, args):
         exp_channel.add_notifier(DummyNotifier())
         mcr_channel.add_notifier(DummyNotifier())
 
+    # Initialize TUI
+    tui = RichTUI()
+    tui.start()
+
     # Initialize Monitors
-    beam_monitor = BeamMonitor(config, beam_channel, exp_channel, args.notify_counts)
-    mcr_monitor = MCRNewsMonitor(config, mcr_channel, args.notify_current)
+    beam_monitor = BeamMonitor(config, beam_channel, exp_channel, args.notify_counts, tui=tui)
+    mcr_monitor = MCRNewsMonitor(config, mcr_channel, args.notify_current, tui=tui)
 
     logger.info("Starting monitors concurrently...")
     
-    # Run them concurrently
-    await asyncio.gather(
-        beam_monitor.run(),
-        mcr_monitor.run()
-    )
+    try:
+        await asyncio.gather(
+            beam_monitor.run(),
+            mcr_monitor.run()
+        )
+    finally:
+        tui.stop()
 
 def main():
     parser = argparse.ArgumentParser(description="ISIS Beam and MCR News Monitor")

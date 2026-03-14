@@ -45,12 +45,13 @@ class MonitorState:
 
 class BeamMonitor:
     def __init__(self, config: AppConfig, beam_channel: NotificationChannel, 
-                 experiment_channel: NotificationChannel, counts_target: float):
+                 experiment_channel: NotificationChannel, counts_target: float, tui=None):
         
         self.data_url = config.isis_websocket_url
         self.beam_channel = beam_channel
         self.experiment_channel = experiment_channel
         self.counts_target = counts_target
+        self.tui = tui
         self.state = MonitorState()
 
     def _safe_float(self, value: Any) -> float:
@@ -156,14 +157,10 @@ class BeamMonitor:
                     await self.experiment_channel.broadcast(msg)
                     self.state.end_notified = True
 
-        # Formatting with fixed widths and padding to prevent trailing characters and UI jitter
-        status = (
-            f"{time_now:%H:%M:%S} | "
-            f"TS1: {self.state.TS1_beam_current:7.3f} uA ({self.state.TS1_beam_power_state:<6}) | "
-            f"TS2: {self.state.TS2_beam_current:7.3f} uA ({self.state.TS2_beam_power_state:<6}) | "
-            f"Muons: {self.state.muon_beam_current:7.3f} uA ({self.state.muon_beam_power_state:<6})"
-        )
-        print(f"\r{status:<120}", end="", flush=True)
+        if self.tui:
+            self.tui.update_beam_state("TS1", self.state.TS1_beam_current, self.state.TS1_beam_power_state)
+            self.tui.update_beam_state("TS2", self.state.TS2_beam_current, self.state.TS2_beam_power_state)
+            self.tui.update_beam_state("Muons", self.state.muon_beam_current, self.state.muon_beam_power_state)
 
     async def run(self):
         subscribe_msg = json.dumps({
