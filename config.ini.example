@@ -3,6 +3,11 @@ mcr_news_url = https://www.isis.stfc.ac.uk/gallery/beam-status/mcrnews.txt
 isis_websocket_url = wss://ndaextweb4.nd.rl.ac.uk/pvws/pv
 
 [WEBHOOKS]
-news_teams_url = 
-beam_teams_url = 
-experiment_teams_url = 
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+
+[PVS]
+# Uncomment and edit the lines below when monitoring an instrument other than PEARL.
+# counts_pv = IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE
+# run_name_pv = IN:PEARL:DAE:WDTITLE

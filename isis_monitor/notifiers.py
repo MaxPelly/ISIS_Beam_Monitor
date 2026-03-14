@@ -1,10 +1,12 @@
 import logging
-import requests
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, List
+
+import aiohttp
 
 logger = logging.getLogger(__name__)
+
 
 class Notifier(ABC):
     """Abstract interface for any notification method."""
@@ -12,8 +14,9 @@ class Notifier(ABC):
     async def send(self, message: str, channel: Optional[str] = None):
         pass
 
+
 class TeamsNotifier(Notifier):
-    """Sends notifications to a Microsoft Teams Webhook."""
+    """Sends notifications to a Microsoft Teams Incoming Webhook."""
     def __init__(self, webhook_url: str):
         self.webhook_url = webhook_url
 
@@ -44,24 +47,33 @@ class TeamsNotifier(Notifier):
 
         payload = self._create_payload(message, channel)
         try:
-            # Run blocking I/O in a separate thread
-            await asyncio.to_thread(requests.post, self.webhook_url, json=payload, timeout=10)
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    self.webhook_url,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status >= 400:
+                        body = await resp.text()
+                        logger.error(
+                            f"Teams webhook returned HTTP {resp.status}: {body[:200]}"
+                        )
         except Exception as e:
             logger.error(f"Failed to send Teams webhook: {e}")
 
+
 class DummyNotifier(Notifier):
-    """A dummy notifier for testing purposes that logs the message instead of sending."""
+    """A dummy notifier for testing — logs the message instead of sending."""
     async def send(self, message: str, channel: Optional[str] = None):
         prefix = f"[DUMMY NOTIFIER - {channel}]" if channel else "[DUMMY NOTIFIER]"
         logger.info(f"{prefix} {message}")
 
+
 class NotificationChannel:
-    """
-    Manages a group of notifiers for a specific topic (e.g., 'Beam' or 'Experiment').
-    """
+    """Manages a group of notifiers for a specific topic."""
     def __init__(self, name: str):
         self.name = name
-        self.notifiers = []
+        self.notifiers: List[Notifier] = []
 
     def add_notifier(self, notifier: Notifier):
         self.notifiers.append(notifier)
@@ -69,6 +81,8 @@ class NotificationChannel:
     async def broadcast(self, message: str, channel: Optional[str] = None):
         """Sends the message to all registered notifiers in parallel."""
         if not self.notifiers:
+            logger.debug(
+                f"Channel '{self.name}' has no notifiers configured; skipping broadcast."
+            )
             return
-        
         await asyncio.gather(*(n.send(message, channel) for n in self.notifiers))
