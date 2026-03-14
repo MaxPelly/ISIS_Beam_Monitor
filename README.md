@@ -1,3 +1,5 @@
+# Note this is me playing with ai code generation. Treat this branch with extreme caution!
+
 # ISIS Beam and MCR News Monitor
 
 This is a Python application that monitors the status of the ISIS beam, experiment updates, and MCR news, sending notifications to designated Microsoft Teams channels. It provides a concurrent monitoring system for real-time facility updates.
