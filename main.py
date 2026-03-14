@@ -24,19 +24,19 @@ async def run_all(config, args):
     exp_channel = NotificationChannel("Experiment Updates")
     mcr_channel = NotificationChannel("MCR News")
 
-    # Configure Teams Notifiers
-    if config.beam_teams_url:
-        beam_channel.add_notifier(TeamsNotifier(config.beam_teams_url))
-    if config.experiment_teams_url:
-        exp_channel.add_notifier(TeamsNotifier(config.experiment_teams_url))
-    if config.news_teams_url:
-        mcr_channel.add_notifier(TeamsNotifier(config.news_teams_url))
-
     if args.dummy:
         logger.info("Initializing Dummy Notifier (logs to console)")
         beam_channel.add_notifier(DummyNotifier())
         exp_channel.add_notifier(DummyNotifier())
         mcr_channel.add_notifier(DummyNotifier())
+    else:
+        # Configure Teams Notifiers
+        if config.beam_teams_url:
+            beam_channel.add_notifier(TeamsNotifier(config.beam_teams_url))
+        if config.experiment_teams_url:
+            exp_channel.add_notifier(TeamsNotifier(config.experiment_teams_url))
+        if config.news_teams_url:
+            mcr_channel.add_notifier(TeamsNotifier(config.news_teams_url))
 
     # Initialize TUI
     tui = RichTUI()
