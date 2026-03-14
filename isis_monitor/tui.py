@@ -12,40 +12,55 @@ from rich.table import Table
 
 # Eight Unicode block heights, index 0 = shortest
 _BLOCKS = " ▁▂▃▄▅▆▇█"
-# Minimum scale ceiling so an all-zero history still renders as flat baseline
-_MIN_SCALE = 1.0
 
 
 def _render_sparkline(
-    values: list[float],
-    power: str,
+    history_data: list[Tuple[float, str]],
     width: int,
 ) -> Text:
-    """Return a Rich Text sparkline for *values*, coloured by *power* state.
+    """Return a Rich Text sparkline, colouring each block by its historical state.
 
-    The bar chart is normalised against the rolling maximum of the supplied
-    values, so the tallest bar always reaches full height.  When all values
-    are zero the line is flat at the baseline.
+    The bar chart is min-max normalised against the current data in the deque.
     """
-    colour = "green"
-    if power == "off":
-        colour = "red"
-    elif power in ("low", "unknown"):
-        colour = "yellow"
+    text = Text()
+    if not history_data:
+        text.append(" " * width)
+        return text
 
-    if not values:
-        return Text(" " * width, style=colour)
+    # Extract just the values to calculate our dynamic range
+    values = [v for v, _ in history_data]
+    tail = history_data[-width:]
+    
+    min_val = min(values)
+    max_val = max(values)
+    span = max_val - min_val
 
-    scale = max(max(values), _MIN_SCALE)
-    # Take the most-recent *width* samples
-    tail: list[float] = values[-width:]
-    chars = ""
-    for v in tail:
-        idx = round((v / scale) * (len(_BLOCKS) - 1))
-        chars += _BLOCKS[idx]
     # Left-pad with spaces if we have fewer samples than width
-    chars = chars.rjust(width)
-    return Text(chars, style=colour)
+    pad_len = width - len(tail)
+    if pad_len > 0:
+        text.append(" " * pad_len)
+
+    # Build the sparkline character by character
+    for v, power in tail:
+        # Determine historical colour
+        colour = "green"
+        if power == "off":
+            colour = "red"
+        elif power in ("low", "unknown"):
+            colour = "yellow"
+
+        # Determine block height
+        if span == 0:
+            block_idx = 0 if max_val == 0 else len(_BLOCKS) // 2
+            char = _BLOCKS[block_idx]
+        else:
+            norm = (v - min_val) / span
+            idx = round(norm * (len(_BLOCKS) - 1))
+            char = _BLOCKS[idx]
+            
+        text.append(char, style=colour)
+
+    return text
 
 
 class RichTUI:
@@ -62,8 +77,8 @@ class RichTUI:
             "TS2":   {"current": 0.0, "power": "unknown"},
             "Muons": {"current": 0.0, "power": "unknown"},
         }
-        # Per-target rolling history: deque of (datetime, current_μA)
-        self._history: dict[str, Deque[Tuple[datetime, float]]] = {
+        # Per-target rolling history: deque of (datetime, current_μA, power_state)
+        self._history: dict[str, Deque[Tuple[datetime, float, str]]] = {
             beam: deque(maxlen=history_maxlen)
             for beam in self.beam_states
         }
@@ -111,7 +126,7 @@ class RichTUI:
     async def run_sampler(self, stop_event: asyncio.Event) -> None:
         """Coroutine that snapshots the latest beam currents at a fixed interval.
 
-        This is intentionally decoupled from ``beam.py``'s update rate —
+        This is intentionally decoupled from ``beam.py``'s update rate --
         it wakes every ``sample_interval`` seconds and records whatever the
         most-recently-received values are.  If beam.py has been silent the
         last-known values are repeated, producing a flat line on the graph.
@@ -130,7 +145,7 @@ class RichTUI:
             now = datetime.now()
             with self._lock:
                 for beam, state in self.beam_states.items():
-                    self._history[beam].append((now, state["current"]))
+                    self._history[beam].append((now, state["current"], state["power"]))
                 self._update_beam_graph()
 
     # ------------------------------------------------------------------
@@ -140,7 +155,7 @@ class RichTUI:
     def update_beam_state(self, beam: str, current: float, power: str):
         """Update the *latest* state of a specific beam target.
 
-        Does NOT write to the history deque — that is handled exclusively by
+        Does NOT write to the history deque -- that is handled exclusively by
         :meth:`run_sampler` on its own fixed timer.
         """
         with self._lock:
@@ -205,18 +220,17 @@ class RichTUI:
     def _update_beam_graph(self):
         """Render the rolling sparkline graph into beam_graph."""
         # Approximate usable width: panel width minus borders/label prefix.
-        # Rich doesn't expose a reliable console width here, so we use a
-        # sensible default; the sparkline itself clips to actual history length.
         SPARK_WIDTH = 58
         LABEL_W = 7   # "Muons: " is 7 chars
 
         content = Text()
         for i, (beam, state) in enumerate(self.beam_states.items()):
-            values = [v for _, v in self._history[beam]]
+            # Extract both current and historical power state
+            history_data = [(v, p) for _, v, p in self._history[beam]]
             latest = f"{state['current']:6.1f} μA"
 
             label = Text(f"{beam:<{LABEL_W}}", style="bold")
-            spark = _render_sparkline(values, state["power"], SPARK_WIDTH)
+            spark = _render_sparkline(history_data, SPARK_WIDTH)
             val   = Text(f" {latest}", style="dim")
 
             content.append_text(label)
@@ -230,7 +244,7 @@ class RichTUI:
         self.layout["beam_graph"].update(
             Panel(
                 content,
-                title="Beam Current — rolling 1 h",
+                title="Beam Current -- rolling 1 h",
                 subtitle=subtitle,
                 border_style="cyan",
             )
