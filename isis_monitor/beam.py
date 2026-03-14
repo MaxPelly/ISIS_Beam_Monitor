@@ -21,7 +21,7 @@ PV_COUNTS = "IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE"
 PV_RUN_NAME = "IN:PEARL:DAE:WDTITLE"
 
 # --- Beam State Cutoffs ---
-BEAM_BOUNDERIES = {
+BEAM_BOUNDARIES = {
     "TS1": (0, 50, 100),
     "TS2": (0, 12, 25),
     "Muon": (0, 12, 25),
@@ -72,16 +72,20 @@ class BeamMonitor:
             return 0.0
 
     def _get_power_label(self, beam_uA: float, beam: str) -> str:
-        bounderies = BEAM_BOUNDERIES[beam]        
-        if beam_uA <= bounderies[0]: return "off"
-        if beam_uA < bounderies[1]: return "low"
-        if beam_uA < bounderies[2]: return "medium"
+        boundaries = BEAM_BOUNDARIES[beam]
+        if beam_uA <= boundaries[0]: return "off"
+        if beam_uA < boundaries[1]: return "low"
+        if beam_uA < boundaries[2]: return "medium"
         return "high"
 
     async def _handle_update(self, message: Dict[str, Any]):
         """Dispatch update messages using Pattern Matching."""
         time_now = datetime.now()
-        
+
+        # NOTE: Bare module-level names (e.g. PV_RUN_NAME) are NOT constant patterns in
+        # Python's structural pattern matching — they are treated as capture variables.
+        # To correctly match against the constant values we use a single wildcard arm
+        # for each key shape and then dispatch with if/elif inside.
         match message:
             case {"pv": pv, "value": raw_val}:
                 if pv == PV_TS1_BEAM_CURRENT:
@@ -92,10 +96,10 @@ class BeamMonitor:
                         msg = f"{time_now}: TS1 Beam is now {new_state}. Current: {beam_val:.3f} uA"
                         logger.info(f"\nState Change: {msg}")
                         await self.beam_channel.broadcast(msg, "TS1")
-                    
+
                     self.state.TS1_beam_current = beam_val
                     self.state.TS1_beam_power_state = new_state
-                    
+
                 elif pv == PV_TS2_BEAM_CURRENT:
                     beam_val = self._safe_float(raw_val)
                     new_state = self._get_power_label(beam_val, "TS2")
@@ -104,10 +108,10 @@ class BeamMonitor:
                         msg = f"{time_now}: TS2 Beam is now {new_state}. Current: {beam_val:.3f} uA"
                         logger.info(f"\nState Change: {msg}")
                         await self.beam_channel.broadcast(msg, "TS2")
-                    
+
                     self.state.TS2_beam_current = beam_val
                     self.state.TS2_beam_power_state = new_state
-                    
+
                 elif pv == PV_MUON_BEAM_CURRENT:
                     beam_val = self._safe_float(raw_val)
                     new_state = self._get_power_label(beam_val, "Muon")
@@ -116,11 +120,11 @@ class BeamMonitor:
                         msg = f"{time_now}: Muon Beam is now {new_state}. Current: {beam_val:.3f} uA"
                         logger.info(f"\nState Change: {msg}")
                         await self.beam_channel.broadcast(msg, "Muons")
-                    
+
                     self.state.muon_beam_current = beam_val
                     self.state.muon_beam_power_state = new_state
 
-            case {"pv": PV_RUN_NAME, "b64byt": b64_data}:
+            case {"pv": pv, "b64byt": b64_data} if pv == PV_RUN_NAME:
                 if not b64_data or (isinstance(b64_data, str) and b64_data.lower() == "nan"):
                     return
 
@@ -128,16 +132,16 @@ class BeamMonitor:
                     name = base64.b64decode(b64_data).decode().strip("\x00")
                 except Exception:
                     return
-                    
+
                 if self.state.run_name and self.state.run_name != name:
                     msg = f"{time_now}: Detected new run start. {name}"
                     logger.info(f"\nNew Run: {msg}")
                     await self.experiment_channel.broadcast(msg)
                     self.state.current_counts = 0
-                
+
                 self.state.run_name = name
 
-            case {"pv": PV_COUNTS, "text": text_val}:
+            case {"pv": pv, "text": text_val} if pv == PV_COUNTS:
                 if not text_val or (isinstance(text_val, str) and text_val.lower() == "nan"):
                     return
 
@@ -147,7 +151,7 @@ class BeamMonitor:
                     return
 
                 self.state.current_counts = counts
-                
+
                 if self.state.end_notified and (counts < (self.counts_target - 25)):
                     self.state.end_notified = False
 

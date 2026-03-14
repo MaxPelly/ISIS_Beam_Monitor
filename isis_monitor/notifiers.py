@@ -2,13 +2,14 @@ import logging
 import requests
 import asyncio
 from abc import ABC, abstractmethod
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 class Notifier(ABC):
     """Abstract interface for any notification method."""
     @abstractmethod
-    async def send(self, message: str, channel: str = None):
+    async def send(self, message: str, channel: Optional[str] = None):
         pass
 
 class TeamsNotifier(Notifier):
@@ -16,8 +17,8 @@ class TeamsNotifier(Notifier):
     def __init__(self, webhook_url: str):
         self.webhook_url = webhook_url
 
-    def _create_payload(self, message: str, channel: str = None) -> dict:
-        title = "Beam Update" if channel else "MCR Update"
+    def _create_payload(self, message: str, channel: Optional[str] = None) -> dict:
+        title = f"{channel} Beam Update" if channel else "MCR Update"
         return {
             "type": "message",
             "summary": message,
@@ -37,7 +38,7 @@ class TeamsNotifier(Notifier):
             }]
         }
 
-    async def send(self, message: str, channel: str = None):
+    async def send(self, message: str, channel: Optional[str] = None):
         if not self.webhook_url:
             return
 
@@ -50,7 +51,7 @@ class TeamsNotifier(Notifier):
 
 class DummyNotifier(Notifier):
     """A dummy notifier for testing purposes that logs the message instead of sending."""
-    async def send(self, message: str, channel: str = None):
+    async def send(self, message: str, channel: Optional[str] = None):
         prefix = f"[DUMMY NOTIFIER - {channel}]" if channel else "[DUMMY NOTIFIER]"
         logger.info(f"{prefix} {message}")
 
@@ -65,7 +66,7 @@ class NotificationChannel:
     def add_notifier(self, notifier: Notifier):
         self.notifiers.append(notifier)
 
-    async def broadcast(self, message: str, channel: str = None):
+    async def broadcast(self, message: str, channel: Optional[str] = None):
         """Sends the message to all registered notifiers in parallel."""
         if not self.notifiers:
             return

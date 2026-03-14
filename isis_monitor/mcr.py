@@ -20,7 +20,7 @@ class MCRNewsMonitor:
 
     async def get_news(self, session: aiohttp.ClientSession) -> Optional[str]:
         try:
-            async with session.get(self.url, timeout=10) as response:
+            async with session.get(self.url, timeout=aiohttp.ClientTimeout(total=10)) as response:
                 if response.status == 200:
                     feed = await response.text()
                     # Clean up the text just like the original script

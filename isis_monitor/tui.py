@@ -59,14 +59,15 @@ class RichTUI:
 
     def _update_all(self):
         """Force update all panels."""
-        self.layout["header"].update(
-            Panel(
-                Text("ISIS Facility Monitor", justify="center", style="bold cyan"), 
-                style="blue"
+        with self._lock:
+            self.layout["header"].update(
+                Panel(
+                    Text("ISIS Facility Monitor", justify="center", style="bold cyan"),
+                    style="blue"
+                )
             )
-        )
-        self._update_beam_panel()
-        self._update_mcr_panel()
+            self._update_beam_panel()
+            self._update_mcr_panel()
 
     def _update_beam_panel(self):
         table = Table(show_header=True, header_style="bold magenta", expand=True)
