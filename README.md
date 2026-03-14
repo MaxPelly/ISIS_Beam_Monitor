@@ -12,10 +12,11 @@ This is a Python application that monitors the status of the ISIS beam, experime
 - **Microsoft Teams Integration**: Sends formatted notifications directly to configured Teams Webhook URLs.
 - **Dummy Notifier**: Includes a logging-based dummy notifier for testing and development without sending actual webhooks.
 - **Concurrent Execution**: Uses `asyncio` to run beam and news monitors concurrently for real-time responsiveness.
+- **Live TUI Graph View**: Displays a rolling 1-hour sparkline graph of beam current (μA) for TS1, TS2, and Muons directly in the terminal. The graph is sampled on its own fixed 1-minute timer, fully decoupled from the beam websocket update rate — a silent beam produces a flat line at the last-known value.
 
 ## Requirements
 
-Ensure you have Python 3.7+ installed. 
+Ensure you have Python 3.10+ installed.
 Install the required dependencies using pip:
 
 ```bash
@@ -30,13 +31,23 @@ pip install -r requirements-dev.txt
 
 ## Configuration
 
-The application requires an INI configuration file to set up the Teams webhook URLs and other settings. 
+The application requires an INI configuration file to set up the Teams webhook URLs and other settings.
 
 1. Copy the example configuration file:
    ```bash
    cp config.ini.example config.ini
    ```
 2. Edit `config.ini` and add your specific Teams webhook URLs for beam, experiment, and news updates.
+
+### Optional `[TUI]` section
+
+```ini
+[TUI]
+# Number of 1-minute samples to retain per beam target (default = 60 → 1-hour rolling window).
+# history_maxlen = 60
+# Interval in seconds between graph samples (default = 60).
+# sample_interval = 60
+```
 
 ## Usage
 

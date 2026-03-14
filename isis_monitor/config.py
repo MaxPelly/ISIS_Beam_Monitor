@@ -26,6 +26,10 @@ class AppConfig:
     counts_pv: str = "IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE"
     run_name_pv: str = "IN:PEARL:DAE:WDTITLE"
 
+    # TUI graph settings
+    history_maxlen: int = 60    # samples retained per beam target
+    sample_interval: float = 60.0  # seconds between graph samples
+
 
 def load_config(config_path: Path) -> AppConfig:
     if not config_path.exists():
@@ -56,6 +60,13 @@ def load_config(config_path: Path) -> AppConfig:
         "PVS", "run_name_pv", fallback="IN:PEARL:DAE:WDTITLE"
     )
 
+    # TUI (fully optional section)
+    try:
+        history_maxlen = config.getint("TUI", "history_maxlen", fallback=60)
+        sample_interval = config.getfloat("TUI", "sample_interval", fallback=60.0)
+    except (ValueError, configparser.Error) as exc:
+        raise ConfigError(f"[TUI] section contains invalid values: {exc}") from exc
+
     return AppConfig(
         mcr_news_url=mcr_news_url,
         isis_websocket_url=isis_websocket_url,
@@ -64,4 +75,6 @@ def load_config(config_path: Path) -> AppConfig:
         experiment_teams_url=experiment_teams_url,
         counts_pv=counts_pv,
         run_name_pv=run_name_pv,
+        history_maxlen=history_maxlen,
+        sample_interval=sample_interval,
     )

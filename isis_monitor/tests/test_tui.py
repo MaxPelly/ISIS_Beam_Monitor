@@ -1,17 +1,21 @@
+import asyncio
 import pytest
-from unittest.mock import patch, MagicMock, call
-from isis_monitor.tui import RichTUI
+from collections import deque
+from datetime import datetime
+from unittest.mock import patch, MagicMock
+
+from isis_monitor.tui import RichTUI, _render_sparkline
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def make_tui() -> RichTUI:
+def make_tui(history_maxlen: int = 60, sample_interval: float = 60.0) -> RichTUI:
     """Return a RichTUI instance with Live.start/stop patched out so no real
     terminal is required."""
     with patch("isis_monitor.tui.Live.start"), patch("isis_monitor.tui.Live.stop"):
-        tui = RichTUI()
+        tui = RichTUI(history_maxlen=history_maxlen, sample_interval=sample_interval)
     return tui
 
 
@@ -33,6 +37,28 @@ class TestInit:
     def test_lock_exists(self):
         tui = make_tui()
         assert tui._lock is not None
+
+    def test_history_deques_initialised(self):
+        tui = make_tui(history_maxlen=10)
+        for target in ("TS1", "TS2", "Muons"):
+            assert target in tui._history
+            assert isinstance(tui._history[target], deque)
+            assert tui._history[target].maxlen == 10
+            assert len(tui._history[target]) == 0
+
+    def test_default_params(self):
+        tui = make_tui()
+        assert tui.history_maxlen == 60
+        assert tui.sample_interval == 60.0
+
+    def test_layout_has_beam_graph_panel(self):
+        tui = make_tui()
+        # Should not raise KeyError
+        _ = tui.layout["beam_graph"]
+
+    def test_layout_has_beam_table_panel(self):
+        tui = make_tui()
+        _ = tui.layout["beam_table"]
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +88,7 @@ class TestStartStop:
 
 
 # ---------------------------------------------------------------------------
-# update_beam_state()
+# update_beam_state() — must NOT write to history
 # ---------------------------------------------------------------------------
 
 class TestUpdateBeamState:
@@ -87,7 +113,6 @@ class TestUpdateBeamState:
         original_states = dict(tui.beam_states)
         with patch.object(tui, "_update_beam_panel"):
             tui.update_beam_state("UnknownBeam", 50.0, "high")
-        # beam_states dict should be unchanged
         assert tui.beam_states == original_states
 
     def test_triggers_beam_panel_update(self):
@@ -96,8 +121,15 @@ class TestUpdateBeamState:
             tui.update_beam_state("TS1", 10.0, "low")
         mock_panel.assert_called_once()
 
+    def test_does_not_write_to_history(self):
+        """History must only be written by run_sampler, not by update_beam_state."""
+        tui = make_tui()
+        with patch.object(tui, "_update_beam_panel"):
+            tui.update_beam_state("TS1", 99.0, "high")
+            tui.update_beam_state("TS1", 88.0, "high")
+        assert len(tui._history["TS1"]) == 0
+
     def test_updates_last_update_timestamp(self):
-        from datetime import datetime
         tui = make_tui()
         before = tui.last_update
         with patch.object(tui, "_update_beam_panel"):
@@ -106,29 +138,143 @@ class TestUpdateBeamState:
 
 
 # ---------------------------------------------------------------------------
-# update_mcr_news()
+# History buffer
 # ---------------------------------------------------------------------------
 
-class TestUpdateMcrNews:
-    def test_updates_news_text(self):
-        tui = make_tui()
-        with patch.object(tui, "_update_mcr_panel"):
-            tui.update_mcr_news("Reactor at full power")
-        assert tui.mcr_news == "Reactor at full power"
+class TestHistoryBuffer:
+    def test_maxlen_eviction(self):
+        tui = make_tui(history_maxlen=3)
+        # Manually inject samples into the deque (as run_sampler would)
+        for v in [1.0, 2.0, 3.0, 4.0]:
+            tui._history["TS1"].append((datetime.now(), v))
+        values = [v for _, v in tui._history["TS1"]]
+        assert values == [2.0, 3.0, 4.0]   # oldest evicted
 
-    def test_triggers_mcr_panel_update(self):
-        tui = make_tui()
-        with patch.object(tui, "_update_mcr_panel") as mock_panel:
-            tui.update_mcr_news("Some news")
-        mock_panel.assert_called_once()
+    def test_flat_line_when_silent(self):
+        """Repeated snapshots of the same value produce a flat history."""
+        tui = make_tui(history_maxlen=5)
+        tui.beam_states["TS1"]["current"] = 42.0
+        now = datetime.now()
+        for _ in range(5):
+            tui._history["TS1"].append((now, tui.beam_states["TS1"]["current"]))
+        values = [v for _, v in tui._history["TS1"]]
+        assert all(v == 42.0 for v in values)
 
-    def test_updates_last_update_timestamp(self):
-        from datetime import datetime
-        tui = make_tui()
-        before = tui.last_update
-        with patch.object(tui, "_update_mcr_panel"):
-            tui.update_mcr_news("News update")
-        assert tui.last_update >= before
+    def test_independent_deques_per_target(self):
+        tui = make_tui(history_maxlen=5)
+        tui._history["TS1"].append((datetime.now(), 10.0))
+        tui._history["TS2"].append((datetime.now(), 20.0))
+        assert len(tui._history["TS1"]) == 1
+        assert len(tui._history["TS2"]) == 1
+        assert len(tui._history["Muons"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# _render_sparkline() helper
+# ---------------------------------------------------------------------------
+
+class TestRenderSparkline:
+    def test_empty_values_returns_spaces(self):
+        result = _render_sparkline([], "high", 10)
+        assert result.plain == " " * 10
+
+    def test_length_matches_width_when_enough_samples(self):
+        values = [float(i) for i in range(20)]
+        result = _render_sparkline(values, "high", 10)
+        assert len(result.plain) == 10
+
+    def test_left_padded_when_fewer_samples_than_width(self):
+        values = [1.0, 2.0, 3.0]
+        result = _render_sparkline(values, "high", 10)
+        assert len(result.plain) == 10
+        assert result.plain.startswith("       ")   # 7 leading spaces
+
+    def test_all_zero_renders_as_flat_baseline(self):
+        values = [0.0] * 5
+        result = _render_sparkline(values, "high", 5)
+        # All zeros → index 0 → space character (baseline)
+        assert result.plain.strip() == ""
+
+    def test_max_value_uses_full_block(self):
+        from isis_monitor.tui import _BLOCKS
+        values = [0.0, 100.0]
+        result = _render_sparkline(values, "high", 2)
+        assert _BLOCKS[-1] in result.plain   # tallest bar present
+
+    def test_colour_green_for_high_power(self):
+        result = _render_sparkline([1.0], "high", 5)
+        assert result.style == "green"
+
+    def test_colour_red_for_off_power(self):
+        result = _render_sparkline([1.0], "off", 5)
+        assert result.style == "red"
+
+    def test_colour_yellow_for_unknown(self):
+        result = _render_sparkline([1.0], "unknown", 5)
+        assert result.style == "yellow"
+
+    def test_colour_yellow_for_low(self):
+        result = _render_sparkline([1.0], "low", 5)
+        assert result.style == "yellow"
+
+
+# ---------------------------------------------------------------------------
+# run_sampler()
+# ---------------------------------------------------------------------------
+
+class TestRunSampler:
+    @pytest.mark.asyncio
+    async def test_sampler_appends_to_history(self):
+        """After one sample interval the deque gains one entry per target."""
+        tui = make_tui(sample_interval=0.05)   # 50 ms for fast test
+        tui.beam_states["TS1"]["current"] = 55.0
+
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(tui.run_sampler(stop_event))
+
+        await asyncio.sleep(0.12)   # allow ~2 intervals
+        stop_event.set()
+        await task
+
+        assert len(tui._history["TS1"]) >= 1
+        _, value = tui._history["TS1"][-1]
+        assert value == 55.0
+
+    @pytest.mark.asyncio
+    async def test_sampler_flat_line_when_no_beam_update(self):
+        """Values are repeated when beam.py sends no updates (flat line)."""
+        tui = make_tui(sample_interval=0.05)
+        tui.beam_states["TS2"]["current"] = 77.5
+
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(tui.run_sampler(stop_event))
+        await asyncio.sleep(0.18)
+        stop_event.set()
+        await task
+
+        values = [v for _, v in tui._history["TS2"]]
+        assert len(values) >= 2
+        assert all(v == 77.5 for v in values)
+
+    @pytest.mark.asyncio
+    async def test_sampler_stops_on_event(self):
+        """run_sampler returns promptly when stop_event is set."""
+        tui = make_tui(sample_interval=10.0)   # long interval
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(tui.run_sampler(stop_event))
+        await asyncio.sleep(0.05)
+        stop_event.set()
+        await asyncio.wait_for(task, timeout=1.0)   # must finish quickly
+
+    @pytest.mark.asyncio
+    async def test_sampler_respects_maxlen(self):
+        tui = make_tui(history_maxlen=3, sample_interval=0.05)
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(tui.run_sampler(stop_event))
+        await asyncio.sleep(0.30)   # allow > 3 intervals
+        stop_event.set()
+        await task
+        assert len(tui._history["TS1"]) <= 3
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +287,7 @@ class TestUpdateBeamPanel:
         tui = make_tui()
         tui.beam_states["TS1"] = {"current": 75.0, "power": "medium"}
         mock_update = MagicMock()
-        tui.layout["beam"].update = mock_update
+        tui.layout["beam_table"].update = mock_update
         tui._update_beam_panel()
         mock_update.assert_called_once()
         arg = mock_update.call_args[0][0]
@@ -151,10 +297,9 @@ class TestUpdateBeamPanel:
         from rich.panel import Panel
         tui = make_tui()
         mock_update = MagicMock()
-        tui.layout["beam"].update = mock_update
+        tui.layout["beam_table"].update = mock_update
         tui._update_beam_panel()
         panel: Panel = mock_update.call_args[0][0]
-        # The panel title includes the timestamp from last_update
         expected_time = tui.last_update.strftime("%H:%M:%S")
         assert expected_time in panel.title
 
@@ -182,6 +327,31 @@ class TestUpdateMcrPanel:
         tui._update_mcr_panel()
         panel: Panel = mock_update.call_args[0][0]
         assert panel.title == "Latest MCR News"
+
+
+# ---------------------------------------------------------------------------
+# update_mcr_news()
+# ---------------------------------------------------------------------------
+
+class TestUpdateMcrNews:
+    def test_updates_news_text(self):
+        tui = make_tui()
+        with patch.object(tui, "_update_mcr_panel"):
+            tui.update_mcr_news("Reactor at full power")
+        assert tui.mcr_news == "Reactor at full power"
+
+    def test_triggers_mcr_panel_update(self):
+        tui = make_tui()
+        with patch.object(tui, "_update_mcr_panel") as mock_panel:
+            tui.update_mcr_news("Some news")
+        mock_panel.assert_called_once()
+
+    def test_updates_last_update_timestamp(self):
+        tui = make_tui()
+        before = tui.last_update
+        with patch.object(tui, "_update_mcr_panel"):
+            tui.update_mcr_news("News update")
+        assert tui.last_update >= before
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +390,7 @@ class TestThreadSafety:
             t.join()
 
         assert errors == [], f"Exceptions in threads: {errors}"
-        # Final state must be internally consistent
         assert isinstance(tui.beam_states["TS1"]["current"], float)
         assert isinstance(tui.mcr_news, str)
+        # History must still be empty — only run_sampler writes to it
+        assert len(tui._history["TS1"]) == 0

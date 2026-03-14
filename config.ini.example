@@ -11,3 +11,9 @@ experiment_teams_url =
 # Uncomment and edit the lines below when monitoring an instrument other than PEARL.
 # counts_pv = IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE
 # run_name_pv = IN:PEARL:DAE:WDTITLE
+
+[TUI]
+# Number of 1-minute samples to retain per beam target (default = 60 → 1-hour rolling window).
+# history_maxlen = 60
+# Interval in seconds between graph samples (default = 60).
+# sample_interval = 60

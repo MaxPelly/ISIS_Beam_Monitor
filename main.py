@@ -44,7 +44,10 @@ async def run_all(config, args, stop_event: asyncio.Event):
         mcr_channel.add_notifier(DummyNotifier())
 
     # Initialize TUI
-    tui = RichTUI()
+    tui = RichTUI(
+        history_maxlen=config.history_maxlen,
+        sample_interval=config.sample_interval,
+    )
     tui.start()
 
     # Initialize Monitors
@@ -56,6 +59,7 @@ async def run_all(config, args, stop_event: asyncio.Event):
         await asyncio.gather(
             beam_monitor.run(stop_event),
             mcr_monitor.run(stop_event),
+            tui.run_sampler(stop_event),
         )
     finally:
         tui.stop()
