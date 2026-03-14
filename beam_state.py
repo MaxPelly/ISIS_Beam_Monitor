@@ -29,9 +29,18 @@ logging.basicConfig(
 logger = logging.getLogger("BeamMonitor")
 
 # --- Constants ---
-PV_BEAM_CURRENT = "AC:TS1:BEAM:CURR"
+PV_TS1_BEAM_CURRENT = "AC:TS1:BEAM:CURR"
+PV_TS2_BEAM_CURRENT = "AC:TS2:BEAM:CURR"
+PV_MUON_BEAM_CURRENT = "AC:MUON:BEAM:CURR"
 PV_COUNTS = "IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE"
 PV_RUN_NAME = "IN:PEARL:DAE:WDTITLE"
+
+# --- Beam State Cutoffs ---
+BEAM_BOUNDERIES = {
+    "TS1": (0, 50, 100),
+    "TS2": (0, 12, 25),
+    "Muon": (0, 12, 25),
+}
 
 # ==========================================
 # Notification Abstraction Layer
@@ -48,13 +57,15 @@ class TeamsNotifier(Notifier):
     def __init__(self, webhook_url: str):
         self.webhook_url = webhook_url
 
-    def _create_payload(self, message: str) -> dict:
+    def _create_payload(self, message: str, channel: str) -> dict:
         return {
             "type": "message",
             "summary": message,
             "attachments": [{
                 "contentType": "application/vnd.microsoft.card.adaptive",
                 "content": {
+                    "summary": message,
+                    "channel": channel,
                     "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                     "type": "AdaptiveCard",
                     "version": "1.2",
@@ -66,14 +77,14 @@ class TeamsNotifier(Notifier):
             }]
         }
 
-    async def send(self, message: str):
+    async def send(self, message: str, channel: str):
         if not self.webhook_url:
             return
 
-        payload = self._create_payload(message)
+        payload = self._create_payload(message, channel)
         try:
             # Run blocking I/O in a separate thread
-            # await asyncio.to_thread(requests.post, self.webhook_url, json=payload)
+            await asyncio.to_thread(requests.post, self.webhook_url, json=payload)
             pass
         except Exception as e:
             logger.error(f"Failed to send Teams webhook: {e}")
@@ -89,12 +100,12 @@ class NotificationChannel:
     def add_notifier(self, notifier: Notifier):
         self.notifiers.append(notifier)
 
-    async def broadcast(self, message: str):
+    async def broadcast(self, message: str, channel: str):
         """Sends the message to all registered notifiers in parallel."""
         if not self.notifiers:
             return
         
-        await asyncio.gather(*(n.send(message) for n in self.notifiers))
+        await asyncio.gather(*(n.send(message, channel) for n in self.notifiers))
 
 # ==========================================
 # Monitor Logic
@@ -103,8 +114,15 @@ class NotificationChannel:
 @dataclass
 class MonitorState:
     """Holds the runtime state of the beam monitor."""
-    beam_current: float = 0.0
-    beam_power_state: str = "off"
+    TS1_beam_current: float = -1
+    TS1_beam_power_state: str = ""
+
+    TS2_beam_current: float = -1
+    TS2_beam_power_state: str = ""
+
+    muon_beam_current: float = -1
+    muon_beam_power_state: str = ""    
+    
     run_name: str = ""
     current_counts: float = -1.0
     end_notified: bool = False
@@ -145,35 +163,61 @@ class BeamMonitor:
         except (ValueError, TypeError):
             return 0.0
 
-    def _get_power_label(self, beam_uA: float) -> str:
-        if beam_uA <= 0: return "off"
-        if beam_uA < 50: return "low"
-        if beam_uA < 100: return "medium"
+    def _get_power_label(self, beam_uA: float, beam: str) -> str:
+        bounderies = BEAM_BOUNDERIES[beam]        
+        if beam_uA <= bounderies[0]: return "off"
+        if beam_uA < bounderies[1]: return "low"
+        if beam_uA < bounderies[2]: return "medium"
         return "high"
 
     async def _handle_update(self, message: dict):
         """Dispatch update messages using Pattern Matching."""
         time_now = datetime.datetime.now()
-
         match message:
             # Case 1: Beam Current Update
             # Matches any update for beam current, captures value in raw_val
-            case {"pv": PV_BEAM_CURRENT, "value": raw_val}:
-                
-                # Convert string/NaN to safe float
-                beam_val = self._safe_float(raw_val)
-                new_state = self._get_power_label(beam_val)
-                
-                # Console readout
-                print(f"\r{time_now:%H:%M:%S}: Beam: {beam_val} uA | State: {new_state}", end="", flush=True)
+            case {"pv": pv, "value": raw_val}:
+                if pv == PV_TS1_BEAM_CURRENT:
+                    # Convert string/NaN to safe float
+                    beam_val = self._safe_float(raw_val)
+                    new_state = self._get_power_label(beam_val, "TS1")
+                    
 
-                if self.state.beam_current >= 0 and new_state != self.state.beam_power_state:
-                    msg = f"{time_now}: Beam is now {new_state}. Current: {beam_val} uA"
-                    logger.info(f"\nState Change: {msg}")
-                    await self.beam_channel.broadcast(msg)
-                
-                self.state.beam_current = beam_val
-                self.state.beam_power_state = new_state
+                    if new_state != self.state.TS1_beam_power_state:
+                        msg = f"{time_now}: TS1 Beam is now {new_state}. Current: {beam_val:.3f} uA"
+                        logger.info(f"\nState Change: {msg}")
+                        await self.beam_channel.broadcast(msg, "TS1")
+                    
+                    self.state.TS1_beam_current = beam_val
+                    self.state.TS1_beam_power_state = new_state
+                    
+                elif pv == PV_TS2_BEAM_CURRENT:
+                    # Convert string/NaN to safe float
+                    beam_val = self._safe_float(raw_val)
+                    new_state = self._get_power_label(beam_val, "TS2")
+                    
+
+                    if new_state != self.state.TS2_beam_power_state:
+                        msg = f"{time_now}: TS2 Beam is now {new_state}. Current: {beam_val:.3f} uA"
+                        logger.info(f"\nState Change: {msg}")
+                        await self.beam_channel.broadcast(msg, "TS2")
+                    
+                    self.state.TS2_beam_current = beam_val
+                    self.state.TS2_beam_power_state = new_state
+                    
+                elif pv == PV_MUON_BEAM_CURRENT:
+                    # Convert string/NaN to safe float
+                    beam_val = self._safe_float(raw_val)
+                    new_state = self._get_power_label(beam_val, "Muon")
+                    
+
+                    if new_state != self.state.muon_beam_power_state:
+                        msg = f"{time_now}: Muon Beam is now {new_state}. Current: {beam_val:.3f} uA"
+                        logger.info(f"\nState Change: {msg}")
+                        await self.beam_channel.broadcast(msg, "Muons")
+                    
+                    self.state.muon_beam_current = beam_val
+                    self.state.muon_beam_power_state = new_state
 
             # Case 2: Experiment Name Update
             case {"pv": PV_RUN_NAME, "b64byt": b64_data}:
@@ -218,11 +262,13 @@ class BeamMonitor:
                     await self.experiment_channel.broadcast(msg)
                     self.state.end_notified = True
 
+        print(f"{time_now:%H:%M:%S}    TS1: {self.state.TS1_beam_current:.3f} uA | State: {self.state.TS1_beam_power_state}    TS2: {self.state.TS2_beam_current:.3f} uA | State: {self.state.TS2_beam_power_state}    Muons: {self.state.muon_beam_current:.3f} uA | State: {self.state.muon_beam_power_state}", end="\r", flush=True)
+
     async def run(self):
         """Main robust connection loop."""
         subscribe_msg = json.dumps({
             "type": "subscribe",
-            "pvs": [PV_BEAM_CURRENT, PV_RUN_NAME, PV_COUNTS]
+            "pvs": [PV_TS1_BEAM_CURRENT,  PV_TS2_BEAM_CURRENT, PV_MUON_BEAM_CURRENT]
         })
 
         logger.info(f"Monitor started. Connecting to {self.data_url}...")
