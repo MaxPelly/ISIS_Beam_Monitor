@@ -17,3 +17,24 @@ experiment_teams_url =
 # history_maxlen = 60
 # Interval in seconds between graph samples (default = 60).
 # sample_interval = 60
+# Refresh rate for the UI (default = 4).
+# refresh_per_second = 4
+# Maximum number of log lines to show in the TUI (default = 50).
+# logs_maxlen = 50
+
+[LOGGING]
+# log_file = monitor.log
+# log_level = INFO
+# log_max_bytes = 5000000
+# log_backup_count = 3
+
+[TIMEOUTS_INTERVALS]
+# mcr_poll_interval = 60.0
+# beam_reconnect_interval = 5.0
+# webhook_timeout = 10.0
+
+[BEAM_BOUNDARIES]
+# Defined as 'off_limit, low_limit, medium_limit' in microamps
+# ts1_boundaries = 0.0, 50.0, 140.0
+# ts2_boundaries = 0.0, 10.0, 30.0
+# muon_boundaries = 0.0, 2.0, 5.0

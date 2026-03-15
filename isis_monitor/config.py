@@ -47,7 +47,7 @@ class AppConfig:
 
     # LOGGING
     log_file: str = "monitor.log"
-    log_level: str = "WARNING"
+    log_level: str = "INFO"
     log_max_bytes: int = 5_000_000
     log_backup_count: int = 3
 
@@ -101,7 +101,7 @@ def load_config(config_path: Path) -> AppConfig:
 
     # LOGGING
     log_file = config.get("LOGGING", "log_file", fallback="monitor.log")
-    log_level = config.get("LOGGING", "log_level", fallback="WARNING")
+    log_level = config.get("LOGGING", "log_level", fallback="INFO")
     log_max_bytes = config.getint("LOGGING", "log_max_bytes", fallback=5_000_000)
     log_backup_count = config.getint("LOGGING", "log_backup_count", fallback=3)
 
