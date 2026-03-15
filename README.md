@@ -1,4 +1,4 @@
-# Note this is me playing with ai code generation. Treat this branch with extreme caution!
+> **Note:** This branch includes AI-assisted code generation. Treat it with appropriate caution.
 
 # ISIS Beam and MCR News Monitor
 
@@ -9,10 +9,10 @@ This is a Python application that monitors the status of the ISIS beam, experime
 - **Beam Updates**: Monitors the ISIS beam status and sends alerts based on configurable thresholds.
 - **Experiment Updates**: Keeps track of ongoing experiments.
 - **MCR News**: Fetches and notifies about the latest Main Control Room (MCR) news.
-- **Microsoft Teams Integration**: Sends formatted notifications directly to configured Teams Webhook URLs.
+- **Microsoft Teams Integration**: Sends formatted notifications directly to configured Teams webhook URLs.
 - **Dummy Notifier**: Includes a logging-based dummy notifier for testing and development without sending actual webhooks.
 - **Concurrent Execution**: Uses `asyncio` to run beam and news monitors concurrently for real-time responsiveness.
-- **Live TUI Graph View**: Displays a rolling 1-hour sparkline graph of beam current (μA) for TS1, TS2, and Muons directly in the terminal. The graph is sampled on its own fixed 1-minute timer, fully decoupled from the beam websocket update rate — a silent beam produces a flat line at the last-known value.
+- **Live TUI Graph View**: Displays a rolling 1-hour sparkline graph of beam current (μA) for TS1, TS2, and Muons directly in the terminal. The graph is sampled on its own fixed 1-minute timer, fully decoupled from the beam WebSocket update rate — a silent beam produces a flat line at the last-known value.
 
 ## Requirements
 
@@ -60,8 +60,8 @@ python main.py path/to/config.ini [OPTIONS]
 ### Options
 
 - `config`: (Required) Path to the `.ini` configuration file.
-- `-nc`, `--notify_counts`: Counts threshold for beam notification (Default: 130).
-- `-n`, `--notify_current`, `--no-notify_current`: Send a notification for the current news on startup, rather than waiting for new news to be posted.
+- `-nc`, `--notify_counts`: Counts threshold at which a "run about to finish" notification is sent (default: 130).
+- `-n`, `--notify_current`: Send a notification for the current news immediately on startup. Use `--no-notify_current` to disable (default behaviour: wait for new news before notifying).
 - `-d`, `--dummy`, `--no-dummy`: Use a dummy notifier for testing purposes that logs to the console instead of sending actual webhooks.
 
 ### Example
