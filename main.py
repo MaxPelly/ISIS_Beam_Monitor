@@ -35,11 +35,11 @@ async def run_all(config, args, stop_event: asyncio.Event):
 
     # Configure Teams Notifiers
     if config.beam_teams_url:
-        beam_channel.add_notifier(TeamsNotifier(config.beam_teams_url))
+        beam_channel.add_notifier(TeamsNotifier(config.beam_teams_url, timeout=config.webhook_timeout))
     if config.experiment_teams_url:
-        exp_channel.add_notifier(TeamsNotifier(config.experiment_teams_url))
+        exp_channel.add_notifier(TeamsNotifier(config.experiment_teams_url, timeout=config.webhook_timeout))
     if config.news_teams_url:
-        mcr_channel.add_notifier(TeamsNotifier(config.news_teams_url))
+        mcr_channel.add_notifier(TeamsNotifier(config.news_teams_url, timeout=config.webhook_timeout))
 
     if args.dummy:
         logger.info("Initializing Dummy Notifier (logs to console)")
