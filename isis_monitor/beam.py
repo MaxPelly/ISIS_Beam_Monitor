@@ -15,36 +15,18 @@ from isis_monitor.protocols import TUIProtocol
 
 logger = logging.getLogger(__name__)
 
-# --- Facility-wide Beam Current PVs (not instrument-specific) ---
-PV_TS1_BEAM_CURRENT = "AC:TS1:BEAM:CURR"
-PV_TS2_BEAM_CURRENT = "AC:TS2:BEAM:CURR"
-PV_MUON_BEAM_CURRENT = "AC:MUON:BEAM:CURR"
-
-# --- Beam State Cutoffs ---
-BEAM_BOUNDARIES = {
-    "TS1":  (0, 50, 140),
-    "TS2":  (0, 10, 30),
-    "Muon": (0, 2, 5),
-}
-
-
 @dataclass
 class BeamTarget:
     """Describes one accelerator beam target and how to handle its updates."""
-    pv: str
-    state_key: str      # Key into BEAM_BOUNDARIES and MonitorState.beams
+    state_key: str      # Key into MonitorState.beams
     channel_label: str  # Passed to broadcast() and TUI as the channel name
     display_name: str   # Human-readable name used in log/notification messages
 
-
 BEAM_TARGETS: List[BeamTarget] = [
-    BeamTarget(PV_TS1_BEAM_CURRENT,  "TS1",  "TS1",   "TS1"),
-    BeamTarget(PV_TS2_BEAM_CURRENT,  "TS2",  "TS2",   "TS2"),
-    BeamTarget(PV_MUON_BEAM_CURRENT, "Muon", "Muons", "Muon"),
+    BeamTarget("TS1",  "TS1",   "TS1"),
+    BeamTarget("TS2",  "TS2",   "TS2"),
+    BeamTarget("Muon", "Muons", "Muon"),
 ]
-
-# Fast lookup: PV string → BeamTarget
-PV_TO_BEAM: Dict[str, BeamTarget] = {bt.pv: bt for bt in BEAM_TARGETS}
 
 
 @dataclass
@@ -74,6 +56,7 @@ class BeamMonitor:
         counts_target: float,
         tui: Optional[TUIProtocol] = None,
     ):
+        self.config = config
         self.data_url = config.isis_websocket_url
         self.counts_pv = config.counts_pv
         self.run_name_pv = config.run_name_pv
@@ -82,6 +65,19 @@ class BeamMonitor:
         self.counts_target = counts_target
         self.tui = tui
         self.state = MonitorState()
+
+        # Build dynamic lookups from Config
+        self.pv_to_beam: Dict[str, BeamTarget] = {
+            config.ts1_beam_current_pv: BEAM_TARGETS[0],
+            config.ts2_beam_current_pv: BEAM_TARGETS[1],
+            config.muon_beam_current_pv: BEAM_TARGETS[2],
+        }
+        
+        self.beam_boundaries = {
+            "TS1": config.ts1_boundaries,
+            "TS2": config.ts2_boundaries,
+            "Muon": config.muon_boundaries,
+        }
 
     def _safe_float(self, value: Any) -> float:
         """Safely converts value to float. Returns 0.0 on NaN, None, or error."""
@@ -98,7 +94,7 @@ class BeamMonitor:
             return 0.0
 
     def _get_power_label(self, beam_uA: float, beam: str) -> str:
-        boundaries = BEAM_BOUNDARIES[beam]
+        boundaries = self.beam_boundaries[beam]
         if beam_uA <= boundaries[0]: return "off"
         if beam_uA < boundaries[1]: return "low"
         if beam_uA < boundaries[2]: return "medium"
@@ -131,8 +127,8 @@ class BeamMonitor:
         # structural pattern matching — they are capture variables. Guard clauses
         # are therefore used for the PV-specific arms.
         match message:
-            case {"pv": pv, "value": raw_val} if pv in PV_TO_BEAM:
-                await self._handle_beam_current(PV_TO_BEAM[pv], raw_val, time_now)
+            case {"pv": pv, "value": raw_val} if pv in self.pv_to_beam:
+                await self._handle_beam_current(self.pv_to_beam[pv], raw_val, time_now)
 
             case {"pv": pv, "b64byt": b64_data} if pv == self.run_name_pv:
                 if not b64_data or (
@@ -183,7 +179,7 @@ class BeamMonitor:
     async def run(self, stop_event: Optional[asyncio.Event] = None):
         subscribe_msg = json.dumps({
             "type": "subscribe",
-            "pvs": [bt.pv for bt in BEAM_TARGETS] + [self.counts_pv, self.run_name_pv],
+            "pvs": list(self.pv_to_beam.keys()) + [self.counts_pv, self.run_name_pv],
         })
 
         if not self.data_url:
@@ -213,10 +209,10 @@ class BeamMonitor:
             except (websockets.exceptions.ConnectionClosed, OSError):
                 if stop_event and stop_event.is_set():
                     return
-                logger.warning("WebSocket Connection lost. Reconnecting in 5s...")
-                await asyncio.sleep(5)
+                logger.warning(f"WebSocket Connection lost. Reconnecting in {self.config.beam_reconnect_interval}s...")
+                await asyncio.sleep(self.config.beam_reconnect_interval)
             except Exception as e:
                 if stop_event and stop_event.is_set():
                     return
-                logger.error(f"Unexpected error in BeamMonitor: {e}. Reconnecting in 5s...")
-                await asyncio.sleep(5)
+                logger.error(f"Unexpected error in BeamMonitor: {e}. Reconnecting in {self.config.beam_reconnect_interval}s...")
+                await asyncio.sleep(self.config.beam_reconnect_interval)
