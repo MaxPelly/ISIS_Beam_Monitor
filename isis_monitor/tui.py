@@ -72,9 +72,13 @@ class RichTUI:
         self,
         history_maxlen: int = 60,
         sample_interval: float = 60.0,
+        refresh_per_second: int = 4,
+        logs_maxlen: int = 50,
     ):
         self.history_maxlen = history_maxlen
         self.sample_interval = sample_interval
+        self.refresh_per_second = refresh_per_second
+        self.logs_maxlen = logs_maxlen
 
         self.beam_states: dict[str, dict] = {
             "TS1":   {"current": 0.0, "power": "unknown"},
@@ -88,12 +92,12 @@ class RichTUI:
         }
 
         self.mcr_news = "Waiting for initial MCR news..."
-        self._logs: Deque[str] = deque(maxlen=50)
+        self._logs: Deque[str] = deque(maxlen=self.logs_maxlen)
         self.last_update = datetime.now()
         self._lock = Lock()
 
         self.layout = self._make_layout()
-        self.live = Live(self.layout, refresh_per_second=4, screen=True)
+        self.live = Live(self.layout, refresh_per_second=self.refresh_per_second, screen=True)
 
     # ------------------------------------------------------------------
     # Layout
