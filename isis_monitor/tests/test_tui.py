@@ -211,11 +211,11 @@ class TestRenderSparkline:
 
     def test_colour_yellow_for_unknown(self):
         result = _render_sparkline([(1.0, "unknown")], 5)
-        assert result.spans[-1].style == "yellow"
+        assert result.spans[-1].style == "red"
 
     def test_colour_yellow_for_low(self):
         result = _render_sparkline([(1.0, "low")], 5)
-        assert result.spans[-1].style == "yellow"
+        assert result.spans[-1].style == "orange"
 
 
 # ---------------------------------------------------------------------------

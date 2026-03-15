@@ -10,6 +10,19 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.table import Table
 
+
+def _get_state_colour(state):
+    colour = "purple"
+    if state in ("off", "unknown"):
+        colour = "red"
+    elif state  == "low":
+        colour = "orange"
+    elif state == "medium":
+        colour = "yellow"
+    elif state == "high":
+        colour = "green"
+    return colour
+
 # Eight Unicode block heights, index 0 = shortest
 _BLOCKS = " ▁▂▃▄▅▆▇█"
 
@@ -43,11 +56,7 @@ def _render_sparkline(
     # Build the sparkline character by character
     for v, power in tail:
         # Determine historical colour
-        colour = "green"
-        if power == "off":
-            colour = "red"
-        elif power in ("low", "unknown"):
-            colour = "yellow"
+        colour = _get_state_colour(power)
 
         # Determine block height
         if span == 0:
@@ -214,11 +223,7 @@ class RichTUI:
         table.add_column("Power Level")
 
         for beam, state in self.beam_states.items():
-            power_style = "green"
-            if state["power"] == "off":
-                power_style = "red"
-            elif state["power"] in ("low", "unknown"):
-                power_style = "yellow"
+            power_style = _get_state_colour(state["power"])
 
             table.add_row(
                 beam,
