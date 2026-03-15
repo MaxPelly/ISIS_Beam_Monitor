@@ -22,9 +22,9 @@ PV_MUON_BEAM_CURRENT = "AC:MUON:BEAM:CURR"
 
 # --- Beam State Cutoffs ---
 BEAM_BOUNDARIES = {
-    "TS1":  (0, 50, 100),
-    "TS2":  (0, 12, 25),
-    "Muon": (0, 12, 25),
+    "TS1":  (0, 50, 140),
+    "TS2":  (0, 10, 30),
+    "Muon": (0, 2, 5),
 }
 
 
