@@ -13,8 +13,6 @@ dependencies = [
     "rich>=13,<14",
 ]
 
-[project.scripts]
-isis-monitor = "main:main"
 
 [project.optional-dependencies]
 dev = [

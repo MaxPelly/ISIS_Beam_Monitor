@@ -67,6 +67,11 @@ def load_config(config_path: Path) -> AppConfig:
         )
 
     isis_websocket_url = config.get("DATA", "isis_websocket_url", fallback="")
+    if not isis_websocket_url:
+        logger.warning(
+            "isis_websocket_url is empty — BeamMonitor will not run. "
+            "Please set [DATA] isis_websocket_url in your config file."
+        )
 
     # WEBHOOKS
     news_teams_url = config.get("WEBHOOKS", "news_teams_url", fallback="")
@@ -86,9 +91,14 @@ def load_config(config_path: Path) -> AppConfig:
         if not raw:
             return default
         try:
-            return tuple(float(x.strip()) for x in raw.split(","))
+            result = tuple(float(x.strip()) for x in raw.split(","))
         except ValueError as e:
             raise ConfigError(f"Invalid comma-separated floats for {key}: {e}")
+        if len(result) != 3:
+            raise ConfigError(
+                f"{key} must have exactly 3 comma-separated values, got {len(result)}"
+            )
+        return result
             
     ts1_boundaries = _parse_tuple("BEAM_BOUNDARIES", "ts1_boundaries", (0.0, 50.0, 140.0))
     ts2_boundaries = _parse_tuple("BEAM_BOUNDARIES", "ts2_boundaries", (0.0, 10.0, 30.0))

@@ -151,3 +151,43 @@ async def test_mcr_run_stops_on_event(mock_config, mock_channel):
         await monitor.run(stop_event)
 
     mock_channel.broadcast.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_mcr_run_backoff_on_consecutive_failures(mock_config, mock_channel):
+    """Sleep duration doubles on each consecutive fetch failure, capped at 8×."""
+    monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=True)
+
+    # Always fail — return None
+    fail_count = 0
+
+    async def always_fail(_session):
+        nonlocal fail_count
+        fail_count += 1
+        if fail_count >= 4:
+            stop_event.set()
+        return None
+
+    stop_event = asyncio.Event()
+    sleep_calls = []
+
+    async def fake_sleep(secs):
+        sleep_calls.append(secs)
+
+    with patch.object(monitor, "get_news", side_effect=always_fail), \
+         patch("isis_monitor.mcr.asyncio.sleep", side_effect=fake_sleep), \
+         patch("isis_monitor.mcr.aiohttp.TCPConnector"), \
+         patch("isis_monitor.mcr.aiohttp.ClientSession") as mock_cls:
+
+        mock_session = AsyncMock()
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        await monitor.run(stop_event)
+
+    base = mock_config.mcr_poll_interval
+    # First sleep is 1× (0 failures so far), then 2×, then 4× ...
+    assert sleep_calls[0] == base * 1
+    assert sleep_calls[1] == base * 2
+    assert sleep_calls[2] == base * 4
+    mock_channel.broadcast.assert_not_called()

@@ -1,6 +1,6 @@
 import asyncio
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from threading import RLock
 from typing import Deque, Tuple
 
@@ -93,7 +93,7 @@ class RichTUI:
 
         self.mcr_news = "Waiting for initial MCR news..."
         self._logs: Deque[str] = deque(maxlen=self.logs_maxlen)
-        self.last_update = datetime.now()
+        self.last_update = datetime.now(timezone.utc)
         self._lock = RLock()
 
         self.layout = self._make_layout()
@@ -152,7 +152,7 @@ class RichTUI:
             except asyncio.TimeoutError:
                 pass  # Normal: interval elapsed, take a sample
 
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             with self._lock:
                 for beam, state in self.beam_states.items():
                     self._history[beam].append((now, state["current"], state["power"]))
@@ -171,21 +171,21 @@ class RichTUI:
         with self._lock:
             if beam in self.beam_states:
                 self.beam_states[beam] = {"current": current, "power": power}
-            self.last_update = datetime.now()
+            self.last_update = datetime.now(timezone.utc)
             self._update_beam_panel()
 
     def update_mcr_news(self, news: str):
         """Update the MCR news panel."""
         with self._lock:
             self.mcr_news = news
-            self.last_update = datetime.now()
+            self.last_update = datetime.now(timezone.utc)
             self._update_mcr_panel()
 
     def update_log(self, message: str):
         """Append a log message to the log history."""
         with self._lock:
             self._logs.append(message)
-            self.last_update = datetime.now()
+            self.last_update = datetime.now(timezone.utc)
             self._update_logs_panel()
 
     # ------------------------------------------------------------------
@@ -258,7 +258,16 @@ class RichTUI:
                 content.append("\n")
 
         n = len(next(iter(self._history.values())))
-        subtitle = f"{n}/{self.history_maxlen} samples · 1 min/bar · {n} min history"
+        interval_s = self.sample_interval
+        bar_label = (
+            f"{interval_s:.0f}s/bar" if interval_s < 60
+            else f"{interval_s / 60:.0f} min/bar"
+        )
+        history_label = (
+            f"{n * interval_s:.0f}s history" if interval_s < 60
+            else f"{n * interval_s / 60:.0f} min history"
+        )
+        subtitle = f"{n}/{self.history_maxlen} samples · {bar_label} · {history_label}"
         self.layout["beam_graph"].update(
             Panel(
                 content,
@@ -279,10 +288,9 @@ class RichTUI:
 
     def _update_logs_panel(self):
         # Only show the latest few logs that fit in the panel height (split size 8)
-        with self._lock:
-            logs_to_show = list(self._logs)[-7:] 
-            log_text = "\n".join(logs_to_show)
-            
+        # NOTE: caller must hold self._lock (consistent with all other _update_* helpers)
+        logs_to_show = list(self._logs)[-7:]
+        log_text = "\n".join(logs_to_show)
         self.layout["logs"].update(
             Panel(
                 Text(log_text, style="dim", no_wrap=False),

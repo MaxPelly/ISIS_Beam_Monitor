@@ -20,6 +20,19 @@ class TeamsNotifier(Notifier):
     def __init__(self, webhook_url: str, timeout: float = 10.0):
         self.webhook_url = webhook_url
         self.timeout = timeout
+        self._session: Optional[aiohttp.ClientSession] = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Lazily creates and reuses a single ClientSession."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def close(self) -> None:
+        """Close the underlying HTTP session."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
 
     def _create_payload(self, message: str, channel: Optional[str] = None) -> dict:
         title = f"{channel} Beam Update" if channel else "MCR Update"
@@ -48,17 +61,17 @@ class TeamsNotifier(Notifier):
 
         payload = self._create_payload(message, channel)
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    self.webhook_url,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=self.timeout),
-                ) as resp:
-                    if resp.status >= 400:
-                        body = await resp.text()
-                        logger.error(
-                            f"Teams webhook returned HTTP {resp.status}: {body[:200]}"
-                        )
+            session = await self._get_session()
+            async with session.post(
+                self.webhook_url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+            ) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    logger.error(
+                        f"Teams webhook returned HTTP {resp.status}: {body[:200]}"
+                    )
         except Exception as e:
             logger.error(f"Failed to send Teams webhook: {e}")
 

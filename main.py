@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import logging
+import signal
 from logging.handlers import RotatingFileHandler
 import argparse
 from pathlib import Path
@@ -28,6 +29,16 @@ class TUILogHandler(logging.Handler):
 
 
 async def run_all(config, args, stop_event: asyncio.Event):
+    # Install signal handlers: set the stop event AND cancel all running tasks so
+    # the TUI (Rich Live) is torn down immediately and the terminal is restored.
+    loop = asyncio.get_running_loop()
+    def _on_signal():
+        stop_event.set()
+        for task in asyncio.all_tasks(loop):
+            task.cancel()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _on_signal)
+
     # Initialize TUI
     tui = RichTUI(
         history_maxlen=config.history_maxlen,
@@ -123,7 +134,6 @@ def main():
     try:
         asyncio.run(run_all(config, args, stop_event))
     except KeyboardInterrupt:
-        stop_event.set()
         print("\nStopping monitors...")
 
 if __name__ == "__main__":

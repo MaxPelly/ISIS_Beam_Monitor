@@ -4,7 +4,7 @@ import base64
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import websockets
@@ -113,7 +113,7 @@ class BeamMonitor:
                 f"{time_now}: {bt.display_name} Beam is now {new_state}. "
                 f"Current: {beam_val:.3f} uA"
             )
-            logger.info(f"\nState Change: {msg}")
+            logger.info(f"State Change: {msg}")
             await self.beam_channel.broadcast(msg, bt.channel_label)
 
         self.state.beams[bt.state_key].current = beam_val
@@ -121,7 +121,7 @@ class BeamMonitor:
 
     async def _handle_update(self, message: Dict[str, Any]):
         """Dispatch WebSocket update messages."""
-        time_now = datetime.now()
+        time_now = datetime.now(timezone.utc)
 
         # NOTE: Bare module-level names are NOT constant patterns in Python's
         # structural pattern matching — they are capture variables. Guard clauses
@@ -143,7 +143,7 @@ class BeamMonitor:
 
                 if self.state.run_name and self.state.run_name != name:
                     msg = f"{time_now}: Detected new run start. {name}"
-                    logger.info(f"\nNew Run: {msg}")
+                    logger.info(f"New Run: {msg}")
                     await self.experiment_channel.broadcast(msg)
                     self.state.current_counts = 0
 
@@ -167,7 +167,7 @@ class BeamMonitor:
 
                 if counts > self.counts_target and not self.state.end_notified:
                     msg = f"{time_now}: {self.state.run_name} about to finish"
-                    logger.info(f"\nTarget Reached: {msg}")
+                    logger.info(f"Target Reached: {msg}")
                     await self.experiment_channel.broadcast(msg)
                     self.state.end_notified = True
 

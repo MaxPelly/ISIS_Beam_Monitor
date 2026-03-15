@@ -60,3 +60,76 @@ isis_websocket_url = wss://test.com/ws
 """)
     with pytest.raises(ConfigError, match="mcr_news_url"):
         load_config(config_file)
+
+
+def test_load_config_missing_data_section(tmp_path):
+    """A config file with no [DATA] section at all should raise ConfigError."""
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+""")
+    with pytest.raises(ConfigError, match="mcr_news_url"):
+        load_config(config_file)
+
+
+def test_load_config_boundary_too_few_values(tmp_path):
+    """Boundary tuple with fewer than 3 values should raise ConfigError."""
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[DATA]
+mcr_news_url = http://test.com
+isis_websocket_url = wss://test.com
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+
+[BEAM_BOUNDARIES]
+ts1_boundaries = 0.0, 50.0
+""")
+    with pytest.raises(ConfigError, match="exactly 3"):
+        load_config(config_file)
+
+
+def test_load_config_boundary_too_many_values(tmp_path):
+    """Boundary tuple with more than 3 values should raise ConfigError."""
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[DATA]
+mcr_news_url = http://test.com
+isis_websocket_url = wss://test.com
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+
+[BEAM_BOUNDARIES]
+ts1_boundaries = 0.0, 50.0, 140.0, 200.0
+""")
+    with pytest.raises(ConfigError, match="exactly 3"):
+        load_config(config_file)
+
+
+def test_load_config_empty_websocket_url_logs_warning(tmp_path, caplog):
+    """Empty isis_websocket_url should log a WARNING, not raise."""
+    import logging
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[DATA]
+mcr_news_url = http://test.com/news
+isis_websocket_url =
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+""")
+    with caplog.at_level(logging.WARNING, logger="isis_monitor.config"):
+        config = load_config(config_file)
+    assert config.isis_websocket_url == ""
+    assert "isis_websocket_url" in caplog.text

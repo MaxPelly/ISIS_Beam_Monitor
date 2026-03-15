@@ -76,9 +76,13 @@ class MCRNewsMonitor:
                 self.old_news = ""
 
             # Main polling loop
+            consecutive_failures = 0
             while stop_event is None or not stop_event.is_set():
                 try:
-                    await asyncio.sleep(self.config.mcr_poll_interval)
+                    sleep_secs = self.config.mcr_poll_interval * min(
+                        2 ** consecutive_failures, 8
+                    )
+                    await asyncio.sleep(sleep_secs)
                 except asyncio.CancelledError:
                     return
 
@@ -87,10 +91,18 @@ class MCRNewsMonitor:
 
                 new_news = await self.get_news(session)
                 if new_news and new_news != self.old_news:
+                    consecutive_failures = 0
                     self.old_news = new_news
                     logger.info(f"New MCR Update: {new_news}")
                     if self.tui:
                         self.tui.update_mcr_news(new_news)
                     await self.channel.broadcast(new_news)
                 elif new_news:
+                    consecutive_failures = 0
                     logger.debug("No new MCR news.")
+                else:
+                    consecutive_failures += 1
+                    logger.debug(
+                        f"MCR fetch failed (attempt {consecutive_failures}); "
+                        f"next retry in {sleep_secs * min(2, 8):.0f}s."
+                    )
