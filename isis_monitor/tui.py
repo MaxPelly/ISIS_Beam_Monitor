@@ -1,7 +1,7 @@
 import asyncio
 from collections import deque
 from datetime import datetime
-from threading import Lock
+from threading import RLock
 from typing import Deque, Tuple
 
 from rich.layout import Layout
@@ -94,7 +94,7 @@ class RichTUI:
         self.mcr_news = "Waiting for initial MCR news..."
         self._logs: Deque[str] = deque(maxlen=self.logs_maxlen)
         self.last_update = datetime.now()
-        self._lock = Lock()
+        self._lock = RLock()
 
         self.layout = self._make_layout()
         self.live = Live(self.layout, refresh_per_second=self.refresh_per_second, screen=True)
@@ -278,9 +278,11 @@ class RichTUI:
         )
 
     def _update_logs_panel(self):
-        # Join logs into a single text block. The panel will auto-truncate horizontally if needed,
-        # but vertically we rely on the deque maxlen and layout size to show the latest.
-        log_text = "\n".join(self._logs)
+        # Only show the latest few logs that fit in the panel height (split size 8)
+        with self._lock:
+            logs_to_show = list(self._logs)[-7:] 
+            log_text = "\n".join(logs_to_show)
+            
         self.layout["logs"].update(
             Panel(
                 Text(log_text, style="dim", no_wrap=False),
