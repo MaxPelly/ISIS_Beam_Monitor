@@ -5,7 +5,6 @@ from isis_monitor.config import AppConfig
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.beam import (
     BeamMonitor,
-    PV_TS1_BEAM_CURRENT, PV_TS2_BEAM_CURRENT, PV_MUON_BEAM_CURRENT,
     BEAM_TARGETS,
 )
 
@@ -75,7 +74,7 @@ async def test_handle_update_beam(mock_config, mock_channels):
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
 
-    await m._handle_update({"pv": PV_TS1_BEAM_CURRENT, "value": "10.0"})
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})
     assert m.state.beams["TS1"].current == 10.0
     assert m.state.beams["TS1"].power == "low"
     beam_channel.broadcast.assert_called_once()
@@ -84,13 +83,13 @@ async def test_handle_update_beam(mock_config, mock_channels):
     beam_channel.broadcast.reset_mock()
 
     # No state change → no broadcast
-    await m._handle_update({"pv": PV_TS1_BEAM_CURRENT, "value": "45.0"})
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "45.0"})
     assert m.state.beams["TS1"].current == 45.0
     assert m.state.beams["TS1"].power == "low"
     beam_channel.broadcast.assert_not_called()
 
     # State change → broadcast
-    await m._handle_update({"pv": PV_TS1_BEAM_CURRENT, "value": "60.0"})
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})
     assert m.state.beams["TS1"].current == 60.0
     assert m.state.beams["TS1"].power == "medium"
     beam_channel.broadcast.assert_called_once()
