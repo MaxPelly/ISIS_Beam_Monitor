@@ -22,6 +22,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger("MAIN")
 
+class TUILogHandler(logging.Handler):
+    def __init__(self, tui):
+        super().__init__()
+        self.tui = tui
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            self.tui.update_log(msg)
+        except Exception:
+            self.handleError(record)
+
 
 async def run_all(config, args, stop_event: asyncio.Event):
     # Setup Notification Channels
@@ -49,6 +61,11 @@ async def run_all(config, args, stop_event: asyncio.Event):
         sample_interval=config.sample_interval,
     )
     tui.start()
+
+    # Route logs to TUI
+    tui_handler = TUILogHandler(tui)
+    tui_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    logging.getLogger().addHandler(tui_handler)
 
     # Initialize Monitors
     beam_monitor = BeamMonitor(config, beam_channel, exp_channel, args.notify_counts, tui=tui)
