@@ -3,6 +3,38 @@ mcr_news_url = https://www.isis.stfc.ac.uk/gallery/beam-status/mcrnews.txt
 isis_websocket_url = wss://ndaextweb4.nd.rl.ac.uk/pvws/pv
 
 [WEBHOOKS]
-news_teams_url = 
-beam_teams_url = 
-experiment_teams_url = 
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+
+[PVS]
+# Uncomment and edit the lines below when monitoring an instrument other than PEARL.
+# counts_pv = IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE
+# run_name_pv = IN:PEARL:DAE:WDTITLE
+
+[TUI]
+# Number of 1-minute samples to retain per beam target (default = 60 → 1-hour rolling window).
+# history_maxlen = 60
+# Interval in seconds between graph samples (default = 60).
+# sample_interval = 60
+# Refresh rate for the UI (default = 4).
+# refresh_per_second = 4
+# Maximum number of log lines to show in the TUI (default = 50).
+# logs_maxlen = 50
+
+[LOGGING]
+# log_file = monitor.log
+# log_level = INFO
+# log_max_bytes = 5000000
+# log_backup_count = 3
+
+[TIMEOUTS_INTERVALS]
+# mcr_poll_interval = 60.0
+# beam_reconnect_interval = 5.0
+# webhook_timeout = 10.0
+
+[BEAM_BOUNDARIES]
+# Defined as 'off_limit, low_limit, medium_limit' in microamps
+# ts1_boundaries = 0.0, 50.0, 140.0
+# ts2_boundaries = 0.0, 10.0, 30.0
+# muon_boundaries = 0.0, 2.0, 5.0
