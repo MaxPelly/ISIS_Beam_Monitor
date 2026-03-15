@@ -294,7 +294,7 @@ class RichTUI:
     def _update_logs_panel(self):
         # Only show the latest few logs that fit in the panel height (split size 8)
         # NOTE: caller must hold self._lock (consistent with all other _update_* helpers)
-        logs_to_show = list(self._logs)[-7:]
+        logs_to_show = list(self._logs)[-15:]
         log_text = "\n".join(logs_to_show)
         self.layout["logs"].update(
             Panel(
