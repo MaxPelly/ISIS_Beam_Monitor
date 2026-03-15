@@ -55,7 +55,11 @@ def _render_sparkline(
             char = _BLOCKS[block_idx]
         else:
             norm = (v - min_val) / span
-            idx = round(norm * (len(_BLOCKS) - 1))
+            # only use empty block for 0
+            if min_val == 0:
+                idx = round(norm * (len(_BLOCKS) - 1))
+            else:
+                idx = round(norm * (len(_BLOCKS) - 2)) + 1 
             char = _BLOCKS[idx]
             
         text.append(char, style=colour)
