@@ -133,7 +133,7 @@ def main():
 
     try:
         asyncio.run(run_all(config, args, stop_event))
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         print("\nStopping monitors...")
 
 if __name__ == "__main__":
