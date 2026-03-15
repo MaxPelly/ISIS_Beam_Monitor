@@ -11,15 +11,7 @@ from isis_monitor.beam import BeamMonitor
 from isis_monitor.mcr import MCRNewsMonitor
 from isis_monitor.tui import RichTUI
 
-# Anchor the log file to the project directory, not the working directory.
-# Cap at 5 MB with 3 rotating backups.
-_LOG_PATH = Path(__file__).parent / "monitor.log"
-
-logging.basicConfig(
-    level=logging.WARNING,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[RotatingFileHandler(_LOG_PATH, maxBytes=5_000_000, backupCount=3)],
-)
+# Logger is configured dynamically in main() based on config
 logger = logging.getLogger("MAIN")
 
 class TUILogHandler(logging.Handler):
@@ -107,6 +99,23 @@ def main():
         print(f"Configuration error: {e}")
         raise SystemExit(1)
 
+    # Configure logging based on config
+    log_path = Path(config.log_file)
+    if not log_path.is_absolute():
+        log_path = Path(__file__).parent / log_path
+
+    numeric_level = getattr(logging, config.log_level.upper(), logging.WARNING)
+
+    logging.basicConfig(
+        level=numeric_level,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[RotatingFileHandler(
+            log_path, 
+            maxBytes=config.log_max_bytes, 
+            backupCount=config.log_backup_count
+        )],
+    )
+
     stop_event = asyncio.Event()
 
     try:
@@ -114,7 +123,6 @@ def main():
     except KeyboardInterrupt:
         stop_event.set()
         print("\nStopping monitors...")
-
 
 if __name__ == "__main__":
     main()
