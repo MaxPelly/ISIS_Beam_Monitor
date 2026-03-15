@@ -17,8 +17,9 @@ class Notifier(ABC):
 
 class TeamsNotifier(Notifier):
     """Sends notifications to a Microsoft Teams Incoming Webhook."""
-    def __init__(self, webhook_url: str):
+    def __init__(self, webhook_url: str, timeout: float = 10.0):
         self.webhook_url = webhook_url
+        self.timeout = timeout
 
     def _create_payload(self, message: str, channel: Optional[str] = None) -> dict:
         title = f"{channel} Beam Update" if channel else "MCR Update"
@@ -51,7 +52,7 @@ class TeamsNotifier(Notifier):
                 async with session.post(
                     self.webhook_url,
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=10),
+                    timeout=aiohttp.ClientTimeout(total=self.timeout),
                 ) as resp:
                     if resp.status >= 400:
                         body = await resp.text()
