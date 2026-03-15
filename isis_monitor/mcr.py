@@ -23,6 +23,7 @@ class MCRNewsMonitor:
         notify_current: bool = False,
         tui: Optional[TUIProtocol] = None,
     ):
+        self.config = config
         self.url = config.mcr_news_url
         self.channel = channel
         self.notify_current = notify_current
@@ -70,14 +71,14 @@ class MCRNewsMonitor:
                         if self.tui:
                             self.tui.update_mcr_news(self.old_news)
                     else:
-                        await asyncio.sleep(60)
+                        await asyncio.sleep(self.config.mcr_poll_interval)
             else:
                 self.old_news = ""
 
             # Main polling loop
             while stop_event is None or not stop_event.is_set():
                 try:
-                    await asyncio.sleep(60)
+                    await asyncio.sleep(self.config.mcr_poll_interval)
                 except asyncio.CancelledError:
                     return
 
