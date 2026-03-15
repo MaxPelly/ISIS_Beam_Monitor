@@ -28,6 +28,20 @@ class TUILogHandler(logging.Handler):
 
 
 async def run_all(config, args, stop_event: asyncio.Event):
+    # Initialize TUI
+    tui = RichTUI(
+        history_maxlen=config.history_maxlen,
+        sample_interval=config.sample_interval,
+        refresh_per_second=config.refresh_per_second,
+        logs_maxlen=config.logs_maxlen,
+    )
+    tui.start()
+
+    # Route logs to TUI
+    tui_handler = TUILogHandler(tui)
+    tui_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    logging.getLogger().addHandler(tui_handler)
+
     # Setup Notification Channels
     beam_channel = NotificationChannel("Beam Updates")
     exp_channel = NotificationChannel("Experiment Updates")
@@ -46,18 +60,6 @@ async def run_all(config, args, stop_event: asyncio.Event):
         beam_channel.add_notifier(DummyNotifier())
         exp_channel.add_notifier(DummyNotifier())
         mcr_channel.add_notifier(DummyNotifier())
-
-    # Initialize TUI
-    tui = RichTUI(
-        history_maxlen=config.history_maxlen,
-        sample_interval=config.sample_interval,
-    )
-    tui.start()
-
-    # Route logs to TUI
-    tui_handler = TUILogHandler(tui)
-    tui_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-    logging.getLogger().addHandler(tui_handler)
 
     # Initialize Monitors
     beam_monitor = BeamMonitor(config, beam_channel, exp_channel, args.notify_counts, tui=tui)
