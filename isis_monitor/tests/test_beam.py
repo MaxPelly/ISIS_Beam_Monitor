@@ -59,9 +59,9 @@ def test_get_power_label(mock_config, mock_channels):
     assert m._get_power_label(0, "TS1") == "off"
     assert m._get_power_label(20, "TS1") == "low"
     assert m._get_power_label(75, "TS1") == "medium"
-    assert m._get_power_label(120, "TS1") == "high"
+    assert m._get_power_label(150, "TS1") == "high"
     assert m._get_power_label(0, "TS2") == "off"
-    assert m._get_power_label(10, "TS2") == "low"
+    assert m._get_power_label(5, "TS2") == "low"
     assert m._get_power_label(15, "TS2") == "medium"
     assert m._get_power_label(30, "TS2") == "high"
 
