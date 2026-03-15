@@ -17,3 +17,7 @@ class TUIProtocol(Protocol):
     def update_mcr_news(self, news: str) -> None:
         """Update the displayed MCR news text."""
         ...
+
+    def update_log(self, message: str) -> None:
+        """Add a log message to the log display."""
+        ...
