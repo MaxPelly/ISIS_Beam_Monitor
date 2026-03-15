@@ -108,7 +108,7 @@ class RichTUI:
         layout.split_column(
             Layout(name="header", size=3),
             Layout(name="main"),
-            Layout(name="logs", size=8),
+            Layout(name="logs", size=16),
         )
         layout["main"].split_row(
             Layout(name="left", ratio=1),
