@@ -88,6 +88,7 @@ class RichTUI:
         }
 
         self.mcr_news = "Waiting for initial MCR news..."
+        self._logs: Deque[str] = deque(maxlen=50)
         self.last_update = datetime.now()
         self._lock = Lock()
 
@@ -103,6 +104,7 @@ class RichTUI:
         layout.split_column(
             Layout(name="header", size=3),
             Layout(name="main"),
+            Layout(name="logs", size=8),
         )
         layout["main"].split_row(
             Layout(name="left", ratio=1),
@@ -175,6 +177,13 @@ class RichTUI:
             self.last_update = datetime.now()
             self._update_mcr_panel()
 
+    def update_log(self, message: str):
+        """Append a log message to the log history."""
+        with self._lock:
+            self._logs.append(message)
+            self.last_update = datetime.now()
+            self._update_logs_panel()
+
     # ------------------------------------------------------------------
     # Internal render helpers  (must be called while _lock is held)
     # ------------------------------------------------------------------
@@ -191,6 +200,7 @@ class RichTUI:
             self._update_beam_panel()
             self._update_beam_graph()
             self._update_mcr_panel()
+            self._update_logs_panel()
 
     def _update_beam_panel(self):
         """Render the current-snapshot table into beam_table."""
@@ -259,6 +269,18 @@ class RichTUI:
             Panel(
                 Text(self.mcr_news, style="white"),
                 title="Latest MCR News",
+                border_style="cyan",
+            )
+        )
+
+    def _update_logs_panel(self):
+        # Join logs into a single text block. The panel will auto-truncate horizontally if needed,
+        # but vertically we rely on the deque maxlen and layout size to show the latest.
+        log_text = "\n".join(self._logs)
+        self.layout["logs"].update(
+            Panel(
+                Text(log_text, style="dim", no_wrap=False),
+                title="System Logs",
                 border_style="cyan",
             )
         )
