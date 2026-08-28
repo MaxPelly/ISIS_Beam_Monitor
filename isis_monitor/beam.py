@@ -11,7 +11,7 @@ import websockets
 
 from isis_monitor.config import AppConfig
 from isis_monitor.notifiers import NotificationChannel
-from isis_monitor.protocols import TUIProtocol
+from isis_monitor.protocols import TUIProtocol, MonitorSinkProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,7 @@ class BeamMonitor:
         experiment_channel: NotificationChannel,
         counts_target: float,
         tui: Optional[TUIProtocol] = None,
+        sink: Optional[MonitorSinkProtocol] = None,
     ):
         self.config = config
         self.data_url = config.isis_websocket_url
@@ -64,7 +65,10 @@ class BeamMonitor:
         self.experiment_channel = experiment_channel
         self.counts_target = counts_target
         self.tui = tui
+        self.sink = sink
         self.state = MonitorState()
+        self._force_reconnect = asyncio.Event()
+        self._current_ws = None
 
         # Build dynamic lookups from Config
         self.pv_to_beam: Dict[str, BeamTarget] = {
@@ -118,6 +122,8 @@ class BeamMonitor:
 
         self.state.beams[bt.state_key].current = beam_val
         self.state.beams[bt.state_key].power = new_state
+        if self.sink:
+            self.sink.update_beam_state(bt.channel_label, beam_val, new_state)
 
     async def _handle_update(self, message: Dict[str, Any]):
         """Dispatch WebSocket update messages."""
@@ -148,6 +154,8 @@ class BeamMonitor:
                     self.state.current_counts = 0
 
                 self.state.run_name = name
+                if self.sink:
+                    self.sink.update_run_name(name)
 
             case {"pv": pv, "text": text_val} if pv == self.counts_pv:
                 if not text_val or (
@@ -161,6 +169,8 @@ class BeamMonitor:
                     return
 
                 self.state.current_counts = counts
+                if self.sink:
+                    self.sink.update_counts(counts)
 
                 if self.state.end_notified and counts < (self.counts_target - 25):
                     self.state.end_notified = False
@@ -175,6 +185,14 @@ class BeamMonitor:
             for bt in BEAM_TARGETS:
                 state = self.state.beams[bt.state_key]
                 self.tui.update_beam_state(bt.channel_label, state.current, state.power)
+
+    def request_reconnect(self) -> bool:
+        if self._force_reconnect.is_set():
+            return False
+        self._force_reconnect.set()
+        if self._current_ws is not None:
+            asyncio.create_task(self._current_ws.close())
+        return True
 
     async def run(self, stop_event: Optional[asyncio.Event] = None):
         subscribe_msg = json.dumps({
@@ -192,11 +210,20 @@ class BeamMonitor:
             try:
                 async with websockets.connect(self.data_url) as ws:
                     logger.info("WebSocket connected.")
+                    if self.sink:
+                        self.sink.update_health("beam", "connected")
                     await ws.send(subscribe_msg)
+                    self._current_ws = ws
 
                     async for raw_msg in ws:
                         if stop_event and stop_event.is_set():
                             return
+                        if self._force_reconnect.is_set():
+                            self._force_reconnect.clear()
+                            logger.info("Beam reconnect requested by operator.")
+                            if self.sink:
+                                self.sink.update_health("beam", "reconnecting")
+                            break
                         try:
                             data = json.loads(raw_msg)
                             if data.get("type") == "update":
@@ -209,10 +236,16 @@ class BeamMonitor:
             except (websockets.exceptions.ConnectionClosed, OSError):
                 if stop_event and stop_event.is_set():
                     return
+                if self.sink:
+                    self.sink.update_health("beam", "disconnected")
                 logger.warning(f"WebSocket Connection lost. Reconnecting in {self.config.beam_reconnect_interval}s...")
                 await asyncio.sleep(self.config.beam_reconnect_interval)
             except Exception as e:
                 if stop_event and stop_event.is_set():
                     return
+                if self.sink:
+                    self.sink.update_health("beam", "error")
                 logger.error(f"Unexpected error in BeamMonitor: {e}. Reconnecting in {self.config.beam_reconnect_interval}s...")
                 await asyncio.sleep(self.config.beam_reconnect_interval)
+            finally:
+                self._current_ws = None
