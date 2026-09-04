@@ -51,13 +51,23 @@ The application requires an INI configuration file to set up the Teams webhook U
 
 ## Usage
 
-Run the monitor using the main script:
+Run the daemon (long-running monitor, notifications, persistence, IPC server):
 
 ```bash
-python main.py path/to/config.ini [OPTIONS]
+python main.py daemon path/to/config.ini [OPTIONS]
 ```
 
-### Options
+Run the TUI client (attach/detach as needed, same host via SSH):
+
+```bash
+python main.py tui path/to/config.ini
+```
+
+In TUI mode, operator commands are available from stdin:
+- `r` + Enter: force reconnect (beam + MCR) on daemon
+- `q` + Enter: quit TUI client
+
+### Daemon options
 
 - `config`: (Required) Path to the `.ini` configuration file.
 - `-nc`, `--notify_counts`: Counts threshold at which a "run about to finish" notification is sent (default: 130).
@@ -66,8 +76,48 @@ python main.py path/to/config.ini [OPTIONS]
 
 ### Example
 
-To run the monitor with a custom configuration file and enabling dummy notifications for testing:
+To run the daemon with a custom configuration file and dummy notifications for testing:
 
 ```bash
-python main.py config.ini --dummy
+python main.py daemon config.ini --dummy
 ```
+
+To run TUI from an SSH session on the same host:
+
+```bash
+python main.py tui config.ini
+```
+
+### Linux service example (systemd)
+
+Create `/etc/systemd/system/isis-beam-monitor.service`:
+
+```ini
+[Unit]
+Description=ISIS Beam Monitor Daemon
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/ISIS_Beam_Monitor
+ExecStart=/usr/bin/python /path/to/ISIS_Beam_Monitor/main.py daemon /path/to/ISIS_Beam_Monitor/config.ini
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then run:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now isis-beam-monitor.service
+sudo systemctl status isis-beam-monitor.service
+```
+
+### Troubleshooting
+
+- **`Lock file already held`**: another daemon instance is running (or stale lock path configured).
+- **TUI cannot connect**: ensure daemon is running and `[DAEMON].socket_path` matches `[TUI_CLIENT].socket_path`.
+- **No live updates**: check `monitor.log` for websocket/news source errors; use `r` in TUI to force reconnect.

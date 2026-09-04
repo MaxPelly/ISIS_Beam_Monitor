@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import re
 from datetime import datetime
@@ -87,15 +88,25 @@ class MCRNewsMonitor:
             while stop_event is None or not stop_event.is_set():
                 try:
                     sleep_secs = self.config.mcr_poll_interval * min(2 ** consecutive_failures, 8)
-                    await asyncio.wait_for(self._force_reconnect.wait(), timeout=sleep_secs)
-                    self._force_reconnect.clear()
-                    consecutive_failures = 0
-                    if self.sink:
-                        self.sink.update_health("mcr", "reconnecting")
+                    sleep_task = asyncio.create_task(asyncio.sleep(sleep_secs))
+                    reconnect_task = asyncio.create_task(self._force_reconnect.wait())
+                    done, pending = await asyncio.wait(
+                        {sleep_task, reconnect_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in pending:
+                        task.cancel()
+                    for task in pending:
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
+
+                    if reconnect_task in done and self._force_reconnect.is_set():
+                        self._force_reconnect.clear()
+                        consecutive_failures = 0
+                        if self.sink:
+                            self.sink.update_health("mcr", "reconnecting")
                 except asyncio.CancelledError:
                     return
-                except asyncio.TimeoutError:
-                    pass
 
                 if stop_event and stop_event.is_set():
                     return

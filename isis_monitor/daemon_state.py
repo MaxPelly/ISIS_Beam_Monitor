@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -76,22 +77,30 @@ class DaemonState(MonitorSinkProtocol):
             self.last_update = datetime.now(timezone.utc)
         self._publish("beam", {"beam": beam, "current": current, "power": power})
 
-    def append_beam_sample(self, beam: str, current: float, power: str, ts: Optional[datetime] = None) -> None:
+    def append_beam_sample(
+        self,
+        beam: str,
+        current: float,
+        power: str,
+        ts: Optional[datetime] = None,
+        publish: bool = True,
+    ) -> None:
         ts = ts or datetime.now(timezone.utc)
         with self._lock:
             if beam not in self.history:
                 return
             self.history[beam].append((ts, float(current), str(power)))
             self.last_update = ts
-        self._publish(
-            "sample",
-            {
-                "beam": beam,
-                "timestamp": ts.isoformat(),
-                "current": current,
-                "power": power,
-            },
-        )
+        if publish:
+            self._publish(
+                "sample",
+                {
+                    "beam": beam,
+                    "timestamp": ts.isoformat(),
+                    "current": current,
+                    "power": power,
+                },
+            )
 
     def trim_history_before(self, cutoff: datetime) -> None:
         with self._lock:
@@ -164,3 +173,38 @@ class DaemonState(MonitorSinkProtocol):
 
     def cutoff_for_days(self, retention_days: int) -> datetime:
         return datetime.now(timezone.utc) - timedelta(days=retention_days)
+
+    def get_beam_rows_for_timestamp(self, ts: Optional[datetime] = None) -> list[tuple[datetime, str, float, str]]:
+        ts = ts or datetime.now(timezone.utc)
+        with self._lock:
+            return [
+                (ts, beam, float(state["current"]), str(state["power"]))
+                for beam, state in self.beam_states.items()
+            ]
+
+    def get_health(self) -> Dict[str, str]:
+        with self._lock:
+            return dict(self.health)
+
+    def restore_from_snapshot_json(self, raw: Optional[str]) -> None:
+        if not raw:
+            return
+        try:
+            snap = json.loads(raw)
+        except json.JSONDecodeError:
+            return
+        with self._lock:
+            beam_states = snap.get("beam_states", {})
+            for beam in ("TS1", "TS2", "Muons"):
+                if beam in beam_states:
+                    self.beam_states[beam] = {
+                        "current": float(beam_states[beam].get("current", 0.0)),
+                        "power": str(beam_states[beam].get("power", "unknown")),
+                    }
+            self.mcr_news = str(snap.get("mcr_news", self.mcr_news))
+            self.run_name = str(snap.get("run_name", self.run_name))
+            self.current_counts = float(snap.get("current_counts", self.current_counts))
+            health = snap.get("health", {})
+            if isinstance(health, dict):
+                for k, v in health.items():
+                    self.health[str(k)] = str(v)

@@ -1,14 +1,14 @@
 import logging
 import pytest
 from unittest.mock import MagicMock
-from main import TUILogHandler
+from main import StateLogHandler
 
 
-class TestTUILogHandler:
+class TestStateLogHandler:
     def test_emit_calls_update_log(self):
-        """TUILogHandler.emit should forward the formatted message to tui.update_log."""
-        mock_tui = MagicMock()
-        handler = TUILogHandler(mock_tui)
+        """StateLogHandler.emit should forward the formatted message."""
+        mock_state = MagicMock()
+        handler = StateLogHandler(mock_state)
         handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
 
         record = logging.LogRecord(
@@ -17,13 +17,13 @@ class TestTUILogHandler:
         )
         handler.emit(record)
 
-        mock_tui.update_log.assert_called_once_with("INFO - hello world")
+        mock_state.update_log.assert_called_once_with("INFO - hello world")
 
     def test_emit_handles_exception_gracefully(self, caplog):
-        """If tui.update_log raises, handleError should be called and not propagate."""
-        mock_tui = MagicMock()
-        mock_tui.update_log.side_effect = RuntimeError("TUI broken")
-        handler = TUILogHandler(mock_tui)
+        """If state.update_log raises, handleError should be called and not propagate."""
+        mock_state = MagicMock()
+        mock_state.update_log.side_effect = RuntimeError("State broken")
+        handler = StateLogHandler(mock_state)
 
         record = logging.LogRecord(
             name="test", level=logging.INFO, pathname="", lineno=0,
@@ -34,8 +34,8 @@ class TestTUILogHandler:
 
     def test_emit_with_warning_level(self):
         """Formatter applied correctly for WARNING level messages."""
-        mock_tui = MagicMock()
-        handler = TUILogHandler(mock_tui)
+        mock_state = MagicMock()
+        handler = StateLogHandler(mock_state)
         handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
 
         record = logging.LogRecord(
@@ -43,4 +43,4 @@ class TestTUILogHandler:
             msg="something went wrong", args=(), exc_info=None,
         )
         handler.emit(record)
-        mock_tui.update_log.assert_called_once_with("WARNING - something went wrong")
+        mock_state.update_log.assert_called_once_with("WARNING - something went wrong")

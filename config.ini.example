@@ -22,6 +22,25 @@ experiment_teams_url =
 # Maximum number of log lines to show in the TUI (default = 50).
 # logs_maxlen = 50
 
+[DAEMON]
+# SQLite database path for persisted history/state.
+# db_path = beam_monitor.db
+# Unix domain socket path for local IPC.
+# socket_path = /tmp/isis_beam_monitor.sock
+# Single-instance lock file for daemon mode.
+# lock_file = /tmp/isis_beam_monitor.lock
+# Beam history retention window in days.
+# retention_days = 7
+# Heartbeat update interval in seconds.
+# heartbeat_interval = 30
+
+[TUI_CLIENT]
+# Socket path to connect to daemon (same host).
+# socket_path = /tmp/isis_beam_monitor.sock
+# Reconnect backoff start and max in seconds.
+# reconnect_initial = 1
+# reconnect_max = 15
+
 [LOGGING]
 # log_file = monitor.log
 # log_level = INFO

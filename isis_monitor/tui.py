@@ -103,6 +103,7 @@ class RichTUI:
         self.mcr_news = "Waiting for initial MCR news..."
         self._logs: Deque[str] = deque(maxlen=self.logs_maxlen)
         self.last_update = datetime.now(timezone.utc)
+        self.connection_state = "DISCONNECTED"
         self._lock = RLock()
 
         self.layout = self._make_layout()
@@ -206,7 +207,11 @@ class RichTUI:
         with self._lock:
             self.layout["header"].update(
                 Panel(
-                    Text("ISIS Facility Monitor", justify="center", style="bold cyan"),
+                    Text(
+                        f"ISIS Facility Monitor  [{self.connection_state}]",
+                        justify="center",
+                        style="bold cyan",
+                    ),
                     style="blue",
                 )
             )
@@ -290,6 +295,32 @@ class RichTUI:
                 border_style="cyan",
             )
         )
+
+    def add_history_sample(self, beam: str, timestamp: datetime, current: float, power: str) -> None:
+        with self._lock:
+            if beam in self._history:
+                self._history[beam].append((timestamp, current, power))
+            self.last_update = datetime.now(timezone.utc)
+            self._update_beam_graph()
+
+    def set_history_snapshot(self, history: dict[str, list[dict]]) -> None:
+        with self._lock:
+            for beam in self._history.keys():
+                self._history[beam].clear()
+            for beam, rows in history.items():
+                if beam not in self._history:
+                    continue
+                for row in rows:
+                    ts = datetime.fromisoformat(str(row["timestamp"]))
+                    self._history[beam].append(
+                        (ts, float(row["current"]), str(row["power"]))
+                    )
+            self._update_beam_graph()
+
+    def update_connection_state(self, state: str) -> None:
+        with self._lock:
+            self.connection_state = state.upper()
+            self._update_all()
 
     def _update_logs_panel(self):
         # Only show the latest few logs that fit in the panel height (split size 8)
