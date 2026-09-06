@@ -379,10 +379,30 @@ async def run_tui(config, stop_event: asyncio.Event):
                 loop.add_reader(sys.stdin.fileno(), tui_command_handler, client, stop_event, tui)
                 has_reader = True
 
-                async for message in client.iter_events():
-                    _apply_event_to_tui(tui, message)
-                    if stop_event.is_set():
+                # --- FIX: Race network events against stop_event ---
+                event_iterator = client.iter_events().__aiter__()
+                while not stop_event.is_set():
+                    get_next_event = asyncio.create_task(event_iterator.__anext__())
+                    wait_stop = asyncio.create_task(stop_event.wait())
+                    
+                    done, pending = await asyncio.wait(
+                        [get_next_event, wait_stop],
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+                    
+                    for task in pending:
+                        task.cancel()
+                        
+                    if wait_stop in done:
                         break
+                        
+                    try:
+                        message = get_next_event.result()
+                        _apply_event_to_tui(tui, message)
+                    except StopAsyncIteration:
+                        break
+
+                
             except (FileNotFoundError, ConnectionError, OSError) as exc:
                 tui.update_connection_state("disconnected")
                 tui.update_log(f"Daemon connection lost: {exc}")
