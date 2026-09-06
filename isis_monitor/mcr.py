@@ -106,9 +106,11 @@ class MCRNewsMonitor:
                         if self.sink:
                             self.sink.update_health("mcr", "reconnecting")
                 except asyncio.CancelledError:
+                    logger.warning(f"MCR News Collection Cancelled")
                     return
 
                 if stop_event and stop_event.is_set():
+                    logger.warning(f"MCR News Collection Quit")
                     return
 
                 new_news = await self.get_news(session)
@@ -136,6 +138,8 @@ class MCRNewsMonitor:
                         f"MCR fetch failed (attempt {consecutive_failures}); "
                         f"next retry in {next_retry:.0f}s."
                     )
+            logger.warning(f"MCR News Collection Fall Through")
+            return
 
     def request_reconnect(self) -> bool:
         if self._force_reconnect.is_set():

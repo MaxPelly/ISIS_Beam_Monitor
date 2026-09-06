@@ -174,6 +174,8 @@ async def state_persistence_loop(config, state: DaemonState, store: SQLiteStateS
             store.commit()
 
         await asyncio.to_thread(_persist)
+    logger.warning("State Persistance quit")
+    return
 
 
 async def daemon_heartbeat_loop(config, state: DaemonState, stop_event: asyncio.Event):
@@ -183,6 +185,8 @@ async def daemon_heartbeat_loop(config, state: DaemonState, stop_event: asyncio.
             await asyncio.wait_for(stop_event.wait(), timeout=config.heartbeat_interval)
         except asyncio.TimeoutError:
             continue
+    logger.warning("Heartbeat quit")
+    return
 
 
 async def run_daemon(config, args, stop_event: asyncio.Event):
@@ -239,6 +243,9 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
             return {"beam": beam_monitor.request_reconnect()}
         if name == "force_reconnect_mcr":
             return {"mcr": mcr_monitor.request_reconnect()}
+        if name == "shutdown":
+            stop_event.set()
+            return {"shutdown": "ok"}
         return {"error": "unknown_command", "name": name}
 
     ipc_server = IPCServer(Path(config.daemon_socket_path), state, command_handler)
@@ -253,6 +260,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
             daemon_heartbeat_loop(config, state, stop_event),
         )
     finally:
+        logger.warning("Shutting down daemon")
         state.update_health("daemon", "stopping")
         snap = json.dumps(state.snapshot())
         
@@ -383,6 +391,30 @@ async def run_tui(config, stop_event: asyncio.Event):
         tui.stop()
 
 
+async def run_stop(config) -> None:
+    """Connect to a running daemon via IPC and request a clean shutdown."""
+    client = IPCClient(Path(config.daemon_socket_path))
+    try:
+        await client.connect()
+    except (FileNotFoundError, ConnectionRefusedError, OSError) as exc:
+        print(f"Could not connect to daemon at {config.daemon_socket_path}: {exc}")
+        raise SystemExit(1)
+
+    try:
+        response = await client.request({"method": "command", "name": "shutdown"})
+        if response.get("ok"):
+            result = response.get("result", {})
+            if result.get("shutdown") == "ok":
+                print("Shutdown signal sent — daemon is stopping cleanly.")
+            else:
+                print(f"Daemon responded: {result}")
+        else:
+            print(f"Daemon returned an error: {response.get('error')}")
+            raise SystemExit(1)
+    finally:
+        await client.close()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ISIS Beam and MCR News Monitor")
     subparsers = parser.add_subparsers(dest="mode", required=True)
@@ -407,6 +439,9 @@ def parse_args() -> argparse.Namespace:
 
     tui_parser = subparsers.add_parser("tui", help="Run the TUI client attached to daemon")
     tui_parser.add_argument("config", type=Path, help="Path to .ini configuration file")
+
+    stop_parser = subparsers.add_parser("stop", help="Gracefully shut down a running daemon")
+    stop_parser.add_argument("config", type=Path, help="Path to .ini configuration file")
 
     return parser.parse_args()
 
@@ -435,6 +470,8 @@ def main():
                 asyncio.run(run_daemon(config, args, stop_event))
         elif args.mode == "tui":
             asyncio.run(run_tui(config, stop_event))
+        elif args.mode == "stop":
+            asyncio.run(run_stop(config))
     except RuntimeError as exc:
         print(str(exc))
         raise SystemExit(1)

@@ -35,7 +35,7 @@ class AppConfig:
     muon_boundaries: tuple = (0.0, 2.0, 5.0)
 
     # TIMEOUTS_INTERVALS
-    mcr_poll_interval: float = 60.0
+    mcr_poll_interval: float = 30.0
     beam_reconnect_interval: float = 5.0
     webhook_timeout: float = 10.0
 

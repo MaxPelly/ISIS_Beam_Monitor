@@ -216,26 +216,64 @@ class BeamMonitor:
                     await ws.send(subscribe_msg)
                     self._current_ws = ws
 
-                    async for raw_msg in ws:
-                        if stop_event and stop_event.is_set():
-                            return
-                        if self._force_reconnect.is_set():
-                            self._force_reconnect.clear()
-                            logger.info("Beam reconnect requested by operator.")
-                            if self.sink:
-                                self.sink.update_health("beam", "reconnecting")
+                    while True:
+                        recv_task = asyncio.create_task(ws.recv())
+                        reconnect_task = asyncio.create_task(self._force_reconnect.wait())
+
+                        tasks = {recv_task, reconnect_task}
+                        stop_task = None
+
+                        if stop_event is not None:
+                            stop_task = asyncio.create_task(stop_event.wait())
+                            tasks.add(stop_task)
+
+                        try:
+                            done, pending = await asyncio.wait(
+                                tasks,
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+
+                            # Prioritize shutdown/reconnection if multiple tasks finish together.
+                            if stop_task is not None and stop_task in done:
+                                logger.warning("Deep Beam Loop Quit")
+                                return
+
+                            if reconnect_task in done:
+                                self._force_reconnect.clear()
+                                logger.info("Beam reconnect requested by operator.")
+
+                                if self.sink:
+                                    self.sink.update_health("beam", "reconnecting")
+
+                                break
+
+                            # recv_task completed.
+                            raw_msg = recv_task.result()
+
+                        except ConnectionClosedOK:
                             break
+
+                        finally:
+                            # Never leave recv/event tasks running into the next iteration.
+                            for task in tasks:
+                                if not task.done():
+                                    task.cancel()
+
+                            await asyncio.gather(*tasks, return_exceptions=True)
+
                         try:
                             data = json.loads(raw_msg)
                             if data.get("type") == "update":
                                 await self._handle_update(data)
-                        except json.JSONDecodeError as e:
-                            logger.debug(f"Failed to decode WS message: {e}")
+                        except json.JSONDecodeError as exc:
+                            logger.debug("Failed to decode WS message: %s", exc)
 
             except asyncio.CancelledError:
+                logger.warning(f"Beam Loop Cancelled")
                 return
             except (websockets.exceptions.ConnectionClosed, OSError):
                 if stop_event and stop_event.is_set():
+                    logger.warning(f"Beam Loop Quit")
                     return
                 if self.sink:
                     self.sink.update_health("beam", "disconnected")
@@ -243,6 +281,7 @@ class BeamMonitor:
                 await asyncio.sleep(self.config.beam_reconnect_interval)
             except Exception as e:
                 if stop_event and stop_event.is_set():
+                    logger.warning(f"Error Beam Loop Quit")
                     return
                 if self.sink:
                     self.sink.update_health("beam", "error")
@@ -250,3 +289,5 @@ class BeamMonitor:
                 await asyncio.sleep(self.config.beam_reconnect_interval)
             finally:
                 self._current_ws = None
+        logger.warning(f"Fallthrough Beam Loop Quit")
+        return
