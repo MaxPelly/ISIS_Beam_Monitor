@@ -250,7 +250,8 @@ class BeamMonitor:
                             # recv_task completed.
                             raw_msg = recv_task.result()
 
-                        except ConnectionClosedOK:
+                        except websockets.ConnectionClosedOK:
+                            logger.warning("Websocket Closed OK")
                             break
 
                         finally:
