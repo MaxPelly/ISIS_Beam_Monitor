@@ -312,30 +312,29 @@ def _apply_event_to_tui(tui: RichTUI, message: dict) -> None:
         status = str(payload.get("status", ""))
         tui.update_log(f"Health: {comp} -> {status}")
 
-
 def tui_command_handler(client: IPCClient, stop_event: asyncio.Event, tui: RichTUI):
     # Read a single character immediately without waiting for enter
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    try:
-        tty.setcbreak(fd)
-        ch = sys.stdin.read(1)
-        if ch.lower() == 'q':
-            stop_event.set()
-        elif ch.lower() == 'r':
-            async def _send_reconnect():
-                try:
-                    response = await client.request({"method": "command", "name": "force_reconnect_all"})
-                    tui.update_log(f"Reconnect request result: {response.get('result')}")
-                except Exception as e:
-                    tui.update_log(f"Reconnect request failed: {e}")
-            asyncio.create_task(_send_reconnect())
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    ch = sys.stdin.read(1)
+    if ch.lower() == 'q':
+        stop_event.set()
+    elif ch.lower() == 'r':
+        async def _send_reconnect():
+            try:
+                response = await client.request({"method": "command", "name": "force_reconnect_all"})
+                tui.update_log(f"Reconnect request result: {response.get('result')}")
+            except Exception as e:
+                tui.update_log(f"Reconnect request failed: {e}")
+        asyncio.create_task(_send_reconnect())
+
 
 
 async def run_tui(config, stop_event: asyncio.Event):
     install_signal_handlers(stop_event)
+
+    # Configure terminal to read keystrokes immediately
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    tty.setcbreak(fd)
 
     tui = RichTUI(
         history_maxlen=config.history_maxlen,
@@ -417,6 +416,7 @@ async def run_tui(config, stop_event: asyncio.Event):
                 await client.close()
     finally:
         tui.stop()
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 async def run_stop(config) -> None:
