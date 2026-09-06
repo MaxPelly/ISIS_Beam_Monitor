@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
@@ -27,7 +28,8 @@ class IPCServer:
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
         if self.socket_path.exists():
             self.socket_path.unlink()
-        self.server = await asyncio.start_unix_server(self._handle_client, path=str(self.socket_path))
+        self.server = await asyncio.start_unix_server(self._handle_client, path=str(self.socket_path), limit=65536)
+        os.chmod(self.socket_path, 0o600)
 
     async def stop(self) -> None:
         if self.server is not None:
@@ -65,6 +67,24 @@ class IPCServer:
                             "ok": True,
                             "version": PROTOCOL_VERSION,
                             "snapshot": self.state.snapshot(),
+                        },
+                    )
+                elif method == "get_history":
+                    await self._send(
+                        writer,
+                        {
+                            "ok": True,
+                            "version": PROTOCOL_VERSION,
+                            "history": self.state.get_history_snapshot(),
+                        },
+                    )
+                elif method == "get_logs":
+                    await self._send(
+                        writer,
+                        {
+                            "ok": True,
+                            "version": PROTOCOL_VERSION,
+                            "logs": self.state.get_logs_snapshot(),
                         },
                     )
                 elif method == "subscribe_updates":
@@ -112,7 +132,10 @@ class IPCServer:
                 "event": ev.event,
                 "payload": ev.payload,
             }
-            await self._send(writer, payload)
+            try:
+                await self._send(writer, payload)
+            except (ConnectionError, BrokenPipeError, OSError):
+                break
 
 
 class IPCClient:
@@ -122,7 +145,7 @@ class IPCClient:
         self.writer: Optional[asyncio.StreamWriter] = None
 
     async def connect(self) -> None:
-        self.reader, self.writer = await asyncio.open_unix_connection(str(self.socket_path))
+        self.reader, self.writer = await asyncio.open_unix_connection(str(self.socket_path), limit=65536)
 
     async def close(self) -> None:
         if self.writer:

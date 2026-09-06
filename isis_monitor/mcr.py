@@ -131,9 +131,10 @@ class MCRNewsMonitor:
                     consecutive_failures += 1
                     if self.sink:
                         self.sink.update_health("mcr", "error")
+                    next_retry = self.config.mcr_poll_interval * min(2 ** consecutive_failures, 8)
                     logger.debug(
                         f"MCR fetch failed (attempt {consecutive_failures}); "
-                        f"next retry in {sleep_secs * min(2, 8):.0f}s."
+                        f"next retry in {next_retry:.0f}s."
                     )
 
     def request_reconnect(self) -> bool:

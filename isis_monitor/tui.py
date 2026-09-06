@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 from collections import deque
 from datetime import datetime, timezone
 from threading import RLock
@@ -11,17 +12,16 @@ from rich.text import Text
 from rich.table import Table
 
 
+_STATE_COLOURS = {
+    "off": "red",
+    "unknown": "red",
+    "low": "orange",
+    "medium": "yellow",
+    "high": "green"
+}
+
 def _get_state_colour(state):
-    colour = "purple"
-    if state in ("off", "unknown"):
-        colour = "red"
-    elif state  == "low":
-        colour = "orange"
-    elif state == "medium":
-        colour = "yellow"
-    elif state == "high":
-        colour = "green"
-    return colour
+    return _STATE_COLOURS.get(state, "purple")
 
 # Eight Unicode block heights, index 0 = shortest
 _BLOCKS = " ▁▂▃▄▅▆▇█"
@@ -40,10 +40,9 @@ def _render_sparkline(
         text.append(" " * width)
         return text
 
-    # Extract just the values to calculate our dynamic range
-    values = [v for v, _ in history_data]
     tail = history_data[-width:]
     
+    values = [v for v, _ in tail]
     min_val = min(values)
     max_val = max(values)
     span = max_val - min_val
@@ -203,7 +202,7 @@ class RichTUI:
     # ------------------------------------------------------------------
 
     def _update_all(self):
-        """Force-refresh every panel.  Called once on startup (lock not held)."""
+        """Force-refresh every panel. Note: this method may be called while the lock is already held, which is safe due to RLock."""
         with self._lock:
             self.layout["header"].update(
                 Panel(
@@ -247,8 +246,9 @@ class RichTUI:
 
     def _update_beam_graph(self):
         """Render the rolling sparkline graph into beam_graph."""
-        # Approximate usable width: panel width minus borders/label prefix.
-        SPARK_WIDTH = 58
+        # Approximate usable width: terminal width minus half for layout split, minus borders/padding and label.
+        term_width = shutil.get_terminal_size((120, 24)).columns
+        SPARK_WIDTH = max(10, (term_width // 2) - 30)
         LABEL_W = 7   # "Muons: " is 7 chars
 
         content = Text()

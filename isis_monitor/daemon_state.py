@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 from threading import RLock
 from typing import Deque, Dict, List, Optional, Tuple
 
@@ -58,6 +61,7 @@ class DaemonState(MonitorSinkProtocol):
             try:
                 q.put_nowait(DaemonEvent(event=event, payload=payload))
             except asyncio.QueueFull:
+                logger.warning("Subscriber queue full; dropping subscriber")
                 dead.append(q)
         for q in dead:
             if q in self._subscribers:
@@ -67,7 +71,7 @@ class DaemonState(MonitorSinkProtocol):
         with self._lock:
             self.logs.append(message)
             self.last_update = datetime.now(timezone.utc)
-        self._publish("log", {"message": message})
+            self._publish("log", {"message": message})
 
     def update_beam_state(self, beam: str, current: float, power: str) -> None:
         with self._lock:
@@ -75,7 +79,7 @@ class DaemonState(MonitorSinkProtocol):
                 return
             self.beam_states[beam] = {"current": float(current), "power": str(power)}
             self.last_update = datetime.now(timezone.utc)
-        self._publish("beam", {"beam": beam, "current": current, "power": power})
+            self._publish("beam", {"beam": beam, "current": current, "power": power})
 
     def append_beam_sample(
         self,
@@ -91,16 +95,16 @@ class DaemonState(MonitorSinkProtocol):
                 return
             self.history[beam].append((ts, float(current), str(power)))
             self.last_update = ts
-        if publish:
-            self._publish(
-                "sample",
-                {
-                    "beam": beam,
-                    "timestamp": ts.isoformat(),
-                    "current": current,
-                    "power": power,
-                },
-            )
+            if publish:
+                self._publish(
+                    "sample",
+                    {
+                        "beam": beam,
+                        "timestamp": ts.isoformat(),
+                        "current": current,
+                        "power": power,
+                    },
+                )
 
     def trim_history_before(self, cutoff: datetime) -> None:
         with self._lock:
@@ -115,29 +119,40 @@ class DaemonState(MonitorSinkProtocol):
         with self._lock:
             self.mcr_news = news
             self.last_update = datetime.now(timezone.utc)
-        self._publish("mcr", {"news": news})
+            self._publish("mcr", {"news": news})
 
     def update_run_name(self, run_name: str) -> None:
         with self._lock:
             self.run_name = run_name
             self.last_update = datetime.now(timezone.utc)
-        self._publish("run", {"run_name": run_name})
+            self._publish("run", {"run_name": run_name})
 
     def update_counts(self, counts: float) -> None:
         with self._lock:
             self.current_counts = float(counts)
             self.last_update = datetime.now(timezone.utc)
-        self._publish("counts", {"counts": counts})
+            self._publish("counts", {"counts": counts})
 
     def update_health(self, component: str, status: str) -> None:
         with self._lock:
             self.health[component] = status
             self.last_update = datetime.now(timezone.utc)
-        self._publish("health", {"component": component, "status": status})
+            self._publish("health", {"component": component, "status": status})
 
     def snapshot(self) -> dict:
         with self._lock:
-            history_json = {
+            return {
+                "last_update": self.last_update.isoformat(),
+                "beam_states": dict(self.beam_states),
+                "mcr_news": self.mcr_news,
+                "run_name": self.run_name,
+                "current_counts": self.current_counts,
+                "health": dict(self.health),
+            }
+
+    def get_history_snapshot(self) -> dict:
+        with self._lock:
+            return {
                 beam: [
                     {
                         "timestamp": ts.isoformat(),
@@ -148,16 +163,10 @@ class DaemonState(MonitorSinkProtocol):
                 ]
                 for beam, data in self.history.items()
             }
-            return {
-                "last_update": self.last_update.isoformat(),
-                "beam_states": dict(self.beam_states),
-                "history": history_json,
-                "mcr_news": self.mcr_news,
-                "logs": list(self.logs),
-                "run_name": self.run_name,
-                "current_counts": self.current_counts,
-                "health": dict(self.health),
-            }
+
+    def get_logs_snapshot(self) -> list:
+        with self._lock:
+            return list(self.logs)
 
     def sample_all_currents(self, ts: Optional[datetime] = None) -> None:
         ts = ts or datetime.now(timezone.utc)
@@ -192,6 +201,7 @@ class DaemonState(MonitorSinkProtocol):
         try:
             snap = json.loads(raw)
         except json.JSONDecodeError:
+            logger.warning("Corrupt daemon state snapshot, starting fresh.")
             return
         with self._lock:
             beam_states = snap.get("beam_states", {})

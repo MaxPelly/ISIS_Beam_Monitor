@@ -44,11 +44,33 @@ class SingleInstanceLock:
         self._fh = None
 
     def __enter__(self):
-        self._fh = self.path.open("w")
+        self._fh = self.path.open("a+")
+        self._fh.seek(0)
+        pid_str = self._fh.read().strip()
+        if pid_str.isdigit():
+            try:
+                os.kill(int(pid_str), 0)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                raise RuntimeError(f"Lock held by another user's process: {pid_str}")
+            else:
+                # If flock is supported, let flock do its job. But if not, we rely on this check.
+                pass
+        
         try:
             fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RuntimeError(f"Lock file already held: {self.path}") from exc
+        except OSError:
+            # Fallback for systems without flock: rely on the PID check
+            if pid_str.isdigit():
+                try:
+                    os.kill(int(pid_str), 0)
+                    raise RuntimeError(f"Lock file already held by PID {pid_str}")
+                except ProcessLookupError:
+                    pass
+
         self._fh.seek(0)
         self._fh.truncate(0)
         self._fh.write(str(os.getpid()))
@@ -85,8 +107,6 @@ def install_signal_handlers(stop_event: asyncio.Event) -> None:
 
     def _on_signal():
         stop_event.set()
-        for task in asyncio.all_tasks(loop):
-            task.cancel()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _on_signal)
@@ -138,16 +158,22 @@ async def state_persistence_loop(config, state: DaemonState, store: SQLiteStateS
 
         ts = datetime.now(timezone.utc)
         state.sample_all_currents(ts)
-        store.write_samples(state.get_beam_rows_for_timestamp(ts))
-
+        
+        beam_rows = state.get_beam_rows_for_timestamp(ts)
         cutoff = state.cutoff_for_days(config.retention_days)
-        store.prune_older_than(cutoff)
         state.trim_history_before(cutoff)
+        snap = json.dumps(state.snapshot())
+        health = state.get_health()
 
-        store.upsert_snapshot("daemon_state", json.dumps(state.snapshot()))
-        for component, status in state.get_health().items():
-            store.upsert_health(component, status)
-        store.commit()
+        def _persist():
+            store.write_samples(beam_rows)
+            store.prune_older_than(cutoff)
+            store.upsert_snapshot("daemon_state", snap)
+            for component, status in health.items():
+                store.upsert_health(component, status)
+            store.commit()
+
+        await asyncio.to_thread(_persist)
 
 
 async def daemon_heartbeat_loop(config, state: DaemonState, stop_event: asyncio.Event):
@@ -165,10 +191,17 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
     state = DaemonState(history_maxlen=max(config.history_maxlen, int((86400 * config.retention_days) / max(config.sample_interval, 1.0))))
     state.update_health("daemon", "starting")
 
-    store = SQLiteStateStore(Path(config.daemon_db_path))
-    state.restore_from_snapshot_json(store.load_snapshot("daemon_state"))
-    cutoff = state.cutoff_for_days(config.retention_days)
-    for row in store.load_recent_samples(cutoff):
+    def _init_db():
+        store = SQLiteStateStore(Path(config.daemon_db_path))
+        raw_snap = store.load_snapshot("daemon_state")
+        cutoff = state.cutoff_for_days(config.retention_days)
+        recent = store.load_recent_samples(cutoff)
+        return store, raw_snap, recent
+
+    store, raw_snap, recent_samples = await asyncio.to_thread(_init_db)
+    
+    state.restore_from_snapshot_json(raw_snap)
+    for row in recent_samples:
         state.append_beam_sample(
             beam=str(row["target"]),
             current=float(row["current"]),
@@ -221,12 +254,19 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
         )
     finally:
         state.update_health("daemon", "stopping")
-        store.upsert_snapshot("daemon_state", json.dumps(state.snapshot()))
-        store.commit()
-        store.close()
+        snap = json.dumps(state.snapshot())
+        
+        def _close_db():
+            store.upsert_snapshot("daemon_state", snap)
+            store.commit()
+            store.close()
+            
+        await asyncio.to_thread(_close_db)
         await ipc_server.stop()
         await close_channels(beam_channel, exp_channel, mcr_channel)
 
+
+import sys
 
 def _apply_snapshot_to_tui(tui: RichTUI, snapshot: dict) -> None:
     beam_states = snapshot.get("beam_states", {})
@@ -234,11 +274,8 @@ def _apply_snapshot_to_tui(tui: RichTUI, snapshot: dict) -> None:
         state = beam_states.get(beam)
         if state:
             tui.update_beam_state(beam, float(state.get("current", 0.0)), str(state.get("power", "unknown")))
-    tui.set_history_snapshot(snapshot.get("history", {}))
     if snapshot.get("mcr_news"):
         tui.update_mcr_news(str(snapshot["mcr_news"]))
-    for line in snapshot.get("logs", [])[-20:]:
-        tui.update_log(str(line))
 
 
 def _apply_event_to_tui(tui: RichTUI, message: dict) -> None:
@@ -267,15 +304,18 @@ def _apply_event_to_tui(tui: RichTUI, message: dict) -> None:
         tui.update_log(f"Health: {comp} -> {status}")
 
 
-async def tui_command_loop(client: IPCClient, stop_event: asyncio.Event, tui: RichTUI):
-    while not stop_event.is_set():
-        cmd = (await asyncio.to_thread(input, "Command [r=reconnect,q=quit]: ")).strip().lower()
-        if cmd == "q":
-            stop_event.set()
-            return
-        if cmd == "r":
-            response = await client.request({"method": "command", "name": "force_reconnect_all"})
-            tui.update_log(f"Reconnect request result: {response.get('result')}")
+def tui_command_handler(client: IPCClient, stop_event: asyncio.Event, tui: RichTUI):
+    cmd = sys.stdin.readline().strip().lower()
+    if cmd == "q":
+        stop_event.set()
+    elif cmd == "r":
+        async def _send_reconnect():
+            try:
+                response = await client.request({"method": "command", "name": "force_reconnect_all"})
+                tui.update_log(f"Reconnect request result: {response.get('result')}")
+            except Exception as e:
+                tui.update_log(f"Reconnect request failed: {e}")
+        asyncio.create_task(_send_reconnect())
 
 
 async def run_tui(config, stop_event: asyncio.Event):
@@ -288,12 +328,13 @@ async def run_tui(config, stop_event: asyncio.Event):
         logs_maxlen=config.logs_maxlen,
     )
     tui.start()
+    loop = asyncio.get_running_loop()
 
     backoff = config.tui_reconnect_initial
     try:
         while not stop_event.is_set():
             client = IPCClient(Path(config.tui_socket_path))
-            cmd_task: Optional[asyncio.Task] = None
+            has_reader = False
             try:
                 tui.update_connection_state("connecting")
                 await client.connect()
@@ -302,13 +343,25 @@ async def run_tui(config, stop_event: asyncio.Event):
                 snapshot_resp = await client.request({"method": "get_snapshot"})
                 if snapshot_resp.get("ok"):
                     _apply_snapshot_to_tui(tui, snapshot_resp.get("snapshot", {}))
+                    
+                history_resp = await client.request({"method": "get_history"})
+                if history_resp.get("ok"):
+                    tui.set_history_snapshot(history_resp.get("history", {}))
+                    
+                logs_resp = await client.request({"method": "get_logs"})
+                if logs_resp.get("ok"):
+                    for line in logs_resp.get("logs", [])[-20:]:
+                        tui.update_log(str(line))
 
                 sub_resp = await client.request({"method": "subscribe_updates"})
                 if sub_resp.get("ok"):
                     tui.update_log("Subscribed to daemon updates.")
 
-                cmd_task = asyncio.create_task(tui_command_loop(client, stop_event, tui))
+                # Reset backoff only after successful sync
                 backoff = config.tui_reconnect_initial
+
+                loop.add_reader(sys.stdin.fileno(), tui_command_handler, client, stop_event, tui)
+                has_reader = True
 
                 async for message in client.iter_events():
                     _apply_event_to_tui(tui, message)
@@ -323,10 +376,8 @@ async def run_tui(config, stop_event: asyncio.Event):
                     pass
                 backoff = min(config.tui_reconnect_max, max(config.tui_reconnect_initial, backoff * 2))
             finally:
-                if cmd_task:
-                    cmd_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await cmd_task
+                if has_reader:
+                    loop.remove_reader(sys.stdin.fileno())
                 await client.close()
     finally:
         tui.stop()

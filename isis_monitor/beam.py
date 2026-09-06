@@ -190,8 +190,9 @@ class BeamMonitor:
         if self._force_reconnect.is_set():
             return False
         self._force_reconnect.set()
-        if self._current_ws is not None:
-            asyncio.create_task(self._current_ws.close())
+        ws = self._current_ws
+        if ws is not None:
+            asyncio.create_task(ws.close())
         return True
 
     async def run(self, stop_event: Optional[asyncio.Event] = None):
@@ -228,8 +229,8 @@ class BeamMonitor:
                             data = json.loads(raw_msg)
                             if data.get("type") == "update":
                                 await self._handle_update(data)
-                        except json.JSONDecodeError:
-                            pass
+                        except json.JSONDecodeError as e:
+                            logger.debug(f"Failed to decode WS message: {e}")
 
             except asyncio.CancelledError:
                 return

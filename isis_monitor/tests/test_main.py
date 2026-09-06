@@ -1,7 +1,13 @@
 import logging
 import pytest
 from unittest.mock import MagicMock
-from main import StateLogHandler
+import os
+import signal
+import asyncio
+from pathlib import Path
+from isis_monitor.daemon_state import DaemonState
+from isis_monitor.tui import RichTUI
+from main import StateLogHandler, SingleInstanceLock, _apply_snapshot_to_tui
 
 
 class TestStateLogHandler:
@@ -44,3 +50,38 @@ class TestStateLogHandler:
         )
         handler.emit(record)
         mock_state.update_log.assert_called_once_with("WARNING - something went wrong")
+
+def test_single_instance_lock_success(tmp_path):
+    import os
+    from main import SingleInstanceLock
+    lock_file = tmp_path / "test.lock"
+    with SingleInstanceLock(lock_file) as lock:
+        assert lock_file.exists()
+        assert lock_file.read_text().strip() == str(os.getpid())
+    assert not lock_file.exists()
+
+def test_single_instance_lock_failure(tmp_path):
+    import os
+    from main import SingleInstanceLock
+    lock_file = tmp_path / "test.lock"
+    lock_file.write_text("999999")
+    with pytest.raises(RuntimeError, match="Lock file already held|Lock held by"):
+        with pytest.MonkeyPatch.context() as m:
+            m.setattr(os, "kill", lambda pid, sig: None)
+            with SingleInstanceLock(lock_file):
+                pass
+
+def test_apply_snapshot_to_tui():
+    from main import _apply_snapshot_to_tui
+    from isis_monitor.tui import RichTUI
+    tui = RichTUI(60, 60, 4, 50)
+    snap = {
+        "beam_states": {
+            "TS1": {"current": 42.0, "power": "high"}
+        },
+        "mcr_news": "Test news"
+    }
+    _apply_snapshot_to_tui(tui, snap)
+    assert tui.mcr_news == "Test news"
+    assert "TS1" in tui.beam_states
+    assert tui.beam_states["TS1"]["current"] == 42.0

@@ -3,6 +3,9 @@ mcr_news_url = https://www.isis.stfc.ac.uk/gallery/beam-status/mcrnews.txt
 isis_websocket_url = wss://ndaextweb4.nd.rl.ac.uk/pvws/pv
 
 [WEBHOOKS]
+# Webhook URLs should be kept secret. Consider restricting permissions on this file (e.g. chmod 600)
+# to prevent other users from reading it.
+enable_teams = false
 news_teams_url =
 beam_teams_url =
 experiment_teams_url =
