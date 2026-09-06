@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 import os
 import signal
 import asyncio
+import fcntl
 from pathlib import Path
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.tui import RichTUI
@@ -61,15 +62,18 @@ def test_single_instance_lock_success(tmp_path):
     assert not lock_file.exists()
 
 def test_single_instance_lock_failure(tmp_path):
-    import os
     from main import SingleInstanceLock
     lock_file = tmp_path / "test.lock"
-    lock_file.write_text("999999")
-    with pytest.raises(RuntimeError, match="Lock file already held|Lock held by"):
-        with pytest.MonkeyPatch.context() as m:
-            m.setattr(os, "kill", lambda pid, sig: None)
+    lock_file.write_text(str(os.getpid()))
+    blocker = lock_file.open("a+")
+    fcntl.flock(blocker.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        with pytest.raises(RuntimeError, match="Lock file already held|Lock held by"):
             with SingleInstanceLock(lock_file):
                 pass
+    finally:
+        fcntl.flock(blocker.fileno(), fcntl.LOCK_UN)
+        blocker.close()
 
 def test_apply_snapshot_to_tui():
     from main import _apply_snapshot_to_tui
