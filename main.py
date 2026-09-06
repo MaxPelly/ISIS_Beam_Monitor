@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
+import sys
+import tty
+import termios
 
 from isis_monitor.beam import BeamMonitor
 from isis_monitor.config import ConfigError, load_config
@@ -274,8 +277,6 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
         await close_channels(beam_channel, exp_channel, mcr_channel)
 
 
-import sys
-
 def _apply_snapshot_to_tui(tui: RichTUI, snapshot: dict) -> None:
     beam_states = snapshot.get("beam_states", {})
     for beam in ("TS1", "TS2", "Muons"):
@@ -313,17 +314,24 @@ def _apply_event_to_tui(tui: RichTUI, message: dict) -> None:
 
 
 def tui_command_handler(client: IPCClient, stop_event: asyncio.Event, tui: RichTUI):
-    cmd = sys.stdin.readline().strip().lower()
-    if cmd == "q":
-        stop_event.set()
-    elif cmd == "r":
-        async def _send_reconnect():
-            try:
-                response = await client.request({"method": "command", "name": "force_reconnect_all"})
-                tui.update_log(f"Reconnect request result: {response.get('result')}")
-            except Exception as e:
-                tui.update_log(f"Reconnect request failed: {e}")
-        asyncio.create_task(_send_reconnect())
+    # Read a single character immediately without waiting for enter
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        ch = sys.stdin.read(1)
+        if ch.lower() == 'q':
+            stop_event.set()
+        elif ch.lower() == 'r':
+            async def _send_reconnect():
+                try:
+                    response = await client.request({"method": "command", "name": "force_reconnect_all"})
+                    tui.update_log(f"Reconnect request result: {response.get('result')}")
+                except Exception as e:
+                    tui.update_log(f"Reconnect request failed: {e}")
+            asyncio.create_task(_send_reconnect())
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 async def run_tui(config, stop_event: asyncio.Event):
