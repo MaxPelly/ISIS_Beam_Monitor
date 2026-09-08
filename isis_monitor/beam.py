@@ -114,7 +114,7 @@ class BeamMonitor:
 
         if new_state != prev_state:
             msg = (
-                f"{time_now}: {bt.display_name} Beam is now {new_state}. "
+                f"{time_now:%Y-%m-%d %H:%M:%S}: {bt.display_name} Beam is now {new_state}. "
                 f"Current: {beam_val:.3f} uA"
             )
             logger.info(f"State Change: {msg}")
