@@ -42,3 +42,23 @@ class TUIProtocol(Protocol):
     async def run_sampler(self, stop_event: asyncio.Event) -> None:
         """Coroutine that periodically snapshots beam state into history."""
         ...
+
+
+@runtime_checkable
+class MonitorSinkProtocol(Protocol):
+    """Interface for receiving monitor updates without coupling to RichTUI."""
+
+    def update_beam_state(self, beam: str, current: float, power: str) -> None:
+        ...
+
+    def update_mcr_news(self, news: str) -> None:
+        ...
+
+    def update_run_name(self, run_name: str) -> None:
+        ...
+
+    def update_counts(self, counts: float) -> None:
+        ...
+
+    def update_health(self, component: str, status: str) -> None:
+        ...

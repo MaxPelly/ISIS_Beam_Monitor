@@ -35,7 +35,7 @@ class AppConfig:
     muon_boundaries: tuple = (0.0, 2.0, 5.0)
 
     # TIMEOUTS_INTERVALS
-    mcr_poll_interval: float = 60.0
+    mcr_poll_interval: float = 30.0
     beam_reconnect_interval: float = 5.0
     webhook_timeout: float = 10.0
 
@@ -44,6 +44,18 @@ class AppConfig:
     sample_interval: float = 60.0  # seconds between graph samples
     refresh_per_second: int = 4
     logs_maxlen: int = 50
+
+    # DAEMON
+    daemon_db_path: str = "beam_monitor.db"
+    daemon_socket_path: str = "/tmp/isis_beam_monitor.sock"
+    daemon_lock_file: str = "/tmp/isis_beam_monitor.lock"
+    retention_days: int = 7
+    heartbeat_interval: float = 30.0
+
+    # TUI_CLIENT
+    tui_socket_path: str = "/tmp/isis_beam_monitor.sock"
+    tui_reconnect_initial: float = 1.0
+    tui_reconnect_max: float = 15.0
 
     # LOGGING
     log_file: str = "monitor.log"
@@ -124,6 +136,24 @@ def load_config(config_path: Path) -> AppConfig:
     except (ValueError, configparser.Error) as exc:
         raise ConfigError(f"[TUI] section contains invalid values: {exc}") from exc
 
+    # DAEMON (optional section)
+    daemon_db_path = config.get("DAEMON", "db_path", fallback="beam_monitor.db")
+    daemon_socket_path = config.get("DAEMON", "socket_path", fallback="/tmp/isis_beam_monitor.sock")
+    daemon_lock_file = config.get("DAEMON", "lock_file", fallback="/tmp/isis_beam_monitor.lock")
+    retention_days = config.getint("DAEMON", "retention_days", fallback=7)
+    heartbeat_interval = config.getfloat("DAEMON", "heartbeat_interval", fallback=30.0)
+    if retention_days <= 0:
+        raise ConfigError("[DAEMON] retention_days must be a positive integer")
+
+    # TUI_CLIENT (optional section)
+    tui_socket_path = config.get("TUI_CLIENT", "socket_path", fallback=daemon_socket_path)
+    tui_reconnect_initial = config.getfloat("TUI_CLIENT", "reconnect_initial", fallback=1.0)
+    tui_reconnect_max = config.getfloat("TUI_CLIENT", "reconnect_max", fallback=15.0)
+    if tui_reconnect_initial <= 0 or tui_reconnect_max <= 0:
+        raise ConfigError("[TUI_CLIENT] reconnect values must be positive")
+    if tui_reconnect_initial > tui_reconnect_max:
+        raise ConfigError("[TUI_CLIENT] reconnect_initial cannot be greater than reconnect_max")
+
     return AppConfig(
         mcr_news_url=mcr_news_url,
         isis_websocket_url=isis_websocket_url,
@@ -145,6 +175,14 @@ def load_config(config_path: Path) -> AppConfig:
         sample_interval=sample_interval,
         refresh_per_second=refresh_per_second,
         logs_maxlen=logs_maxlen,
+        daemon_db_path=daemon_db_path,
+        daemon_socket_path=daemon_socket_path,
+        daemon_lock_file=daemon_lock_file,
+        retention_days=retention_days,
+        heartbeat_interval=heartbeat_interval,
+        tui_socket_path=tui_socket_path,
+        tui_reconnect_initial=tui_reconnect_initial,
+        tui_reconnect_max=tui_reconnect_max,
         log_file=log_file,
         log_level=log_level,
         log_max_bytes=log_max_bytes,

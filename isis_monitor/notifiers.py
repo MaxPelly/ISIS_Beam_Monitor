@@ -99,4 +99,4 @@ class NotificationChannel:
                 f"Channel '{self.name}' has no notifiers configured; skipping broadcast."
             )
             return
-        await asyncio.gather(*(n.send(message, channel) for n in self.notifiers))
+        await asyncio.gather(*(n.send(message, channel) for n in self.notifiers), return_exceptions=True)

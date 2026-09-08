@@ -133,3 +133,57 @@ experiment_teams_url =
         config = load_config(config_file)
     assert config.isis_websocket_url == ""
     assert "isis_websocket_url" in caplog.text
+
+
+def test_load_config_daemon_and_tui_client_values(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[DATA]
+mcr_news_url = http://test.com/news
+isis_websocket_url = wss://test.com/ws
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+
+[DAEMON]
+db_path = /tmp/beam.db
+socket_path = /tmp/beam.sock
+lock_file = /tmp/beam.lock
+retention_days = 7
+heartbeat_interval = 15
+
+[TUI_CLIENT]
+socket_path = /tmp/beam.sock
+reconnect_initial = 2
+reconnect_max = 20
+""")
+    config = load_config(config_file)
+    assert config.daemon_db_path == "/tmp/beam.db"
+    assert config.daemon_socket_path == "/tmp/beam.sock"
+    assert config.daemon_lock_file == "/tmp/beam.lock"
+    assert config.retention_days == 7
+    assert config.heartbeat_interval == 15
+    assert config.tui_socket_path == "/tmp/beam.sock"
+    assert config.tui_reconnect_initial == 2
+    assert config.tui_reconnect_max == 20
+
+
+def test_load_config_invalid_retention_days(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[DATA]
+mcr_news_url = http://test.com/news
+isis_websocket_url = wss://test.com/ws
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+
+[DAEMON]
+retention_days = 0
+""")
+    with pytest.raises(ConfigError, match="retention_days"):
+        load_config(config_file)
