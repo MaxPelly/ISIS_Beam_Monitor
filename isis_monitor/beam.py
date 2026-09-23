@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import websockets
 
 from isis_monitor.config import AppConfig
+from isis_monitor.messages import fmt_time
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.protocols import TUIProtocol, MonitorSinkProtocol
 
@@ -114,8 +115,8 @@ class BeamMonitor:
 
         if new_state != prev_state:
             msg = (
-                f"{time_now:%Y-%m-%d %H:%M:%S}: {bt.display_name} Beam is now {new_state}. "
-                f"Current: {beam_val:.3f} uA"
+                f"{bt.display_name} Beam is now {new_state}. "
+                f"Current: {beam_val:.3f} uA ({fmt_time(time_now)})"
             )
             logger.info(f"State Change: {msg}")
             await self.beam_channel.broadcast(msg, bt.channel_label)
@@ -148,7 +149,7 @@ class BeamMonitor:
                     return
 
                 if self.state.run_name and self.state.run_name != name:
-                    msg = f"{time_now}: Detected new run start. {name}"
+                    msg = f"Detected new run start: {name} ({fmt_time(time_now)})"
                     logger.info(f"New Run: {msg}")
                     await self.experiment_channel.broadcast(msg)
                     self.state.current_counts = 0
@@ -176,7 +177,7 @@ class BeamMonitor:
                     self.state.end_notified = False
 
                 if counts > self.counts_target and not self.state.end_notified:
-                    msg = f"{time_now}: {self.state.run_name} about to finish"
+                    msg = f"{self.state.run_name} about to finish ({fmt_time(time_now)})"
                     logger.info(f"Target Reached: {msg}")
                     await self.experiment_channel.broadcast(msg)
                     self.state.end_notified = True
