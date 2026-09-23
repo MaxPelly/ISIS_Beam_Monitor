@@ -1,17 +1,26 @@
 import logging
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Optional, List
+from typing import List, Optional
 
 import aiohttp
 
+from isis_monitor.messages import Notification, Severity, fmt_time
+
 logger = logging.getLogger(__name__)
+
+_SEVERITY_STYLE = {
+    Severity.INFO: "default",
+    Severity.GOOD: "good",
+    Severity.WARNING: "warning",
+    Severity.ATTENTION: "attention",
+}
 
 
 class Notifier(ABC):
     """Abstract interface for any notification method."""
     @abstractmethod
-    async def send(self, message: str, channel: Optional[str] = None):
+    async def send(self, notification: Notification):
         pass
 
 
@@ -34,32 +43,80 @@ class TeamsNotifier(Notifier):
             await self._session.close()
             self._session = None
 
-    def _create_payload(self, message: str, channel: Optional[str] = None) -> dict:
-        title = f"{channel} Beam Update" if channel else "MCR Update"
-        return {
-            "type": "message",
-            "summary": message,
-            "attachments": [{
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": {
-                    "summary": message,
-                    "channel": channel,
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                    "type": "AdaptiveCard",
-                    "version": "1.2",
-                    "body": [
-                        {"type": "TextBlock", "size": "Medium", "weight": "Bolder", "text": title},
-                        {"type": "TextBlock", "text": message, "wrap": True}
-                    ]
-                }
-            }]
+    def _create_payload(self, notification: Notification) -> dict:
+        header_text = f"{notification.emoji} {notification.title}".strip()
+        body: list = [
+            {
+                "type": "Container",
+                "style": _SEVERITY_STYLE[notification.severity],
+                "bleed": True,
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "size": "Medium",
+                        "weight": "Bolder",
+                        "text": header_text,
+                        "wrap": True,
+                    },
+                ],
+            },
+            {"type": "TextBlock", "text": notification.text, "wrap": True},
+        ]
+
+        if notification.flavour:
+            body.append({
+                "type": "TextBlock",
+                "text": f"_{notification.flavour}_",
+                "isSubtle": True,
+                "wrap": True,
+            })
+
+        if notification.facts:
+            body.append({
+                "type": "FactSet",
+                "facts": [
+                    {"title": key, "value": value} for key, value in notification.facts
+                ],
+            })
+
+        if notification.timestamp:
+            body.append({
+                "type": "TextBlock",
+                "text": fmt_time(notification.timestamp),
+                "isSubtle": True,
+                "size": "Small",
+                "wrap": True,
+            })
+
+        card = {
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "type": "AdaptiveCard",
+            "version": "1.2",
+            "body": body,
         }
 
-    async def send(self, message: str, channel: Optional[str] = None):
+        if notification.url:
+            card["actions"] = [
+                {"type": "Action.OpenUrl", "title": "Open", "url": notification.url}
+            ]
+
+        plain_text = notification.to_plain_text()
+        summary = plain_text.splitlines()[0] if plain_text else notification.title
+
+        return {
+            "type": "message",
+            "summary": summary,
+            "attachments": [{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": card,
+            }],
+        }
+
+    async def send(self, notification: Notification):
         if not self.webhook_url:
             return
 
-        payload = self._create_payload(message, channel)
+        payload = self._create_payload(notification)
         try:
             session = await self._get_session()
             async with session.post(
@@ -78,9 +135,8 @@ class TeamsNotifier(Notifier):
 
 class DummyNotifier(Notifier):
     """A dummy notifier for testing — logs the message instead of sending."""
-    async def send(self, message: str, channel: Optional[str] = None):
-        prefix = f"[DUMMY NOTIFIER - {channel}]" if channel else "[DUMMY NOTIFIER]"
-        logger.info(f"{prefix} {message}")
+    async def send(self, notification: Notification):
+        logger.info(f"[DUMMY NOTIFIER] {notification.to_plain_text()}")
 
 
 class NotificationChannel:
@@ -92,12 +148,11 @@ class NotificationChannel:
     def add_notifier(self, notifier: Notifier):
         self.notifiers.append(notifier)
 
-    async def broadcast(self, message: str, channel: Optional[str] = None):
-        """Sends the message to all registered notifiers in parallel."""
+    async def broadcast(self, notification: Notification):
+        """Sends the notification to all registered notifiers in parallel."""
         if not self.notifiers:
             logger.debug(
                 f"Channel '{self.name}' has no notifiers configured; skipping broadcast."
             )
             return
-        effective_channel = channel if channel is not None else self.name
-        await asyncio.gather(*(n.send(message, effective_channel) for n in self.notifiers), return_exceptions=True)
+        await asyncio.gather(*(n.send(notification) for n in self.notifiers), return_exceptions=True)

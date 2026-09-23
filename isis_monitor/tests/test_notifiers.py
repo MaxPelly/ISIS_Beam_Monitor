@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from isis_monitor.notifiers import TeamsNotifier, DummyNotifier, NotificationChannel
+from isis_monitor.messages import Notification, Severity
 import aiohttp
 
 
@@ -13,8 +14,10 @@ async def test_dummy_notifier(caplog):
     import logging
     caplog.set_level(logging.INFO)
     notifier = DummyNotifier()
-    await notifier.send("Test message", "TestChannel")
-    assert "[DUMMY NOTIFIER - TestChannel] Test message" in caplog.text
+    notification = Notification(title="Test", text="Test message", emoji="🔔")
+    await notifier.send(notification)
+    assert "🔔 Test" in caplog.text
+    assert "Test message" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -55,24 +58,29 @@ def make_mock_session(status: int = 200, response_text: str = "OK"):
 async def test_teams_notifier_sends_request():
     notifier = TeamsNotifier("http://fake.webhook.url")
     mock_session = make_mock_session(status=200)
+    notification = Notification(title="Test title", text="Test message")
 
     with patch("isis_monitor.notifiers.aiohttp.ClientSession", return_value=mock_session):
-        await notifier.send("Test message", "TestChannel")
+        await notifier.send(notification)
 
     mock_session.post.assert_called_once()
     args, kwargs = mock_session.post.call_args
     assert args[0] == "http://fake.webhook.url"
-    assert kwargs["json"]["summary"] == "Test message"
-    assert kwargs["json"]["attachments"][0]["content"]["channel"] == "TestChannel"
+    assert kwargs["json"]["summary"] == "Test title"
+    card = kwargs["json"]["attachments"][0]["content"]
+    assert card["type"] == "AdaptiveCard"
+    body_texts = [item["text"] for item in card["body"] if "text" in item]
+    assert "Test message" in body_texts
 
 
 @pytest.mark.asyncio
 async def test_teams_notifier_no_url():
     notifier = TeamsNotifier("")
     mock_session = make_mock_session()
+    notification = Notification(title="Test title", text="Test message")
 
     with patch("isis_monitor.notifiers.aiohttp.ClientSession", return_value=mock_session):
-        await notifier.send("Test message", "TestChannel")
+        await notifier.send(notification)
 
     mock_session.post.assert_not_called()
 
@@ -82,12 +90,84 @@ async def test_teams_notifier_logs_error_on_bad_status(caplog):
     import logging
     notifier = TeamsNotifier("http://fake.webhook.url")
     mock_session = make_mock_session(status=400, response_text="Bad Request")
+    notification = Notification(title="Test title", text="Test message")
 
     with patch("isis_monitor.notifiers.aiohttp.ClientSession", return_value=mock_session):
         with caplog.at_level(logging.ERROR):
-            await notifier.send("Test message")
+            await notifier.send(notification)
 
     assert "400" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# TeamsNotifier — card structure
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("severity, style", [
+    (Severity.INFO, "default"),
+    (Severity.GOOD, "good"),
+    (Severity.WARNING, "warning"),
+    (Severity.ATTENTION, "attention"),
+])
+def test_create_payload_severity_style(severity, style):
+    notifier = TeamsNotifier("http://fake.webhook.url")
+    notification = Notification(title="Title", text="Text", severity=severity)
+
+    payload = notifier._create_payload(notification)
+
+    card = payload["attachments"][0]["content"]
+    header_container = card["body"][0]
+    assert header_container["style"] == style
+
+
+def test_create_payload_includes_facts():
+    notifier = TeamsNotifier("http://fake.webhook.url")
+    notification = Notification(
+        title="Title", text="Text", facts=[("Current", "3.500 uA"), ("Previous", "off")]
+    )
+
+    payload = notifier._create_payload(notification)
+
+    card = payload["attachments"][0]["content"]
+    fact_sets = [item for item in card["body"] if item["type"] == "FactSet"]
+    assert len(fact_sets) == 1
+    assert fact_sets[0]["facts"] == [
+        {"title": "Current", "value": "3.500 uA"},
+        {"title": "Previous", "value": "off"},
+    ]
+
+
+def test_create_payload_includes_flavour_line():
+    notifier = TeamsNotifier("http://fake.webhook.url")
+    notification = Notification(title="Title", text="Text", flavour="Beam's back, baby.")
+
+    payload = notifier._create_payload(notification)
+
+    card = payload["attachments"][0]["content"]
+    texts = [item["text"] for item in card["body"] if "text" in item]
+    assert "_Beam's back, baby._" in texts
+
+
+def test_create_payload_includes_url_action():
+    notifier = TeamsNotifier("http://fake.webhook.url")
+    notification = Notification(title="Title", text="Text", url="https://example.com/news")
+
+    payload = notifier._create_payload(notification)
+
+    card = payload["attachments"][0]["content"]
+    assert card["actions"] == [
+        {"type": "Action.OpenUrl", "title": "Open", "url": "https://example.com/news"}
+    ]
+
+
+def test_create_payload_no_url_means_no_actions():
+    notifier = TeamsNotifier("http://fake.webhook.url")
+    notification = Notification(title="Title", text="Text")
+
+    payload = notifier._create_payload(notification)
+
+    card = payload["attachments"][0]["content"]
+    assert "actions" not in card
 
 
 # ---------------------------------------------------------------------------
@@ -106,10 +186,11 @@ async def test_notification_channel():
     channel.add_notifier(mock_notifier1)
     channel.add_notifier(mock_notifier2)
 
-    await channel.broadcast("Broadcast message", "SubChannel")
+    notification = Notification(title="Title", text="Broadcast message")
+    await channel.broadcast(notification)
 
-    mock_notifier1.send.assert_called_once_with("Broadcast message", "SubChannel")
-    mock_notifier2.send.assert_called_once_with("Broadcast message", "SubChannel")
+    mock_notifier1.send.assert_called_once_with(notification)
+    mock_notifier2.send.assert_called_once_with(notification)
 
 
 @pytest.mark.asyncio
@@ -119,7 +200,7 @@ async def test_notification_channel_empty_logs_debug(caplog):
     channel = NotificationChannel("Beam Updates")
 
     with caplog.at_level(logging.DEBUG):
-        await channel.broadcast("some message")
+        await channel.broadcast(Notification(title="Title", text="some message"))
 
     assert "Beam Updates" in caplog.text
     assert "no notifiers" in caplog.text

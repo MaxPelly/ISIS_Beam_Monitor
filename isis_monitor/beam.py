@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 import websockets
 
 from isis_monitor.config import AppConfig
-from isis_monitor.messages import fmt_time
+from isis_monitor.messages import beam_change, run_started, run_finishing
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.protocols import TUIProtocol, MonitorSinkProtocol
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class BeamTarget:
     """Describes one accelerator beam target and how to handle its updates."""
     state_key: str      # Key into MonitorState.beams
-    channel_label: str  # Passed to broadcast() and TUI as the channel name
+    channel_label: str  # Passed to the TUI and sink as the channel name
     display_name: str   # Human-readable name used in log/notification messages
 
 BEAM_TARGETS: List[BeamTarget] = [
@@ -114,12 +114,9 @@ class BeamMonitor:
         prev_state = self.state.beams[bt.state_key].power
 
         if new_state != prev_state:
-            msg = (
-                f"{bt.display_name} Beam is now {new_state}. "
-                f"Current: {beam_val:.3f} uA ({fmt_time(time_now)})"
-            )
-            logger.info(f"State Change: {msg}")
-            await self.beam_channel.broadcast(msg, bt.channel_label)
+            notification = beam_change(bt.display_name, new_state, beam_val, time_now)
+            logger.info(f"State Change: {notification.to_plain_text()}")
+            await self.beam_channel.broadcast(notification)
 
         self.state.beams[bt.state_key].current = beam_val
         self.state.beams[bt.state_key].power = new_state
@@ -149,9 +146,9 @@ class BeamMonitor:
                     return
 
                 if self.state.run_name and self.state.run_name != name:
-                    msg = f"Detected new run start: {name} ({fmt_time(time_now)})"
-                    logger.info(f"New Run: {msg}")
-                    await self.experiment_channel.broadcast(msg)
+                    notification = run_started(name, time_now)
+                    logger.info(f"New Run: {notification.to_plain_text()}")
+                    await self.experiment_channel.broadcast(notification)
                     self.state.current_counts = 0
 
                 self.state.run_name = name
@@ -177,9 +174,9 @@ class BeamMonitor:
                     self.state.end_notified = False
 
                 if counts > self.counts_target and not self.state.end_notified:
-                    msg = f"{self.state.run_name} about to finish ({fmt_time(time_now)})"
-                    logger.info(f"Target Reached: {msg}")
-                    await self.experiment_channel.broadcast(msg)
+                    notification = run_finishing(self.state.run_name, time_now)
+                    logger.info(f"Target Reached: {notification.to_plain_text()}")
+                    await self.experiment_channel.broadcast(notification)
                     self.state.end_notified = True
 
         if self.tui:

@@ -2,11 +2,12 @@ import asyncio
 import contextlib
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 import aiohttp
 from typing import Optional
 
 from isis_monitor.config import AppConfig
+from isis_monitor.messages import mcr_news
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.protocols import TUIProtocol, MonitorSinkProtocol
 
@@ -123,7 +124,8 @@ class MCRNewsMonitor:
                     if self.sink:
                         self.sink.update_mcr_news(new_news)
                         self.sink.update_health("mcr", "connected")
-                    await self.channel.broadcast(new_news)
+                    notification = mcr_news(new_news, datetime.now(timezone.utc))
+                    await self.channel.broadcast(notification)
                 elif new_news:
                     consecutive_failures = 0
                     if self.sink:

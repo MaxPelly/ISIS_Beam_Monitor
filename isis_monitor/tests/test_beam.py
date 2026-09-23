@@ -78,7 +78,7 @@ async def test_handle_update_beam(mock_config, mock_channels):
     assert m.state.beams["TS1"].current == 10.0
     assert m.state.beams["TS1"].power == "low"
     beam_channel.broadcast.assert_called_once()
-    assert "TS1 Beam is now low" in beam_channel.broadcast.call_args[0][0]
+    assert "TS1 Beam is now low" in beam_channel.broadcast.call_args[0][0].title
 
     beam_channel.broadcast.reset_mock()
 
@@ -93,7 +93,7 @@ async def test_handle_update_beam(mock_config, mock_channels):
     assert m.state.beams["TS1"].current == 60.0
     assert m.state.beams["TS1"].power == "medium"
     beam_channel.broadcast.assert_called_once()
-    assert "TS1 Beam is now medium" in beam_channel.broadcast.call_args[0][0]
+    assert "TS1 Beam is now medium" in beam_channel.broadcast.call_args[0][0].title
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +127,9 @@ async def test_handle_update_run_name_change(mock_config, mock_channels):
 
     assert m.state.run_name == new_run
     exp_channel.broadcast.assert_called_once()
-    assert "new run" in exp_channel.broadcast.call_args[0][0].lower()
+    notification = exp_channel.broadcast.call_args[0][0]
+    assert "new run" in notification.title.lower()
+    assert notification.text == new_run
     assert m.state.current_counts == 0
 
 
@@ -166,7 +168,9 @@ async def test_handle_update_counts_triggers_notification(mock_config, mock_chan
     assert m.state.current_counts == 110.0
     assert m.state.end_notified is True
     exp_channel.broadcast.assert_called_once()
-    assert "about to finish" in exp_channel.broadcast.call_args[0][0]
+    notification = exp_channel.broadcast.call_args[0][0]
+    assert "about to finish" in notification.title
+    assert notification.text == "Run 1"
 
 
 @pytest.mark.asyncio

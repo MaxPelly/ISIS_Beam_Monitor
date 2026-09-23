@@ -129,7 +129,9 @@ async def test_mcr_run_broadcasts_on_news_change(mock_config, mock_channel):
 
         await monitor.run(stop_event)
 
-    mock_channel.broadcast.assert_called_once_with("News B")
+    mock_channel.broadcast.assert_called_once()
+    notification = mock_channel.broadcast.call_args[0][0]
+    assert notification.text == "News B"
 
 
 @pytest.mark.asyncio
