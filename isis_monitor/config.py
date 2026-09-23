@@ -28,6 +28,8 @@ class AppConfig:
     ts1_beam_current_pv: str = "AC:TS1:BEAM:CURR"
     ts2_beam_current_pv: str = "AC:TS2:BEAM:CURR"
     muon_beam_current_pv: str = "AC:MUON:BEAM:CURR"
+    instrument_target: str = "TS1"  # which beam target's state to report in run cards
+    counts_type: str = "raw"  # "good" or "raw" — which frame count counts_target is measured against
 
     # BEAM_BOUNDARIES (tuples of cutoff thresholds)
     ts1_boundaries: tuple = (0.0, 50.0, 140.0)
@@ -67,6 +69,7 @@ class AppConfig:
     fun_mode: bool = False
     notifications_timezone: str = "Europe/London"
     debounce_seconds: float = 20.0
+    stall_minutes: float = 15.0
 
 
 def load_config(config_path: Path) -> AppConfig:
@@ -101,6 +104,10 @@ def load_config(config_path: Path) -> AppConfig:
     ts1_beam_current_pv = config.get("PVS", "ts1_beam_current_pv", fallback="AC:TS1:BEAM:CURR")
     ts2_beam_current_pv = config.get("PVS", "ts2_beam_current_pv", fallback="AC:TS2:BEAM:CURR")
     muon_beam_current_pv = config.get("PVS", "muon_beam_current_pv", fallback="AC:MUON:BEAM:CURR")
+    instrument_target = config.get("PVS", "instrument_target", fallback="TS1")
+    counts_type = config.get("PVS", "counts_type", fallback="raw")
+    if counts_type not in ("good", "raw"):
+        raise ConfigError(f"[PVS] counts_type must be 'good' or 'raw', got '{counts_type}'")
 
     # BEAM_BOUNDARIES
     def _parse_tuple(section, key, default):
@@ -136,6 +143,7 @@ def load_config(config_path: Path) -> AppConfig:
     fun_mode = config.getboolean("NOTIFICATIONS", "fun_mode", fallback=False)
     notifications_timezone = config.get("NOTIFICATIONS", "timezone", fallback="Europe/London")
     debounce_seconds = config.getfloat("NOTIFICATIONS", "debounce_seconds", fallback=20.0)
+    stall_minutes = config.getfloat("NOTIFICATIONS", "stall_minutes", fallback=15.0)
 
     # TUI (fully optional section)
     try:
@@ -175,6 +183,8 @@ def load_config(config_path: Path) -> AppConfig:
         ts1_beam_current_pv=ts1_beam_current_pv,
         ts2_beam_current_pv=ts2_beam_current_pv,
         muon_beam_current_pv=muon_beam_current_pv,
+        instrument_target=instrument_target,
+        counts_type=counts_type,
         ts1_boundaries=ts1_boundaries,
         ts2_boundaries=ts2_boundaries,
         muon_boundaries=muon_boundaries,
@@ -200,4 +210,5 @@ def load_config(config_path: Path) -> AppConfig:
         fun_mode=fun_mode,
         notifications_timezone=notifications_timezone,
         debounce_seconds=debounce_seconds,
+        stall_minutes=stall_minutes,
     )

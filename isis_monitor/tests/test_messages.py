@@ -7,6 +7,8 @@ from isis_monitor.messages import (
     beam_change,
     fmt_duration,
     fmt_time,
+    frames_stalled,
+    frames_vetoed,
     mcr_news,
     run_finishing,
     run_started,
@@ -184,20 +186,46 @@ def test_startup_status_builder_picks_flavour_when_rng_given():
 
 def test_run_started_builder():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = run_started("Run 12345", dt)
+    n = run_started("Run 12346", "Run 12345", timedelta(hours=2), 900.0, 1000.0, dt)
     assert n.title == "New run started"
-    assert n.text == "Run 12345"
+    assert n.text == "Run 12346"
     assert n.emoji == "🚀"
     assert n.flavour == ""
+    assert n.facts == [
+        ("Previous run", "Run 12345"),
+        ("Duration", "2h 0m"),
+        ("Final good frames", "900"),
+        ("Final raw frames", "1000"),
+    ]
 
 
 def test_run_finishing_builder():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = run_finishing("Run 12345", dt)
+    n = run_finishing("Run 12345", 150.0, 130.0, 140.0, 150.0, 0.5, "high", dt)
     assert n.title == "Run about to finish"
     assert n.text == "Run 12345"
     assert n.emoji == "🏁"
     assert n.flavour == ""
+    assert n.facts == [
+        ("Frames", "150 / 130"),
+        ("Rate", "30.0 frames/min"),
+        ("ETA", "0s"),
+        ("Good-frame efficiency", "93%"),
+        ("Instrument beam", "high"),
+    ]
+
+
+def test_run_finishing_builder_omits_eta_when_rate_not_positive():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = run_finishing("Run 12345", 50.0, 130.0, 45.0, 50.0, 0.0, "high", dt)
+    fact_keys = [key for key, _ in n.facts]
+    assert "ETA" not in fact_keys
+
+
+def test_run_finishing_builder_zero_raw_frames_has_zero_efficiency():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = run_finishing("Run 12345", 0.0, 130.0, 0.0, 0.0, 0.0, "high", dt)
+    assert ("Good-frame efficiency", "0%") in n.facts
 
 
 def test_mcr_news_builder():
@@ -212,8 +240,8 @@ def test_mcr_news_builder():
 def test_run_and_mcr_builders_default_to_info_severity():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     for n in (
-        run_started("Run 1", dt),
-        run_finishing("Run 1", dt),
+        run_started("Run 2", "Run 1", timedelta(hours=1), 900.0, 1000.0, dt),
+        run_finishing("Run 1", 150.0, 130.0, 140.0, 150.0, 0.5, "high", dt),
         mcr_news("News", dt),
     ):
         assert n.severity == Severity.INFO
@@ -223,8 +251,26 @@ def test_run_and_mcr_builders_pick_flavour_when_rng_given():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     rng = random.Random(1)
     for n in (
-        run_started("Run 1", dt, rng=rng),
-        run_finishing("Run 1", dt, rng=rng),
+        run_started("Run 2", "Run 1", timedelta(hours=1), 900.0, 1000.0, dt, rng=rng),
+        run_finishing("Run 1", 150.0, 130.0, 140.0, 150.0, 0.5, "high", dt, rng=rng),
         mcr_news("News", dt, rng=rng),
     ):
         assert n.flavour != ""
+
+
+def test_frames_vetoed_builder():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = frames_vetoed(dt)
+    assert n.title == "Frames being vetoed"
+    assert n.severity == Severity.WARNING
+    assert n.emoji == "⚠️"
+
+
+def test_frames_stalled_builder():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = frames_stalled("TS1", timedelta(minutes=17), dt)
+    assert n.title == "Frames stalled"
+    assert n.severity == Severity.WARNING
+    assert n.emoji == "⚠️"
+    assert "17m" in n.text
+    assert "TS1" in n.text

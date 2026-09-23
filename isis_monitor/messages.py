@@ -148,25 +148,76 @@ def startup_status(
 
 
 def run_started(
-    run_name: str, time_now: datetime, rng: Optional[random.Random] = None
+    new_run_name: str,
+    prev_run_name: str,
+    prev_duration: timedelta,
+    prev_good_frames: float,
+    prev_raw_frames: float,
+    time_now: datetime,
+    rng: Optional[random.Random] = None,
 ) -> Notification:
+    """Build a card for a new run starting — reports on the run that just ended."""
     return Notification(
         title="New run started",
-        text=run_name,
+        text=new_run_name,
         emoji=NEW_RUN_EMOJI,
+        facts=[
+            ("Previous run", prev_run_name),
+            ("Duration", fmt_duration(prev_duration)),
+            ("Final good frames", f"{prev_good_frames:.0f}"),
+            ("Final raw frames", f"{prev_raw_frames:.0f}"),
+        ],
         flavour=flavour.pick(("*", "new_run"), rng) if rng else "",
         timestamp=time_now,
     )
 
 
 def run_finishing(
-    run_name: str, time_now: datetime, rng: Optional[random.Random] = None
+    run_name: str,
+    tracked_frames: float,
+    counts_target: float,
+    good_frames: float,
+    raw_frames: float,
+    rate_per_second: float,
+    instrument_state: str,
+    time_now: datetime,
+    rng: Optional[random.Random] = None,
 ) -> Notification:
+    facts = [("Frames", f"{tracked_frames:.0f} / {counts_target:.0f}")]
+    facts.append(("Rate", f"{rate_per_second * 60:.1f} frames/min"))
+    if rate_per_second > 0:
+        eta_seconds = max(counts_target - tracked_frames, 0) / rate_per_second
+        facts.append(("ETA", fmt_duration(timedelta(seconds=eta_seconds))))
+    efficiency = (good_frames / raw_frames * 100) if raw_frames > 0 else 0.0
+    facts.append(("Good-frame efficiency", f"{efficiency:.0f}%"))
+    facts.append(("Instrument beam", instrument_state))
+
     return Notification(
         title="Run about to finish",
         text=run_name,
         emoji=FINISHING_EMOJI,
+        facts=facts,
         flavour=flavour.pick(("*", "finishing"), rng) if rng else "",
+        timestamp=time_now,
+    )
+
+
+def frames_vetoed(time_now: datetime) -> Notification:
+    return Notification(
+        title="Frames being vetoed",
+        text="Good frames are flat while raw frames keep rising.",
+        severity=Severity.WARNING,
+        emoji="⚠️",
+        timestamp=time_now,
+    )
+
+
+def frames_stalled(instrument_target: str, stalled_for: timedelta, time_now: datetime) -> Notification:
+    return Notification(
+        title="Frames stalled",
+        text=f"No new frames for {fmt_duration(stalled_for)} while {instrument_target} beam is on.",
+        severity=Severity.WARNING,
+        emoji="⚠️",
         timestamp=time_now,
     )
 

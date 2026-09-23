@@ -61,6 +61,21 @@ The application requires an INI configuration file to set up the Teams webhook U
 # How long a beam state change must persist, in seconds, before a card
 # is sent — filters out brief flickers (default = 20).
 # debounce_seconds = 20
+# How many minutes good and raw frames can both stay flat, while the
+# instrument beam is on, before a stall warning is sent (default = 15).
+# stall_minutes = 15
+```
+
+### Optional frame-tracking settings in `[PVS]`
+
+```ini
+[PVS]
+# Which beam target's state is reported as "the instrument's beam" on run
+# cards (default = TS1).
+# instrument_target = TS1
+# Which frame count counts_target is measured against: "good" or "raw"
+# (default = raw, preserving existing behaviour).
+# counts_type = raw
 ```
 
 ## Usage

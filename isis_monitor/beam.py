@@ -4,18 +4,46 @@ import base64
 import logging
 import math
 import random
+from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import websockets
 
 from isis_monitor.config import AppConfig
-from isis_monitor.messages import beam_change, run_started, run_finishing, startup_status
+from isis_monitor.messages import (
+    beam_change,
+    frames_stalled,
+    frames_vetoed,
+    run_started,
+    run_finishing,
+    startup_status,
+)
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.protocols import TUIProtocol, MonitorSinkProtocol
 
 logger = logging.getLogger(__name__)
+
+FRAME_SAMPLE_WINDOW = timedelta(minutes=15)
+FRAME_CHECK_INTERVAL = 60.0
+
+
+def _fit_rate(samples: List[Tuple[datetime, float]]) -> float:
+    """Least-squares slope (value per second) through (time, value) samples."""
+    if len(samples) < 2:
+        return 0.0
+    t0 = samples[0][0]
+    xs = [(t - t0).total_seconds() for t, _ in samples]
+    ys = [v for _, v in samples]
+    n = len(xs)
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    denom = sum((x - mean_x) ** 2 for x in xs)
+    if denom == 0:
+        return 0.0
+    numer = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    return numer / denom
 
 @dataclass
 class BeamTarget:
@@ -178,8 +206,19 @@ class MonitorState:
             bt.state_key: BeamState() for bt in BEAM_TARGETS
         }
         self.run_name: str = ""
-        self.current_counts: float = -1.0
+        self.run_started_at: Optional[datetime] = None
+        self.current_counts: float = -1.0  # whichever of good/raw counts_type tracks
+        self.current_good_frames: float = -1.0
+        self.current_raw_frames: float = -1.0
+        self.frame_samples: Deque[Tuple[datetime, float, float]] = deque()  # (time, good, raw)
         self.end_notified: bool = False
+
+        # Periodic frame-progress check (BeamMonitor._check_frame_progress)
+        self.last_check_good: float = -1.0
+        self.last_check_raw: float = -1.0
+        self.frames_stalled_since: Optional[datetime] = None
+        self.veto_warned: bool = False
+        self.stall_warned: bool = False
 
 
 class BeamMonitor:
@@ -300,13 +339,28 @@ class BeamMonitor:
 
                 if self.state.run_name and self.state.run_name != name:
                     notification = run_started(
-                        name, time_now, rng=self._rng if self.config.fun_mode else None,
+                        name,
+                        self.state.run_name,
+                        time_now - self.state.run_started_at,
+                        self.state.current_good_frames,
+                        self.state.current_raw_frames,
+                        time_now,
+                        rng=self._rng if self.config.fun_mode else None,
                     )
                     logger.info(f"New Run: {notification.to_plain_text()}")
                     await self.experiment_channel.broadcast(notification)
                     self.state.current_counts = 0
+                    self.state.current_good_frames = 0.0
+                    self.state.current_raw_frames = 0.0
+                    self.state.frame_samples.clear()
+                    self.state.last_check_good = -1.0
+                    self.state.last_check_raw = -1.0
+                    self.state.frames_stalled_since = None
+                    self.state.veto_warned = False
+                    self.state.stall_warned = False
 
                 self.state.run_name = name
+                self.state.run_started_at = time_now
                 if self.sink:
                     self.sink.update_run_name(name)
 
@@ -316,21 +370,39 @@ class BeamMonitor:
                 ):
                     return
                 try:
-                    counts = float(text_val.split("/")[1])
+                    parts = text_val.split("/")
+                    good_frames = float(parts[0])
+                    raw_frames = float(parts[1])
                 except (IndexError, ValueError) as e:
                     logger.warning(f"Failed to parse counts from '{text_val}': {e}")
                     return
 
-                self.state.current_counts = counts
-                if self.sink:
-                    self.sink.update_counts(counts)
+                tracked = good_frames if self.config.counts_type == "good" else raw_frames
 
-                if self.state.end_notified and counts < (self.counts_target - 25):
+                self.state.current_good_frames = good_frames
+                self.state.current_raw_frames = raw_frames
+                self.state.current_counts = tracked
+                self.state.frame_samples.append((time_now, good_frames, raw_frames))
+                self._prune_frame_samples(time_now)
+
+                if self.sink:
+                    self.sink.update_counts(tracked)
+
+                if self.state.end_notified and tracked < (self.counts_target - 25):
                     self.state.end_notified = False
 
-                if counts > self.counts_target and not self.state.end_notified:
+                if tracked > self.counts_target and not self.state.end_notified:
+                    rate = _fit_rate(self._tracked_frame_samples())
                     notification = run_finishing(
-                        self.state.run_name, time_now, rng=self._rng if self.config.fun_mode else None,
+                        self.state.run_name,
+                        tracked,
+                        self.counts_target,
+                        good_frames,
+                        raw_frames,
+                        rate,
+                        self._instrument_beam_state(),
+                        time_now,
+                        rng=self._rng if self.config.fun_mode else None,
                     )
                     logger.info(f"Target Reached: {notification.to_plain_text()}")
                     await self.experiment_channel.broadcast(notification)
@@ -340,6 +412,72 @@ class BeamMonitor:
             for bt in BEAM_TARGETS:
                 state = self.state.beams[bt.state_key]
                 self.tui.update_beam_state(bt.channel_label, state.current, state.power)
+
+    def _prune_frame_samples(self, now: datetime) -> None:
+        cutoff = now - FRAME_SAMPLE_WINDOW
+        samples = self.state.frame_samples
+        while samples and samples[0][0] < cutoff:
+            samples.popleft()
+
+    def _tracked_frame_samples(self) -> List[Tuple[datetime, float]]:
+        """The (time, value) series counts_target is measured against."""
+        if self.config.counts_type == "good":
+            return [(t, good) for t, good, _ in self.state.frame_samples]
+        return [(t, raw) for t, _, raw in self.state.frame_samples]
+
+    def _instrument_beam_state(self) -> str:
+        beam_state = self.state.beams.get(self.config.instrument_target)
+        return beam_state.power if beam_state else "unknown"
+
+    async def _check_frame_progress(self, time_now: datetime) -> None:
+        """Detect vetoed or stalled frame collection (called roughly every 60s)."""
+        good = self.state.current_good_frames
+        raw = self.state.current_raw_frames
+        good_moved = self.state.last_check_good >= 0 and good > self.state.last_check_good
+        raw_moved = self.state.last_check_raw >= 0 and raw > self.state.last_check_raw
+        self.state.last_check_good = good
+        self.state.last_check_raw = raw
+
+        if raw_moved and not good_moved:
+            if not self.state.veto_warned:
+                self.state.veto_warned = True
+                notification = frames_vetoed(time_now)
+                logger.info(f"Veto Warning: {notification.to_plain_text()}")
+                await self.experiment_channel.broadcast(notification)
+        elif good_moved:
+            self.state.veto_warned = False
+
+        if not good_moved and not raw_moved:
+            if self.state.frames_stalled_since is None:
+                self.state.frames_stalled_since = time_now
+            stalled_for = time_now - self.state.frames_stalled_since
+            if (
+                stalled_for >= timedelta(minutes=self.config.stall_minutes)
+                and self._instrument_beam_state() != "off"
+                and not self.state.stall_warned
+            ):
+                self.state.stall_warned = True
+                notification = frames_stalled(self.config.instrument_target, stalled_for, time_now)
+                logger.info(f"Stall Warning: {notification.to_plain_text()}")
+                await self.experiment_channel.broadcast(notification)
+        else:
+            self.state.frames_stalled_since = None
+            self.state.stall_warned = False
+
+    async def _frame_check_loop(self, stop_event: Optional[asyncio.Event] = None) -> None:
+        while stop_event is None or not stop_event.is_set():
+            if stop_event is not None:
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=FRAME_CHECK_INTERVAL)
+                except asyncio.TimeoutError:
+                    pass
+                if stop_event.is_set():
+                    break
+            else:
+                await asyncio.sleep(FRAME_CHECK_INTERVAL)
+
+            await self._check_frame_progress(datetime.now(timezone.utc))
+        logger.warning("Frame check loop quit")
 
     def request_reconnect(self) -> bool:
         if self._force_reconnect.is_set():
@@ -351,8 +489,14 @@ class BeamMonitor:
         return True
 
     async def run(self, stop_event: Optional[asyncio.Event] = None):
+        if not self.data_url:
+            logger.warning("No WebSocket URL provided. Beam monitor will not run.")
+            return
         try:
-            await self._run_loop(stop_event)
+            await asyncio.gather(
+                self._run_loop(stop_event),
+                self._frame_check_loop(stop_event),
+            )
         finally:
             self.change_aggregator.cancel_all()
 
@@ -361,10 +505,6 @@ class BeamMonitor:
             "type": "subscribe",
             "pvs": list(self.pv_to_beam.keys()) + [self.counts_pv, self.run_name_pv],
         })
-
-        if not self.data_url:
-            logger.warning("No WebSocket URL provided. Beam monitor will not run.")
-            return
 
         logger.info(f"Beam Monitor started. Connecting to {self.data_url}...")
 

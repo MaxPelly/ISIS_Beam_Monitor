@@ -229,3 +229,65 @@ debounce_seconds = 5
     assert config.fun_mode is True
     assert config.notifications_timezone == "America/New_York"
     assert config.debounce_seconds == 5.0
+
+
+def test_load_config_frame_tracking_defaults(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[DATA]
+mcr_news_url = http://test.com/news
+isis_websocket_url = wss://test.com/ws
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+""")
+    config = load_config(config_file)
+    assert config.instrument_target == "TS1"
+    assert config.counts_type == "raw"
+    assert config.stall_minutes == 15.0
+
+
+def test_load_config_frame_tracking_custom_values(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[DATA]
+mcr_news_url = http://test.com/news
+isis_websocket_url = wss://test.com/ws
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+
+[PVS]
+instrument_target = TS2
+counts_type = good
+
+[NOTIFICATIONS]
+stall_minutes = 10
+""")
+    config = load_config(config_file)
+    assert config.instrument_target == "TS2"
+    assert config.counts_type == "good"
+    assert config.stall_minutes == 10.0
+
+
+def test_load_config_invalid_counts_type(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[DATA]
+mcr_news_url = http://test.com/news
+isis_websocket_url = wss://test.com/ws
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+
+[PVS]
+counts_type = bogus
+""")
+    with pytest.raises(ConfigError, match="counts_type"):
+        load_config(config_file)
