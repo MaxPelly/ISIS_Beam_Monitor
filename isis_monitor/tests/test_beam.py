@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 import base64
 from unittest.mock import AsyncMock, patch
@@ -7,6 +8,9 @@ from isis_monitor.beam import (
     BeamMonitor,
     BEAM_TARGETS,
 )
+
+DEBOUNCE_SECONDS = 0.05
+SETTLE = DEBOUNCE_SECONDS * 3  # wait comfortably past the debounce window in tests
 
 
 @pytest.fixture
@@ -31,7 +35,10 @@ def mock_channels():
 
 def make_monitor(mock_config, mock_channels, counts_target=100):
     beam_channel, exp_channel = mock_channels
-    return BeamMonitor(mock_config, beam_channel, exp_channel, counts_target=counts_target)
+    return BeamMonitor(
+        mock_config, beam_channel, exp_channel, counts_target=counts_target,
+        debounce_seconds=DEBOUNCE_SECONDS,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -70,30 +77,111 @@ def test_get_power_label(mock_config, mock_channels):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_handle_update_beam(mock_config, mock_channels):
+async def test_handle_update_beam_startup_sends_immediately(mock_config, mock_channels):
+    """The first reading for a target is a startup card, sent with no debounce."""
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
 
     await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})
+
     assert m.state.beams["TS1"].current == 10.0
     assert m.state.beams["TS1"].power == "low"
     beam_channel.broadcast.assert_called_once()
-    assert "TS1 Beam is now low" in beam_channel.broadcast.call_args[0][0].title
+    notification = beam_channel.broadcast.call_args[0][0]
+    assert notification.title == "Monitor online: TS1 is low"
 
+
+@pytest.mark.asyncio
+async def test_handle_update_beam_no_change_no_broadcast(mock_config, mock_channels):
+    beam_channel, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})
     beam_channel.broadcast.reset_mock()
 
-    # No state change → no broadcast
     await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "45.0"})
+    await asyncio.sleep(SETTLE)
+
     assert m.state.beams["TS1"].current == 45.0
     assert m.state.beams["TS1"].power == "low"
     beam_channel.broadcast.assert_not_called()
 
-    # State change → broadcast
+
+@pytest.mark.asyncio
+async def test_handle_update_beam_change_is_debounced(mock_config, mock_channels):
+    """A confirmed state change is not sent immediately — only after the debounce window."""
+    beam_channel, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})  # startup
+    beam_channel.broadcast.reset_mock()
+
     await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})
-    assert m.state.beams["TS1"].current == 60.0
-    assert m.state.beams["TS1"].power == "medium"
+    assert m.state.beams["TS1"].power == "medium"  # state updates immediately
+    beam_channel.broadcast.assert_not_called()  # but no card yet — still pending
+
+    await asyncio.sleep(SETTLE)
+
     beam_channel.broadcast.assert_called_once()
-    assert "TS1 Beam is now medium" in beam_channel.broadcast.call_args[0][0].title
+    notification = beam_channel.broadcast.call_args[0][0]
+    assert notification.title == "TS1 ⬆️ low → medium"
+
+
+@pytest.mark.asyncio
+async def test_handle_update_beam_flapping_sends_nothing(mock_config, mock_channels):
+    """A change that reverts before the debounce window elapses is dropped entirely."""
+    beam_channel, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})  # startup
+    beam_channel.broadcast.reset_mock()
+
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})  # -> medium
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})  # -> low again
+    await asyncio.sleep(SETTLE)
+
+    beam_channel.broadcast.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_update_beam_trip_notes_other_targets(mock_config, mock_channels):
+    """When multiple targets go off in the same debounce window, each card names the others."""
+    beam_channel, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+
+    # Startup — get all three targets to a non-zero state first.
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})
+    await m._handle_update({"pv": mock_config.ts2_beam_current_pv, "value": "20.0"})
+    await m._handle_update({"pv": mock_config.muon_beam_current_pv, "value": "3.0"})
+    beam_channel.broadcast.reset_mock()
+
+    # All three trip off within the same window.
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "0.0"})
+    await m._handle_update({"pv": mock_config.ts2_beam_current_pv, "value": "0.0"})
+    await m._handle_update({"pv": mock_config.muon_beam_current_pv, "value": "0.0"})
+    await asyncio.sleep(SETTLE)
+
+    assert beam_channel.broadcast.call_count == 3
+    for call in beam_channel.broadcast.call_args_list:
+        notification = call.args[0]
+        assert "also went off, likely a facility-wide trip" in notification.text
+
+
+@pytest.mark.asyncio
+async def test_change_aggregator_cancel_all_stops_pending_flush(mock_config, mock_channels):
+    """cancel_all() (called on shutdown) must stop pending timers from firing."""
+    beam_channel, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})  # startup
+    beam_channel.broadcast.reset_mock()
+
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})  # pending
+    m.change_aggregator.cancel_all()
+    await asyncio.sleep(SETTLE)
+
+    beam_channel.broadcast.assert_not_called()
+    assert m.change_aggregator._pending == {}
 
 
 # ---------------------------------------------------------------------------

@@ -25,6 +25,9 @@ def fmt_duration(td: timedelta) -> str:
     return f"{seconds}s"
 
 
+_STATE_ORDER = {"off": 0, "low": 1, "medium": 2, "high": 3}
+
+
 class Severity(Enum):
     """How a notification should be visually emphasised."""
     INFO = "info"
@@ -62,11 +65,40 @@ class Notification:
 # ---------------------------------------------------------------------------
 
 def beam_change(
-    display_name: str, new_state: str, beam_val: float, time_now: datetime
+    display_name: str,
+    prev_state: str,
+    new_state: str,
+    beam_val: float,
+    prev_val: float,
+    high_threshold: float,
+    time_in_prev_state: timedelta,
+    time_now: datetime,
+    trip_note: str = "",
 ) -> Notification:
+    """Build a card for a confirmed (debounced) beam state transition."""
+    going_up = _STATE_ORDER[new_state] > _STATE_ORDER[prev_state]
+    arrow = "⬆️" if going_up else "⬇️"
+    if new_state == "off":
+        severity = Severity.ATTENTION
+    elif going_up:
+        severity = Severity.GOOD
+    else:
+        severity = Severity.WARNING
+
+    text = f"{display_name} beam moved from {prev_state} to {new_state}."
+    if trip_note:
+        text = f"{text}\n\n{trip_note}"
+
     return Notification(
-        title=f"{display_name} Beam is now {new_state}",
-        text=f"Current: {beam_val:.3f} uA",
+        title=f"{display_name} {arrow} {prev_state} → {new_state}",
+        text=text,
+        severity=severity,
+        facts=[
+            ("Current", f"{beam_val:.3f} uA"),
+            ("Previous", f"{prev_val:.3f} uA"),
+            ("% of high threshold", f"{beam_val / high_threshold * 100:.0f}%"),
+            (f"Was {prev_state}", f"for {fmt_duration(time_in_prev_state)}"),
+        ],
         timestamp=time_now,
     )
 
@@ -77,6 +109,7 @@ def startup_status(
     return Notification(
         title=f"Monitor online: {display_name} is {state}",
         text=f"Current: {beam_val:.3f} uA",
+        emoji="🛰️",
         timestamp=time_now,
     )
 

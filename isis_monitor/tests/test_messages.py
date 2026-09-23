@@ -77,18 +77,48 @@ def test_to_plain_text_omits_empty_optional_parts():
 # Builders
 # ---------------------------------------------------------------------------
 
-def test_beam_change_builder():
+def test_beam_change_builder_going_up_is_good():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = beam_change("TS1", "high", 150.0, dt)
-    assert n.title == "TS1 Beam is now high"
-    assert "150.000 uA" in n.text
+    n = beam_change("TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=3, minutes=12), dt)
+    assert n.title == "TS1 ⬆️ low → high"
+    assert n.severity == Severity.GOOD
+    assert n.facts == [
+        ("Current", "150.000 uA"),
+        ("Previous", "20.000 uA"),
+        ("% of high threshold", "107%"),
+        ("Was low", "for 3h 12m"),
+    ]
     assert n.timestamp == dt
+
+
+def test_beam_change_builder_dropping_to_low_is_warning():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = beam_change("TS1", "medium", "low", 20.0, 80.0, 140.0, timedelta(minutes=45), dt)
+    assert n.title == "TS1 ⬇️ medium → low"
+    assert n.severity == Severity.WARNING
+
+
+def test_beam_change_builder_going_to_off_is_attention():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = beam_change("TS1", "low", "off", 0.0, 20.0, 140.0, timedelta(minutes=10), dt)
+    assert n.title == "TS1 ⬇️ low → off"
+    assert n.severity == Severity.ATTENTION
+
+
+def test_beam_change_builder_includes_trip_note():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = beam_change(
+        "TS1", "low", "off", 0.0, 20.0, 140.0, timedelta(minutes=10), dt,
+        trip_note="⚠️ TS2 and Muons also went off, likely a facility-wide trip",
+    )
+    assert "facility-wide trip" in n.text
 
 
 def test_startup_status_builder():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = startup_status("TS1", "high", 150.0, dt)
     assert n.title == "Monitor online: TS1 is high"
+    assert n.emoji == "🛰️"
     assert "150.000 uA" in n.text
 
 
@@ -113,11 +143,9 @@ def test_mcr_news_builder():
     assert n.text == "Beam restored after fault."
 
 
-def test_builders_default_to_info_severity_and_no_emoji():
+def test_run_and_mcr_builders_default_to_info_severity_and_no_emoji():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     for n in (
-        beam_change("TS1", "high", 150.0, dt),
-        startup_status("TS1", "high", 150.0, dt),
         run_started("Run 1", dt),
         run_finishing("Run 1", dt),
         mcr_news("News", dt),

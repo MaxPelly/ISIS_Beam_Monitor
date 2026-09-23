@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 import websockets
 
 from isis_monitor.config import AppConfig
-from isis_monitor.messages import beam_change, run_started, run_finishing
+from isis_monitor.messages import beam_change, run_started, run_finishing, startup_status
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.protocols import TUIProtocol, MonitorSinkProtocol
 
@@ -29,12 +29,136 @@ BEAM_TARGETS: List[BeamTarget] = [
     BeamTarget("Muon", "Muons", "Muon"),
 ]
 
+BEAM_TARGET_BY_KEY: Dict[str, BeamTarget] = {bt.state_key: bt for bt in BEAM_TARGETS}
+
 
 @dataclass
 class BeamState:
     """Per-beam runtime state."""
     current: float = -1.0
     power: str = ""
+    since: Optional[datetime] = None  # when `power` last changed
+
+
+class _PendingChange:
+    """A not-yet-confirmed state change, awaiting the debounce window."""
+    def __init__(
+        self,
+        bt: BeamTarget,
+        prev_state: str,
+        prev_val: float,
+        prev_since: datetime,
+        new_state: str,
+        beam_val: float,
+        high_threshold: float,
+        started_at: datetime,
+    ):
+        self.bt = bt
+        self.prev_state = prev_state
+        self.prev_val = prev_val
+        self.prev_since = prev_since
+        self.new_state = new_state
+        self.beam_val = beam_val
+        self.high_threshold = high_threshold
+        self.started_at = started_at
+        self.task: Optional[asyncio.Task] = None
+
+
+class BeamChangeAggregator:
+    """Debounces raw beam-state transitions before they become notifications.
+
+    PVWS only pushes a value when it changes, so a transition can't be
+    confirmed by waiting for a later reading — instead each change starts a
+    flush timer, and if the state has flapped back to where it started by
+    the time the timer fires, no notification is sent.
+    """
+    def __init__(self, beam_channel: NotificationChannel, debounce_seconds: float = 20.0):
+        self.beam_channel = beam_channel
+        self.debounce_seconds = debounce_seconds
+        self._pending: Dict[str, _PendingChange] = {}
+        self._recent_offs: Dict[str, datetime] = {}
+
+    def queue_change(
+        self,
+        bt: BeamTarget,
+        prev_state: str,
+        prev_val: float,
+        prev_since: datetime,
+        new_state: str,
+        beam_val: float,
+        high_threshold: float,
+        time_now: datetime,
+    ) -> None:
+        existing = self._pending.get(bt.state_key)
+        if existing is not None:
+            # Already pending — just update the latest reading; the original
+            # timer (and the original prev_state/prev_since) still applies.
+            existing.new_state = new_state
+            existing.beam_val = beam_val
+            return
+
+        pending = _PendingChange(
+            bt, prev_state, prev_val, prev_since, new_state, beam_val, high_threshold, time_now,
+        )
+        pending.task = asyncio.create_task(self._flush_after_delay(bt.state_key))
+        self._pending[bt.state_key] = pending
+
+    async def _flush_after_delay(self, state_key: str) -> None:
+        try:
+            await asyncio.sleep(self.debounce_seconds)
+        except asyncio.CancelledError:
+            return
+        await self._flush(state_key)
+
+    async def _flush(self, state_key: str) -> None:
+        pending = self._pending.pop(state_key, None)
+        if pending is None:
+            return
+
+        if pending.new_state == pending.prev_state:
+            logger.debug(f"{pending.bt.display_name}: flapped back to {pending.prev_state}, dropping.")
+            return
+
+        trip_note = ""
+        if pending.new_state == "off":
+            also_off = [
+                other.bt.display_name
+                for key, other in self._pending.items()
+                if key != state_key
+                and other.new_state == "off"
+                and abs((other.started_at - pending.started_at).total_seconds()) <= self.debounce_seconds
+            ]
+            also_off += [
+                BEAM_TARGET_BY_KEY[key].display_name
+                for key, off_time in self._recent_offs.items()
+                if key != state_key
+                and abs((off_time - pending.started_at).total_seconds()) <= self.debounce_seconds
+            ]
+            if also_off:
+                joined = " and ".join(also_off) if len(also_off) <= 2 else ", ".join(also_off[:-1]) + f" and {also_off[-1]}"
+                trip_note = f"⚠️ {joined} also went off, likely a facility-wide trip"
+            self._recent_offs[state_key] = pending.started_at
+
+        notification = beam_change(
+            pending.bt.display_name,
+            pending.prev_state,
+            pending.new_state,
+            pending.beam_val,
+            pending.prev_val,
+            pending.high_threshold,
+            pending.started_at - pending.prev_since,
+            pending.started_at,
+            trip_note=trip_note,
+        )
+        logger.info(f"State Change: {notification.to_plain_text()}")
+        await self.beam_channel.broadcast(notification)
+
+    def cancel_all(self) -> None:
+        """Cancel any outstanding flush timers, e.g. on shutdown."""
+        for pending in self._pending.values():
+            if pending.task is not None:
+                pending.task.cancel()
+        self._pending.clear()
 
 
 class MonitorState:
@@ -57,6 +181,7 @@ class BeamMonitor:
         counts_target: float,
         tui: Optional[TUIProtocol] = None,
         sink: Optional[MonitorSinkProtocol] = None,
+        debounce_seconds: float = 20.0,
     ):
         self.config = config
         self.data_url = config.isis_websocket_url
@@ -68,6 +193,7 @@ class BeamMonitor:
         self.tui = tui
         self.sink = sink
         self.state = MonitorState()
+        self.change_aggregator = BeamChangeAggregator(beam_channel, debounce_seconds)
         self._force_reconnect = asyncio.Event()
         self._current_ws = None
 
@@ -111,15 +237,27 @@ class BeamMonitor:
         """Handle a beam-current value update for a single target."""
         beam_val = self._safe_float(raw_val)
         new_state = self._get_power_label(beam_val, bt.state_key)
-        prev_state = self.state.beams[bt.state_key].power
+        beam_state = self.state.beams[bt.state_key]
+        prev_state = beam_state.power
+        prev_val = beam_state.current
+        prev_since = beam_state.since
 
         if new_state != prev_state:
-            notification = beam_change(bt.display_name, new_state, beam_val, time_now)
-            logger.info(f"State Change: {notification.to_plain_text()}")
-            await self.beam_channel.broadcast(notification)
+            if prev_state == "":
+                # First reading for this target — always send immediately, never debounced.
+                notification = startup_status(bt.display_name, new_state, beam_val, time_now)
+                logger.info(f"Startup: {notification.to_plain_text()}")
+                await self.beam_channel.broadcast(notification)
+            else:
+                high_threshold = self.beam_boundaries[bt.state_key][2]
+                self.change_aggregator.queue_change(
+                    bt, prev_state, prev_val, prev_since or time_now,
+                    new_state, beam_val, high_threshold, time_now,
+                )
+            beam_state.since = time_now
 
-        self.state.beams[bt.state_key].current = beam_val
-        self.state.beams[bt.state_key].power = new_state
+        beam_state.current = beam_val
+        beam_state.power = new_state
         if self.sink:
             self.sink.update_beam_state(bt.channel_label, beam_val, new_state)
 
@@ -194,6 +332,12 @@ class BeamMonitor:
         return True
 
     async def run(self, stop_event: Optional[asyncio.Event] = None):
+        try:
+            await self._run_loop(stop_event)
+        finally:
+            self.change_aggregator.cancel_all()
+
+    async def _run_loop(self, stop_event: Optional[asyncio.Event] = None):
         subscribe_msg = json.dumps({
             "type": "subscribe",
             "pvs": list(self.pv_to_beam.keys()) + [self.counts_pv, self.run_name_pv],
