@@ -49,6 +49,20 @@ The application requires an INI configuration file to set up the Teams webhook U
 # sample_interval = 60
 ```
 
+### Optional `[NOTIFICATIONS]` section
+
+```ini
+[NOTIFICATIONS]
+# Adds optional personality lines to notification cards (default = false).
+# Emoji and severity colours always show, regardless of this setting.
+# fun_mode = false
+# Timezone used for the timestamps shown on notification cards (default = Europe/London).
+# timezone = Europe/London
+# How long a beam state change must persist, in seconds, before a card
+# is sent — filters out brief flickers (default = 20).
+# debounce_seconds = 20
+```
+
 ## Usage
 
 Run the daemon (long-running monitor, notifications, persistence, IPC server):

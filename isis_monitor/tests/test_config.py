@@ -187,3 +187,45 @@ retention_days = 0
 """)
     with pytest.raises(ConfigError, match="retention_days"):
         load_config(config_file)
+
+
+def test_load_config_notifications_defaults(tmp_path):
+    """[NOTIFICATIONS] is optional — defaults apply when the section is absent."""
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[DATA]
+mcr_news_url = http://test.com/news
+isis_websocket_url = wss://test.com/ws
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+""")
+    config = load_config(config_file)
+    assert config.fun_mode is False
+    assert config.notifications_timezone == "Europe/London"
+    assert config.debounce_seconds == 20.0
+
+
+def test_load_config_notifications_custom_values(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[DATA]
+mcr_news_url = http://test.com/news
+isis_websocket_url = wss://test.com/ws
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+
+[NOTIFICATIONS]
+fun_mode = true
+timezone = America/New_York
+debounce_seconds = 5
+""")
+    config = load_config(config_file)
+    assert config.fun_mode is True
+    assert config.notifications_timezone == "America/New_York"
+    assert config.debounce_seconds == 5.0

@@ -63,6 +63,11 @@ class AppConfig:
     log_max_bytes: int = 5_000_000
     log_backup_count: int = 3
 
+    # NOTIFICATIONS
+    fun_mode: bool = False
+    notifications_timezone: str = "Europe/London"
+    debounce_seconds: float = 20.0
+
 
 def load_config(config_path: Path) -> AppConfig:
     if not config_path.exists():
@@ -127,6 +132,11 @@ def load_config(config_path: Path) -> AppConfig:
     log_max_bytes = config.getint("LOGGING", "log_max_bytes", fallback=5_000_000)
     log_backup_count = config.getint("LOGGING", "log_backup_count", fallback=3)
 
+    # NOTIFICATIONS (optional section)
+    fun_mode = config.getboolean("NOTIFICATIONS", "fun_mode", fallback=False)
+    notifications_timezone = config.get("NOTIFICATIONS", "timezone", fallback="Europe/London")
+    debounce_seconds = config.getfloat("NOTIFICATIONS", "debounce_seconds", fallback=20.0)
+
     # TUI (fully optional section)
     try:
         history_maxlen = config.getint("TUI", "history_maxlen", fallback=60)
@@ -187,4 +197,7 @@ def load_config(config_path: Path) -> AppConfig:
         log_level=log_level,
         log_max_bytes=log_max_bytes,
         log_backup_count=log_backup_count,
+        fun_mode=fun_mode,
+        notifications_timezone=notifications_timezone,
+        debounce_seconds=debounce_seconds,
     )

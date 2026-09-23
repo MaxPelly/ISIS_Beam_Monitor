@@ -1,6 +1,8 @@
 import asyncio
 import pytest
 import base64
+import random
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 from isis_monitor.config import AppConfig
 from isis_monitor.notifiers import NotificationChannel
@@ -33,11 +35,11 @@ def mock_channels():
     return beam_channel, exp_channel
 
 
-def make_monitor(mock_config, mock_channels, counts_target=100):
+def make_monitor(mock_config, mock_channels, counts_target=100, rng=None):
     beam_channel, exp_channel = mock_channels
     return BeamMonitor(
         mock_config, beam_channel, exp_channel, counts_target=counts_target,
-        debounce_seconds=DEBOUNCE_SECONDS,
+        debounce_seconds=DEBOUNCE_SECONDS, rng=rng,
     )
 
 
@@ -182,6 +184,36 @@ async def test_change_aggregator_cancel_all_stops_pending_flush(mock_config, moc
 
     beam_channel.broadcast.assert_not_called()
     assert m.change_aggregator._pending == {}
+
+
+@pytest.mark.asyncio
+async def test_handle_update_beam_fun_mode_off_no_flavour(mock_config, mock_channels):
+    """fun_mode defaults to False — no flavour line is added, even with an rng available."""
+    beam_channel, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels, rng=random.Random(1))
+
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})  # startup
+    assert beam_channel.broadcast.call_args[0][0].flavour == ""
+    beam_channel.broadcast.reset_mock()
+
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})
+    await asyncio.sleep(SETTLE)
+    assert beam_channel.broadcast.call_args[0][0].flavour == ""
+
+
+@pytest.mark.asyncio
+async def test_handle_update_beam_fun_mode_on_adds_flavour(mock_config, mock_channels):
+    fun_config = replace(mock_config, fun_mode=True)
+    beam_channel, exp_channel = mock_channels
+    m = make_monitor(fun_config, mock_channels, rng=random.Random(1))
+
+    await m._handle_update({"pv": fun_config.ts1_beam_current_pv, "value": "10.0"})  # startup
+    assert beam_channel.broadcast.call_args[0][0].flavour != ""
+    beam_channel.broadcast.reset_mock()
+
+    await m._handle_update({"pv": fun_config.ts1_beam_current_pv, "value": "60.0"})
+    await asyncio.sleep(SETTLE)
+    assert beam_channel.broadcast.call_args[0][0].flavour != ""
 
 
 # ---------------------------------------------------------------------------

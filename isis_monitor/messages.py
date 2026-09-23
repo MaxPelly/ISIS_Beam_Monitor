@@ -1,16 +1,26 @@
 """Shared formatting helpers and structured notification builders."""
+import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from isis_monitor import flavour
+
 UK_TZ = ZoneInfo("Europe/London")
+_display_tz = UK_TZ
+
+
+def set_timezone(tz_name: str) -> None:
+    """Set the timezone used by fmt_time(), e.g. from `[NOTIFICATIONS] timezone`."""
+    global _display_tz
+    _display_tz = ZoneInfo(tz_name)
 
 
 def fmt_time(dt: datetime) -> str:
-    """Format a datetime in local UK time, e.g. 'Wed 23 Sep 14:05'."""
-    return dt.astimezone(UK_TZ).strftime("%a %d %b %H:%M")
+    """Format a datetime in the configured local timezone, e.g. 'Wed 23 Sep 14:05'."""
+    return dt.astimezone(_display_tz).strftime("%a %d %b %H:%M")
 
 
 def fmt_duration(td: timedelta) -> str:
@@ -26,6 +36,14 @@ def fmt_duration(td: timedelta) -> str:
 
 
 _STATE_ORDER = {"off": 0, "low": 1, "medium": 2, "high": 3}
+
+# Always-on emoji — these carry information, so they show regardless of fun_mode.
+STATE_EMOJI = {"high": "🟢", "medium": "🟡", "low": "🟠", "off": "🔴"}
+RESTORED_EMOJI = "🎉"  # beam recovering from an outage of an hour or more
+NEW_RUN_EMOJI = "🚀"
+FINISHING_EMOJI = "🏁"
+MCR_NEWS_EMOJI = "📰"
+OUTAGE_RESTORE_THRESHOLD = timedelta(hours=1)
 
 
 class Severity(Enum):
@@ -74,6 +92,7 @@ def beam_change(
     time_in_prev_state: timedelta,
     time_now: datetime,
     trip_note: str = "",
+    rng: Optional[random.Random] = None,
 ) -> Notification:
     """Build a card for a confirmed (debounced) beam state transition."""
     going_up = _STATE_ORDER[new_state] > _STATE_ORDER[prev_state]
@@ -85,6 +104,13 @@ def beam_change(
     else:
         severity = Severity.WARNING
 
+    restored = (
+        prev_state == "off" and new_state != "off"
+        and time_in_prev_state >= OUTAGE_RESTORE_THRESHOLD
+    )
+    emoji = RESTORED_EMOJI if restored else STATE_EMOJI[new_state]
+    transition = "restored" if restored else new_state
+
     text = f"{display_name} beam moved from {prev_state} to {new_state}."
     if trip_note:
         text = f"{text}\n\n{trip_note}"
@@ -93,46 +119,65 @@ def beam_change(
         title=f"{display_name} {arrow} {prev_state} → {new_state}",
         text=text,
         severity=severity,
+        emoji=emoji,
         facts=[
             ("Current", f"{beam_val:.3f} uA"),
             ("Previous", f"{prev_val:.3f} uA"),
             ("% of high threshold", f"{beam_val / high_threshold * 100:.0f}%"),
             (f"Was {prev_state}", f"for {fmt_duration(time_in_prev_state)}"),
         ],
+        flavour=flavour.pick((display_name, transition), rng) if rng else "",
         timestamp=time_now,
     )
 
 
 def startup_status(
-    display_name: str, state: str, beam_val: float, time_now: datetime
+    display_name: str,
+    state: str,
+    beam_val: float,
+    time_now: datetime,
+    rng: Optional[random.Random] = None,
 ) -> Notification:
     return Notification(
         title=f"Monitor online: {display_name} is {state}",
         text=f"Current: {beam_val:.3f} uA",
         emoji="🛰️",
+        flavour=flavour.pick((display_name, "startup"), rng) if rng else "",
         timestamp=time_now,
     )
 
 
-def run_started(run_name: str, time_now: datetime) -> Notification:
+def run_started(
+    run_name: str, time_now: datetime, rng: Optional[random.Random] = None
+) -> Notification:
     return Notification(
         title="New run started",
         text=run_name,
+        emoji=NEW_RUN_EMOJI,
+        flavour=flavour.pick(("*", "new_run"), rng) if rng else "",
         timestamp=time_now,
     )
 
 
-def run_finishing(run_name: str, time_now: datetime) -> Notification:
+def run_finishing(
+    run_name: str, time_now: datetime, rng: Optional[random.Random] = None
+) -> Notification:
     return Notification(
         title="Run about to finish",
         text=run_name,
+        emoji=FINISHING_EMOJI,
+        flavour=flavour.pick(("*", "finishing"), rng) if rng else "",
         timestamp=time_now,
     )
 
 
-def mcr_news(news_text: str, time_now: datetime) -> Notification:
+def mcr_news(
+    news_text: str, time_now: datetime, rng: Optional[random.Random] = None
+) -> Notification:
     return Notification(
         title="MCR News",
         text=news_text,
+        emoji=MCR_NEWS_EMOJI,
+        flavour=flavour.pick(("*", "mcr_news"), rng) if rng else "",
         timestamp=time_now,
     )

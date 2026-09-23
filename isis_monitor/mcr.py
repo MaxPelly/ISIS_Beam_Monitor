@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import random
 import re
 from datetime import datetime, timezone
 import aiohttp
@@ -25,6 +26,7 @@ class MCRNewsMonitor:
         notify_current: bool = False,
         tui: Optional[TUIProtocol] = None,
         sink: Optional[MonitorSinkProtocol] = None,
+        rng: Optional[random.Random] = None,
     ):
         self.config = config
         self.url = config.mcr_news_url
@@ -32,6 +34,7 @@ class MCRNewsMonitor:
         self.notify_current = notify_current
         self.tui = tui
         self.sink = sink
+        self._rng = rng or random.Random()
         self.old_news: Optional[str] = None
         self._force_reconnect = asyncio.Event()
 
@@ -124,7 +127,8 @@ class MCRNewsMonitor:
                     if self.sink:
                         self.sink.update_mcr_news(new_news)
                         self.sink.update_health("mcr", "connected")
-                    notification = mcr_news(new_news, datetime.now(timezone.utc))
+                    rng = self._rng if self.config.fun_mode else None
+                    notification = mcr_news(new_news, datetime.now(timezone.utc), rng=rng)
                     await self.channel.broadcast(notification)
                 elif new_news:
                     consecutive_failures = 0

@@ -60,3 +60,13 @@ experiment_teams_url =
 # ts1_boundaries = 0.0, 50.0, 140.0
 # ts2_boundaries = 0.0, 10.0, 30.0
 # muon_boundaries = 0.0, 2.0, 5.0
+
+[NOTIFICATIONS]
+# Adds optional personality lines to notification cards (off by default —
+# emoji and severity colours are always shown regardless of this setting).
+# fun_mode = false
+# Timezone used for the timestamps shown on notification cards.
+# timezone = Europe/London
+# How long a beam state change must persist before a card is sent, in
+# seconds. Filters out brief flickers rather than reporting every one.
+# debounce_seconds = 20

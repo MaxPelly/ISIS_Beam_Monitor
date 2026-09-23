@@ -3,6 +3,7 @@ import json
 import base64
 import logging
 import math
+import random
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -72,9 +73,17 @@ class BeamChangeAggregator:
     flush timer, and if the state has flapped back to where it started by
     the time the timer fires, no notification is sent.
     """
-    def __init__(self, beam_channel: NotificationChannel, debounce_seconds: float = 20.0):
+    def __init__(
+        self,
+        beam_channel: NotificationChannel,
+        debounce_seconds: float = 20.0,
+        fun_mode: bool = False,
+        rng: Optional[random.Random] = None,
+    ):
         self.beam_channel = beam_channel
         self.debounce_seconds = debounce_seconds
+        self.fun_mode = fun_mode
+        self.rng = rng or random.Random()
         self._pending: Dict[str, _PendingChange] = {}
         self._recent_offs: Dict[str, datetime] = {}
 
@@ -149,6 +158,7 @@ class BeamChangeAggregator:
             pending.started_at - pending.prev_since,
             pending.started_at,
             trip_note=trip_note,
+            rng=self.rng if self.fun_mode else None,
         )
         logger.info(f"State Change: {notification.to_plain_text()}")
         await self.beam_channel.broadcast(notification)
@@ -182,6 +192,7 @@ class BeamMonitor:
         tui: Optional[TUIProtocol] = None,
         sink: Optional[MonitorSinkProtocol] = None,
         debounce_seconds: float = 20.0,
+        rng: Optional[random.Random] = None,
     ):
         self.config = config
         self.data_url = config.isis_websocket_url
@@ -193,7 +204,10 @@ class BeamMonitor:
         self.tui = tui
         self.sink = sink
         self.state = MonitorState()
-        self.change_aggregator = BeamChangeAggregator(beam_channel, debounce_seconds)
+        self._rng = rng or random.Random()
+        self.change_aggregator = BeamChangeAggregator(
+            beam_channel, debounce_seconds, fun_mode=config.fun_mode, rng=self._rng,
+        )
         self._force_reconnect = asyncio.Event()
         self._current_ws = None
 
@@ -245,7 +259,8 @@ class BeamMonitor:
         if new_state != prev_state:
             if prev_state == "":
                 # First reading for this target — always send immediately, never debounced.
-                notification = startup_status(bt.display_name, new_state, beam_val, time_now)
+                rng = self._rng if self.config.fun_mode else None
+                notification = startup_status(bt.display_name, new_state, beam_val, time_now, rng=rng)
                 logger.info(f"Startup: {notification.to_plain_text()}")
                 await self.beam_channel.broadcast(notification)
             else:
@@ -284,7 +299,9 @@ class BeamMonitor:
                     return
 
                 if self.state.run_name and self.state.run_name != name:
-                    notification = run_started(name, time_now)
+                    notification = run_started(
+                        name, time_now, rng=self._rng if self.config.fun_mode else None,
+                    )
                     logger.info(f"New Run: {notification.to_plain_text()}")
                     await self.experiment_channel.broadcast(notification)
                     self.state.current_counts = 0
@@ -312,7 +329,9 @@ class BeamMonitor:
                     self.state.end_notified = False
 
                 if counts > self.counts_target and not self.state.end_notified:
-                    notification = run_finishing(self.state.run_name, time_now)
+                    notification = run_finishing(
+                        self.state.run_name, time_now, rng=self._rng if self.config.fun_mode else None,
+                    )
                     logger.info(f"Target Reached: {notification.to_plain_text()}")
                     await self.experiment_channel.broadcast(notification)
                     self.state.end_notified = True

@@ -132,6 +132,47 @@ async def test_mcr_run_broadcasts_on_news_change(mock_config, mock_channel):
     mock_channel.broadcast.assert_called_once()
     notification = mock_channel.broadcast.call_args[0][0]
     assert notification.text == "News B"
+    assert notification.emoji == "📰"
+    assert notification.flavour == ""  # fun_mode defaults to False
+
+
+@pytest.mark.asyncio
+async def test_mcr_run_fun_mode_adds_flavour(mock_config):
+    """When fun_mode is on, the broadcast notification carries a flavour line."""
+    import random
+    from dataclasses import replace
+
+    fun_config = replace(mock_config, fun_mode=True)
+    channel = NotificationChannel("Test")
+    channel.broadcast = AsyncMock()
+    monitor = MCRNewsMonitor(fun_config, channel, notify_current=False, rng=random.Random(1))
+
+    news_items = ["News A", "News B"]
+    call_index = 0
+    stop_event = asyncio.Event()
+
+    async def fake_get_news(_session):
+        nonlocal call_index
+        news = news_items[call_index] if call_index < len(news_items) else "News B"
+        call_index += 1
+        if call_index >= len(news_items):
+            stop_event.set()
+        return news
+
+    with patch.object(monitor, "get_news", side_effect=fake_get_news), \
+         patch("isis_monitor.mcr.asyncio.sleep", new_callable=AsyncMock), \
+         patch("isis_monitor.mcr.aiohttp.TCPConnector"), \
+         patch("isis_monitor.mcr.aiohttp.ClientSession") as mock_cls:
+
+        mock_session = AsyncMock()
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        await monitor.run(stop_event)
+
+    channel.broadcast.assert_called_once()
+    notification = channel.broadcast.call_args[0][0]
+    assert notification.flavour != ""
 
 
 @pytest.mark.asyncio

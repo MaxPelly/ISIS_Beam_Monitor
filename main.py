@@ -20,6 +20,7 @@ from isis_monitor.config import ConfigError, load_config
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.ipc import IPCClient, IPCServer
 from isis_monitor.mcr import MCRNewsMonitor
+from isis_monitor.messages import set_timezone
 from isis_monitor.notifiers import DummyNotifier, NotificationChannel, TeamsNotifier
 from isis_monitor.storage import SQLiteStateStore
 from isis_monitor.tui import RichTUI
@@ -228,6 +229,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
         exp_channel,
         args.notify_counts,
         sink=state,
+        debounce_seconds=config.debounce_seconds,
     )
     mcr_monitor = MCRNewsMonitor(
         config,
@@ -482,6 +484,8 @@ def main():
     except ConfigError as e:
         print(f"Configuration error: {e}")
         raise SystemExit(1)
+
+    set_timezone(config.notifications_timezone)
 
     configure_logging(
         config.log_file,

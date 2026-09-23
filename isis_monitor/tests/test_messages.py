@@ -1,3 +1,4 @@
+import random
 from datetime import datetime, timedelta, timezone
 
 from isis_monitor.messages import (
@@ -9,6 +10,7 @@ from isis_monitor.messages import (
     mcr_news,
     run_finishing,
     run_started,
+    set_timezone,
     startup_status,
 )
 
@@ -21,6 +23,15 @@ def test_fmt_time_converts_utc_to_uk_local():
     # Summer, so UK is on BST (UTC+1): 13:05 UTC -> 14:05 local.
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     assert fmt_time(dt) == "Wed 23 Sep 14:05"
+
+
+def test_set_timezone_changes_fmt_time():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    try:
+        set_timezone("America/New_York")
+        assert fmt_time(dt) == "Wed 23 Sep 09:05"
+    finally:
+        set_timezone("Europe/London")  # restore the default for other tests
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +93,7 @@ def test_beam_change_builder_going_up_is_good():
     n = beam_change("TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=3, minutes=12), dt)
     assert n.title == "TS1 ⬆️ low → high"
     assert n.severity == Severity.GOOD
+    assert n.emoji == "🟢"
     assert n.facts == [
         ("Current", "150.000 uA"),
         ("Previous", "20.000 uA"),
@@ -96,6 +108,7 @@ def test_beam_change_builder_dropping_to_low_is_warning():
     n = beam_change("TS1", "medium", "low", 20.0, 80.0, 140.0, timedelta(minutes=45), dt)
     assert n.title == "TS1 ⬇️ medium → low"
     assert n.severity == Severity.WARNING
+    assert n.emoji == "🟠"
 
 
 def test_beam_change_builder_going_to_off_is_attention():
@@ -103,6 +116,46 @@ def test_beam_change_builder_going_to_off_is_attention():
     n = beam_change("TS1", "low", "off", 0.0, 20.0, 140.0, timedelta(minutes=10), dt)
     assert n.title == "TS1 ⬇️ low → off"
     assert n.severity == Severity.ATTENTION
+    assert n.emoji == "🔴"
+
+
+def test_beam_change_builder_state_emoji_for_medium():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = beam_change("TS1", "low", "medium", 80.0, 20.0, 140.0, timedelta(minutes=10), dt)
+    assert n.emoji == "🟡"
+
+
+def test_beam_change_builder_short_outage_keeps_state_emoji():
+    """A quick blip (< 1h off) is not a 'restored' event — no party emoji."""
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = beam_change("TS1", "off", "high", 150.0, 0.0, 140.0, timedelta(minutes=30), dt)
+    assert n.emoji == "🟢"
+
+
+def test_beam_change_builder_long_outage_is_restored():
+    """Recovering from an hour-plus outage gets the celebratory emoji instead."""
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = beam_change("TS1", "off", "high", 150.0, 0.0, 140.0, timedelta(hours=1, minutes=5), dt)
+    assert n.emoji == "🎉"
+
+
+def test_beam_change_builder_no_rng_means_no_flavour():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = beam_change("TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), dt)
+    assert n.flavour == ""
+
+
+def test_beam_change_builder_with_rng_picks_deterministic_flavour():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = beam_change(
+        "TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), dt, rng=random.Random(1),
+    )
+    assert n.flavour != ""
+    # Same seed picks the same line every time.
+    n2 = beam_change(
+        "TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), dt, rng=random.Random(1),
+    )
+    assert n.flavour == n2.flavour
 
 
 def test_beam_change_builder_includes_trip_note():
@@ -120,6 +173,13 @@ def test_startup_status_builder():
     assert n.title == "Monitor online: TS1 is high"
     assert n.emoji == "🛰️"
     assert "150.000 uA" in n.text
+    assert n.flavour == ""
+
+
+def test_startup_status_builder_picks_flavour_when_rng_given():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = startup_status("TS1", "high", 150.0, dt, rng=random.Random(1))
+    assert n.flavour != ""
 
 
 def test_run_started_builder():
@@ -127,6 +187,8 @@ def test_run_started_builder():
     n = run_started("Run 12345", dt)
     assert n.title == "New run started"
     assert n.text == "Run 12345"
+    assert n.emoji == "🚀"
+    assert n.flavour == ""
 
 
 def test_run_finishing_builder():
@@ -134,6 +196,8 @@ def test_run_finishing_builder():
     n = run_finishing("Run 12345", dt)
     assert n.title == "Run about to finish"
     assert n.text == "Run 12345"
+    assert n.emoji == "🏁"
+    assert n.flavour == ""
 
 
 def test_mcr_news_builder():
@@ -141,9 +205,11 @@ def test_mcr_news_builder():
     n = mcr_news("Beam restored after fault.", dt)
     assert n.title == "MCR News"
     assert n.text == "Beam restored after fault."
+    assert n.emoji == "📰"
+    assert n.flavour == ""
 
 
-def test_run_and_mcr_builders_default_to_info_severity_and_no_emoji():
+def test_run_and_mcr_builders_default_to_info_severity():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     for n in (
         run_started("Run 1", dt),
@@ -151,4 +217,14 @@ def test_run_and_mcr_builders_default_to_info_severity_and_no_emoji():
         mcr_news("News", dt),
     ):
         assert n.severity == Severity.INFO
-        assert n.emoji == ""
+
+
+def test_run_and_mcr_builders_pick_flavour_when_rng_given():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    rng = random.Random(1)
+    for n in (
+        run_started("Run 1", dt, rng=rng),
+        run_finishing("Run 1", dt, rng=rng),
+        mcr_news("News", dt, rng=rng),
+    ):
+        assert n.flavour != ""
