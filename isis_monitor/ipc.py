@@ -139,36 +139,80 @@ class IPCServer:
 
 
 class IPCClient:
+    """A single socket carries both request/response replies and, once
+    subscribed, pushed events — both `request()` and `iter_events()` used to
+    call `reader.readline()` directly, so using both concurrently (e.g. a
+    command sent while the TUI's event-stream loop is running) raised
+    "readline() called while another coroutine is already waiting for
+    incoming data". A single background task now owns the reader and
+    demultiplexes each line into either the pending-response queue or the
+    event queue, so callers never touch the reader themselves.
+    """
     def __init__(self, socket_path: Path):
         self.socket_path = Path(socket_path)
         self.reader: Optional[asyncio.StreamReader] = None
         self.writer: Optional[asyncio.StreamWriter] = None
+        self._responses: "Optional[asyncio.Queue]" = None
+        self._events: "Optional[asyncio.Queue]" = None
+        self._read_task: Optional[asyncio.Task] = None
 
     async def connect(self) -> None:
         self.reader, self.writer = await asyncio.open_unix_connection(str(self.socket_path), limit=1024*1024*10)
+        self._responses = asyncio.Queue()
+        self._events = asyncio.Queue()
+        self._read_task = asyncio.create_task(self._read_loop())
+
+    async def _read_loop(self) -> None:
+        """The sole reader of `self.reader`; routes each line by content."""
+        try:
+            while True:
+                line = await self.reader.readline()
+                if not line:
+                    await self._responses.put(None)
+                    await self._events.put(None)
+                    return
+                msg = json.loads(line.decode())
+                if "event" in msg:
+                    await self._events.put(msg)
+                else:
+                    await self._responses.put(msg)
+        except Exception as exc:
+            await self._responses.put(exc)
+            await self._events.put(exc)
 
     async def close(self) -> None:
+        if self._read_task is not None:
+            self._read_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._read_task
+            self._read_task = None
         if self.writer:
             self.writer.close()
             await self.writer.wait_closed()
         self.reader = None
         self.writer = None
+        self._responses = None
+        self._events = None
 
     async def request(self, payload: dict) -> dict:
-        if not self.writer or not self.reader:
+        if not self.writer or not self.reader or self._responses is None:
             raise RuntimeError("IPC client is not connected")
         self.writer.write((json.dumps(payload) + "\n").encode())
         await self.writer.drain()
-        line = await self.reader.readline()
-        if not line:
+        msg = await self._responses.get()
+        if msg is None:
             raise ConnectionError("Daemon closed IPC connection")
-        return json.loads(line.decode())
+        if isinstance(msg, Exception):
+            raise msg
+        return msg
 
     async def iter_events(self):
-        if not self.reader:
+        if not self.reader or self._events is None:
             raise RuntimeError("IPC client is not connected")
         while True:
-            line = await self.reader.readline()
-            if not line:
+            msg = await self._events.get()
+            if msg is None:
                 raise ConnectionError("Daemon closed IPC stream")
-            yield json.loads(line.decode())
+            if isinstance(msg, Exception):
+                raise msg
+            yield msg

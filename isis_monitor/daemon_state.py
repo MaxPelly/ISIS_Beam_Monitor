@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 from threading import RLock
 from typing import Deque, Dict, List, Optional, Tuple
 
+from isis_monitor.beam import CHANNEL_LABELS
 from isis_monitor.protocols import MonitorSinkProtocol
 
 
@@ -25,9 +26,7 @@ class DaemonState(MonitorSinkProtocol):
         self._lock = RLock()
         self.history_maxlen = history_maxlen
         self.beam_states: Dict[str, Dict[str, object]] = {
-            "TS1": {"current": 0.0, "power": "unknown"},
-            "TS2": {"current": 0.0, "power": "unknown"},
-            "Muons": {"current": 0.0, "power": "unknown"},
+            beam: {"current": 0.0, "power": "unknown"} for beam in CHANNEL_LABELS
         }
         self.history: Dict[str, Deque[Tuple[datetime, float, str]]] = {
             beam: deque(maxlen=history_maxlen) for beam in self.beam_states
@@ -220,7 +219,7 @@ class DaemonState(MonitorSinkProtocol):
             return
         with self._lock:
             beam_states = snap.get("beam_states", {})
-            for beam in ("TS1", "TS2", "Muons"):
+            for beam in CHANNEL_LABELS:
                 if beam in beam_states:
                     self.beam_states[beam] = {
                         "current": float(beam_states[beam].get("current", 0.0)),

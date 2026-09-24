@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -55,10 +56,52 @@ async def test_ipc_subscribe_updates(tmp_path):
 
     state.update_beam_state("TS1", 12.3, "low")
 
-    msg = await asyncio.wait_for(client.reader.readline(), timeout=1.0)
-    payload = __import__("json").loads(msg.decode())
+    events = client.iter_events()
+    payload = await asyncio.wait_for(events.__anext__(), timeout=1.0)
     assert payload["event"] == "beam"
     assert payload["payload"]["beam"] == "TS1"
+
+    await client.close()
+    await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_ipc_request_and_events_do_not_race(tmp_path):
+    """A command sent while the event stream is being consumed must not
+    raise — request() and iter_events() no longer share a bare readline()."""
+    socket_path = tmp_path / "daemon.sock"
+    state = DaemonState()
+
+    async def command_handler(name: str):
+        return {"handled": name}
+
+    server = IPCServer(socket_path, state, command_handler)
+    await server.start()
+
+    client = IPCClient(socket_path)
+    await client.connect()
+    await client.request({"method": "subscribe_updates"})
+
+    received_events = []
+
+    async def consume_events():
+        async for ev in client.iter_events():
+            received_events.append(ev)
+
+    consumer_task = asyncio.create_task(consume_events())
+    await asyncio.sleep(0.05)  # let the consumer start awaiting the queue
+
+    state.update_beam_state("TS1", 1.0, "low")
+    cmd = await client.request({"method": "command", "name": "force_reconnect_all"})
+    assert cmd["ok"] is True
+    assert cmd["result"] == {"handled": "force_reconnect_all"}
+
+    await asyncio.sleep(0.05)
+    consumer_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await consumer_task
+
+    assert any(ev["event"] == "beam" for ev in received_events)
 
     await client.close()
     await server.stop()

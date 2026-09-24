@@ -62,6 +62,11 @@ BEAM_TARGETS: List[BeamTarget] = [
 
 BEAM_TARGET_BY_KEY: Dict[str, BeamTarget] = {bt.state_key: bt for bt in BEAM_TARGETS}
 
+# The channel labels ("TS1", "TS2", "Muons") that beam.py passes to the TUI
+# and sink — the single source of truth for the three target names used
+# elsewhere (daemon_state.py, tui.py, main.py) instead of re-spelling them.
+CHANNEL_LABELS: Tuple[str, ...] = tuple(bt.channel_label for bt in BEAM_TARGETS)
+
 
 @dataclass
 class BeamState:
@@ -496,13 +501,19 @@ class BeamMonitor:
             await self._check_frame_progress(datetime.now(timezone.utc))
         logger.warning("Frame check loop quit")
 
+    async def _close_ws_quietly(self, ws) -> None:
+        try:
+            await ws.close()
+        except Exception as e:
+            logger.warning(f"Error closing WebSocket during reconnect: {e}")
+
     def request_reconnect(self) -> bool:
         if self._force_reconnect.is_set():
             return False
         self._force_reconnect.set()
         ws = self._current_ws
         if ws is not None:
-            asyncio.create_task(ws.close())
+            asyncio.create_task(self._close_ws_quietly(ws))
         return True
 
     async def run(self, stop_event: Optional[asyncio.Event] = None):

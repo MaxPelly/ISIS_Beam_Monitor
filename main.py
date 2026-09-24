@@ -16,7 +16,7 @@ import sys
 import tty
 import termios
 
-from isis_monitor.beam import BeamMonitor
+from isis_monitor.beam import BeamMonitor, CHANNEL_LABELS
 from isis_monitor.config import ConfigError, load_config
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.ipc import IPCClient, IPCServer
@@ -284,7 +284,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
 
 def _apply_snapshot_to_tui(tui: RichTUI, snapshot: dict) -> None:
     beam_states = snapshot.get("beam_states", {})
-    for beam in ("TS1", "TS2", "Muons"):
+    for beam in CHANNEL_LABELS:
         state = beam_states.get(beam)
         if state:
             tui.update_beam_state(beam, float(state.get("current", 0.0)), str(state.get("power", "unknown")))

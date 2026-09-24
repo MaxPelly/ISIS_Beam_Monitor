@@ -11,6 +11,8 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.table import Table
 
+from isis_monitor.beam import CHANNEL_LABELS
+
 
 _STATE_COLOURS = {
     "off": "red",
@@ -100,9 +102,7 @@ class RichTUI:
         self.logs_maxlen = logs_maxlen
 
         self.beam_states: dict[str, dict] = {
-            "TS1":   {"current": 0.0, "power": "unknown"},
-            "TS2":   {"current": 0.0, "power": "unknown"},
-            "Muons": {"current": 0.0, "power": "unknown"},
+            beam: {"current": 0.0, "power": "unknown"} for beam in CHANNEL_LABELS
         }
         # Per-target rolling history: deque of (datetime, current_μA, power_state)
         self._history: dict[str, Deque[Tuple[datetime, float, str]]] = {
