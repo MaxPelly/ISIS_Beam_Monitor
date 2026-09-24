@@ -6,8 +6,7 @@ isis_websocket_url = wss://ndaextweb4.nd.rl.ac.uk/pvws/pv
 
 [WEBHOOKS]
 # Webhook URLs should be kept secret. Consider restricting permissions on this file (e.g. chmod 600)
-# to prevent other users from reading it.
-enable_teams = false
+# to prevent other users from reading it. Leave a URL blank to disable that channel's Teams notifier.
 news_teams_url =
 beam_teams_url =
 experiment_teams_url =

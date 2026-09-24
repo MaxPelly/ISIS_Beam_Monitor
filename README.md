@@ -6,10 +6,12 @@ This is a Python application that monitors the status of the ISIS beam, experime
 
 ## Features
 
-- **Beam Updates**: Monitors the ISIS beam status and sends alerts based on configurable thresholds.
-- **Experiment Updates**: Keeps track of ongoing experiments.
-- **MCR News**: Fetches and notifies about the latest Main Control Room (MCR) news.
-- **Microsoft Teams Integration**: Sends formatted notifications directly to configured Teams webhook URLs.
+- **Beam Updates**: Monitors the ISIS beam status and sends debounced state-change cards (with severity colour, emoji, current/previous readings and time-in-state) based on configurable thresholds. Correlated multi-target trips are called out in the same card.
+- **Experiment Updates**: Tracks run starts/finishes, including previous-run stats, frame counts, an ETA and good-frame efficiency, plus warnings for vetoed or stalled frame collection.
+- **MCR News**: Fetches the latest Main Control Room (MCR) news and classifies each update's severity (good/attention/warning) by keyword, with an optional "Open MCR news" link.
+- **Daily Summary**: Sends a per-target uptime/trip/sparkline summary card once a day at a configurable time.
+- **`fun_mode`**: Optional personality lines, longest-uptime records, run-count milestones and a daily fact, on top of the always-on severity/emoji information.
+- **Microsoft Teams Integration**: Sends rich Adaptive Cards directly to configured Teams webhook URLs.
 - **Dummy Notifier**: Includes a logging-based dummy notifier for testing and development without sending actual webhooks.
 - **Concurrent Execution**: Uses `asyncio` to run beam and news monitors concurrently for real-time responsiveness.
 - **Live TUI Graph View**: Displays a rolling 1-hour sparkline graph of beam current (μA) for TS1, TS2, and Muons directly in the terminal. The graph is sampled on its own fixed 1-minute timer, fully decoupled from the beam WebSocket update rate — a silent beam produces a flat line at the last-known value.

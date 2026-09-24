@@ -366,9 +366,34 @@ def test_run_milestone_builder():
     assert n.severity == Severity.GOOD
     assert n.emoji == "🏆"
     assert n.flavour == ""
+    # title must not also bake in the emoji, or to_plain_text()/the Teams
+    # card header (which both prefix `emoji` onto `title`) would show it twice.
+    assert "🏆" not in n.title
+    assert n.to_plain_text().count("🏆") == 1
 
 
 def test_run_milestone_builder_picks_flavour_when_rng_given():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = run_milestone(25, dt, rng=random.Random(1))
     assert n.flavour != ""
+
+
+def test_no_builder_bakes_its_own_emoji_into_the_title():
+    """`to_plain_text()` and the Teams card both prefix `emoji` onto `title` —
+    a builder must never also embed that emoji inside the title text itself,
+    or it renders twice everywhere the notification is shown."""
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    notifications = [
+        beam_change("TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), dt),
+        startup_status("TS1", "high", 150.0, dt),
+        run_started("Run 2", "Run 1", timedelta(hours=1), 900.0, 1000.0, dt),
+        run_finishing("Run 1", 150.0, 130.0, 140.0, 150.0, 0.5, "high", dt),
+        frames_vetoed(dt),
+        frames_stalled("TS1", timedelta(minutes=17), dt),
+        mcr_news("Machine update.", dt),
+        daily_summary("TS1", 95.0, 0, timedelta(hours=10), "▇", 3, dt, is_new_record=True),
+        run_milestone(25, dt),
+    ]
+    for n in notifications:
+        if n.emoji:
+            assert n.emoji not in n.title, f"{n.emoji!r} duplicated in title of {n.title!r}"

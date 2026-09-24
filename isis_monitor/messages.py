@@ -302,7 +302,7 @@ def run_milestone(
     run_count: int, time_now: datetime, rng: Optional[random.Random] = None
 ) -> Notification:
     return Notification(
-        title=f"🏆 {run_count} runs completed",
+        title=f"{run_count} runs completed",
         text=f"That's {run_count} runs since records began.",
         severity=Severity.GOOD,
         emoji="🏆",
