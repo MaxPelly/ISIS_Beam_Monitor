@@ -152,7 +152,6 @@ db_path = /tmp/beam.db
 socket_path = /tmp/beam.sock
 lock_file = /tmp/beam.lock
 retention_days = 7
-heartbeat_interval = 15
 
 [TUI_CLIENT]
 socket_path = /tmp/beam.sock
@@ -164,7 +163,6 @@ reconnect_max = 20
     assert config.daemon_socket_path == "/tmp/beam.sock"
     assert config.daemon_lock_file == "/tmp/beam.lock"
     assert config.retention_days == 7
-    assert config.heartbeat_interval == 15
     assert config.tui_socket_path == "/tmp/beam.sock"
     assert config.tui_reconnect_initial == 2
     assert config.tui_reconnect_max == 20
@@ -368,3 +366,70 @@ summary_time = not-a-time
 """)
     with pytest.raises(ConfigError, match="summary_time"):
         load_config(config_file)
+
+
+def _write(tmp_path, extra: str) -> Path:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("[DATA]\nmcr_news_url = http://test.com/news\n" + extra)
+    return config_file
+
+
+def test_load_config_defaults_match_dataclass_defaults(tmp_path):
+    """The loader's fallbacks and AppConfig's defaults come from one place."""
+    config = load_config(_write(tmp_path, ""))
+    assert config == AppConfig(mcr_news_url="http://test.com/news")
+    assert config.mcr_poll_interval == 60.0
+
+
+@pytest.mark.parametrize("section, line", [
+    ("TIMEOUTS_INTERVALS", "mcr_poll_interval = soon"),
+    ("DAEMON", "retention_days = 1.5"),
+    ("LOGGING", "log_max_bytes = big"),
+    ("NOTIFICATIONS", "fun_mode = maybe"),
+    ("BEAM_BOUNDARIES", "ts1_boundaries = 0, a, 2"),
+])
+def test_load_config_invalid_value_raises_config_error(tmp_path, section, line):
+    key = line.split(" = ")[0]
+    with pytest.raises(ConfigError, match=rf"\[{section}\] {key}"):
+        load_config(_write(tmp_path, f"[{section}]\n{line}\n"))
+
+
+def test_load_config_blank_numeric_value_uses_default(tmp_path):
+    config = load_config(_write(tmp_path, "[DAEMON]\nretention_days =\n[TUI]\nhistory_maxlen =\n"))
+    assert config.retention_days == 7
+    assert config.history_maxlen == 60
+
+
+def test_load_config_tui_socket_defaults_to_daemon_socket(tmp_path):
+    config = load_config(_write(tmp_path, "[DAEMON]\nsocket_path = /run/beam.sock\n"))
+    assert config.tui_socket_path == "/run/beam.sock"
+
+
+def test_load_config_boolean_and_renamed_keys(tmp_path):
+    config = load_config(_write(
+        tmp_path, "[NOTIFICATIONS]\nfun_mode = yes\ntimezone = UTC\n"
+    ))
+    assert config.fun_mode is True
+    assert config.notifications_timezone == "UTC"
+
+
+@pytest.mark.parametrize("initial, maximum, match", [
+    ("0", "5", "positive"),
+    ("10", "5", "cannot be greater"),
+])
+def test_load_config_invalid_tui_reconnect(tmp_path, initial, maximum, match):
+    with pytest.raises(ConfigError, match=match):
+        load_config(_write(
+            tmp_path, f"[TUI_CLIENT]\nreconnect_initial = {initial}\nreconnect_max = {maximum}\n"
+        ))
+
+
+def test_load_config_custom_boundaries(tmp_path):
+    config = load_config(_write(tmp_path, "[BEAM_BOUNDARIES]\nts2_boundaries = 1, 2.5 , 3\n"))
+    assert config.ts2_boundaries == (1.0, 2.5, 3.0)
+    assert config.ts1_boundaries == (0.0, 50.0, 140.0)
+
+
+def test_load_config_summary_time_out_of_range(tmp_path):
+    with pytest.raises(ConfigError, match="summary_time"):
+        load_config(_write(tmp_path, "[NOTIFICATIONS]\nsummary_time = 25:00\n"))

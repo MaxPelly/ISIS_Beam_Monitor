@@ -1,6 +1,8 @@
-import pytest
 import asyncio
+import contextlib
+
 import aiohttp
+import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from isis_monitor.config import AppConfig
 from isis_monitor.notifiers import NotificationChannel
@@ -90,147 +92,173 @@ async def test_mcr_get_news_timeout(mock_config, mock_channel):
     assert result is None
 
 
+@pytest.mark.asyncio
+async def test_mcr_get_news_empty_feed_returns_none(mock_config, mock_channel, caplog):
+    monitor = MCRNewsMonitor(mock_config, mock_channel)
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.text = AsyncMock(return_value="  \r\n  ")
+    mock_session = MagicMock()
+    mock_session.get.return_value.__aenter__.return_value = mock_response
+    mock_session.get.return_value.__aexit__ = AsyncMock(return_value=None)
+
+    assert await monitor.get_news(mock_session) is None
+    assert "parsed to empty string" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_mcr_get_news_connection_error_returns_none(mock_config, mock_channel):
+    monitor = MCRNewsMonitor(mock_config, mock_channel)
+    mock_session = MagicMock()
+    mock_session.get.side_effect = aiohttp.ClientConnectionError("refused")
+    assert await monitor.get_news(mock_session) is None
+
+
 # ---------------------------------------------------------------------------
 # run() — polling loop
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
-async def test_mcr_run_broadcasts_on_news_change(mock_config, mock_channel):
-    """Verify that the polling loop broadcasts exactly once when news changes.
+class _Stop(Exception):
+    """Raised by a fake get_news() to end run()'s otherwise-infinite loop."""
 
-    Uses notify_current=False so the initial fetch seeds old_news="News A".
-    Sequence: initial fetch → "News A", poll-1 → "News A" (no broadcast),
-              poll-2 → "News B" (broadcast + stop).
-    """
-    monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=False)
 
-    news_items = ["News A", "News A", "News B"]
-    call_index = 0
-
-    async def fake_get_news(_session):
-        nonlocal call_index
-        news = news_items[call_index] if call_index < len(news_items) else "News B"
-        call_index += 1
-        # Set stop after we've delivered the last item
-        if call_index >= len(news_items):
-            stop_event.set()
-        return news
-
-    stop_event = asyncio.Event()
-
-    with patch.object(monitor, "get_news", side_effect=fake_get_news), \
-         patch("isis_monitor.mcr.asyncio.sleep", new_callable=AsyncMock), \
-         patch("isis_monitor.mcr.aiohttp.TCPConnector"), \
+@contextlib.contextmanager
+def fake_session():
+    with patch("isis_monitor.mcr.aiohttp.TCPConnector"), \
          patch("isis_monitor.mcr.aiohttp.ClientSession") as mock_cls:
-
-        mock_session = AsyncMock()
-        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+        yield
 
-        await monitor.run(stop_event)
+
+def scripted_news(*items):
+    """A get_news() replacement returning `items` in order, then raising _Stop."""
+    remaining = list(items)
+
+    async def get_news(_session):
+        if not remaining:
+            raise _Stop
+        return remaining.pop(0)
+
+    return get_news
+
+
+async def run_script(monitor, *items, waits=None):
+    """Run monitor.run() against scripted news with instant waits; returns wait delays."""
+    delays = [] if waits is None else waits
+
+    async def instant_wait(seconds):
+        delays.append(seconds)
+        return False
+
+    with fake_session(), \
+         patch.object(monitor, "get_news", side_effect=scripted_news(*items)), \
+         patch.object(monitor, "_wait", side_effect=instant_wait):
+        with pytest.raises(_Stop):
+            await monitor.run()
+    return delays
+
+
+@pytest.mark.asyncio
+async def test_mcr_run_broadcasts_only_on_news_change(mock_config, mock_channel):
+    sink = MagicMock()
+    monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=False, sink=sink)
+
+    await run_script(monitor, "News A", "News A", "News B")
 
     mock_channel.broadcast.assert_called_once()
     notification = mock_channel.broadcast.call_args[0][0]
     assert notification.text == "News B"
     assert notification.emoji == "📰"
     assert notification.flavour == ""  # fun_mode defaults to False
+    assert [c.args[0] for c in sink.update_mcr_news.call_args_list] == ["News A", "News B"]
+    assert monitor.old_news == "News B"
+
+
+@pytest.mark.asyncio
+async def test_mcr_run_notify_current_broadcasts_first_poll(mock_config, mock_channel):
+    monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=True)
+    await run_script(monitor, "News A")
+    mock_channel.broadcast.assert_called_once()
+    assert mock_channel.broadcast.call_args[0][0].text == "News A"
 
 
 @pytest.mark.asyncio
 async def test_mcr_run_fun_mode_adds_flavour(mock_config):
-    """When fun_mode is on, the broadcast notification carries a flavour line."""
     import random
     from dataclasses import replace
 
-    fun_config = replace(mock_config, fun_mode=True)
     channel = NotificationChannel("Test")
     channel.broadcast = AsyncMock()
-    monitor = MCRNewsMonitor(fun_config, channel, notify_current=False, rng=random.Random(1))
-
-    news_items = ["News A", "News B"]
-    call_index = 0
-    stop_event = asyncio.Event()
-
-    async def fake_get_news(_session):
-        nonlocal call_index
-        news = news_items[call_index] if call_index < len(news_items) else "News B"
-        call_index += 1
-        if call_index >= len(news_items):
-            stop_event.set()
-        return news
-
-    with patch.object(monitor, "get_news", side_effect=fake_get_news), \
-         patch("isis_monitor.mcr.asyncio.sleep", new_callable=AsyncMock), \
-         patch("isis_monitor.mcr.aiohttp.TCPConnector"), \
-         patch("isis_monitor.mcr.aiohttp.ClientSession") as mock_cls:
-
-        mock_session = AsyncMock()
-        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
-
-        await monitor.run(stop_event)
-
-    channel.broadcast.assert_called_once()
-    notification = channel.broadcast.call_args[0][0]
-    assert notification.flavour != ""
+    monitor = MCRNewsMonitor(
+        replace(mock_config, fun_mode=True), channel, notify_current=False, rng=random.Random(1)
+    )
+    await run_script(monitor, "News A", "News B")
+    assert channel.broadcast.call_args[0][0].flavour != ""
 
 
 @pytest.mark.asyncio
-async def test_mcr_run_stops_on_event(mock_config, mock_channel):
-    """run() exits promptly when stop_event is set."""
-    monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=True)
-
-    stop_event = asyncio.Event()
-    stop_event.set()  # pre-set — loop should exit immediately
-
-    with patch("isis_monitor.mcr.asyncio.sleep", new_callable=AsyncMock), \
-         patch("isis_monitor.mcr.aiohttp.TCPConnector"), \
-         patch("isis_monitor.mcr.aiohttp.ClientSession") as mock_cls:
-
-        mock_session = AsyncMock()
-        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
-
-        await monitor.run(stop_event)
-
+async def test_mcr_run_baseline_retries_until_news_available(mock_config, mock_channel):
+    sink = MagicMock()
+    monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=False, sink=sink)
+    delays = await run_script(monitor, None, None, "News A")
+    base = mock_config.mcr_poll_interval
+    assert delays == [base, base, base]  # two baseline retries, then the first poll wait
+    sink.update_mcr_news.assert_called_once_with("News A")
     mock_channel.broadcast.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_mcr_run_backoff_on_consecutive_failures(mock_config, mock_channel):
-    """Sleep duration doubles on each consecutive fetch failure, capped at 8×."""
-    monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=True)
+    """Poll delay doubles per consecutive failure, capped at 8x, and resets on success."""
+    sink = MagicMock()
+    monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=True, sink=sink)
 
-    # Always fail — return None
-    fail_count = 0
-
-    async def always_fail(_session):
-        nonlocal fail_count
-        fail_count += 1
-        if fail_count >= 4:
-            stop_event.set()
-        return None
-
-    stop_event = asyncio.Event()
-    sleep_calls = []
-
-    async def fake_sleep(secs):
-        sleep_calls.append(secs)
-
-    with patch.object(monitor, "get_news", side_effect=always_fail), \
-         patch("isis_monitor.mcr.asyncio.sleep", side_effect=fake_sleep), \
-         patch("isis_monitor.mcr.aiohttp.TCPConnector"), \
-         patch("isis_monitor.mcr.aiohttp.ClientSession") as mock_cls:
-
-        mock_session = AsyncMock()
-        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_cls.return_value.__aexit__ = AsyncMock(return_value=None)
-
-        await monitor.run(stop_event)
+    delays = await run_script(monitor, None, None, None, None, "News", None)
 
     base = mock_config.mcr_poll_interval
-    # First sleep is 1× (0 failures so far), then 2×, then 4× ...
-    assert sleep_calls[0] == base * 1
-    assert sleep_calls[1] == base * 2
-    assert sleep_calls[2] == base * 4
-    mock_channel.broadcast.assert_not_called()
+    assert delays == [base, base * 2, base * 4, base * 8, base * 8, base, base * 2]
+    statuses = [c.args[1] for c in sink.update_health.call_args_list]
+    assert statuses[0] == "starting"
+    assert "error" in statuses and "connected" in statuses
+
+
+@pytest.mark.asyncio
+async def test_mcr_run_cancels_promptly_mid_wait(mock_config, mock_channel):
+    """Shutdown cancels run(); it must not sit out the poll interval."""
+    from dataclasses import replace
+    monitor = MCRNewsMonitor(replace(mock_config, mcr_poll_interval=3600), mock_channel, notify_current=True)
+    with fake_session(), patch.object(monitor, "get_news", AsyncMock(return_value="x")):
+        task = asyncio.create_task(monitor.run())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_mcr_request_reconnect_polls_immediately(mock_config, mock_channel):
+    from dataclasses import replace
+    sink = MagicMock()
+    monitor = MCRNewsMonitor(
+        replace(mock_config, mcr_poll_interval=3600), mock_channel, notify_current=True, sink=sink
+    )
+    polled = asyncio.Event()
+
+    async def get_news(_session):
+        polled.set()
+        return "News"
+
+    with fake_session(), patch.object(monitor, "get_news", side_effect=get_news):
+        task = asyncio.create_task(monitor.run())
+        await asyncio.sleep(0.05)
+        assert not polled.is_set()
+        assert monitor.request_reconnect() is True
+        assert monitor.request_reconnect() is False  # already pending
+        await asyncio.wait_for(polled.wait(), timeout=1.0)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert ("mcr", "reconnecting") in [c.args for c in sink.update_health.call_args_list]
+    assert monitor.request_reconnect() is True  # flag was consumed

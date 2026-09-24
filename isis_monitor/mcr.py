@@ -10,7 +10,7 @@ from typing import Optional
 from isis_monitor.config import AppConfig
 from isis_monitor.messages import mcr_news
 from isis_monitor.notifiers import NotificationChannel
-from isis_monitor.protocols import TUIProtocol, MonitorSinkProtocol
+from isis_monitor.protocols import MonitorSinkProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,6 @@ class MCRNewsMonitor:
         config: AppConfig,
         channel: NotificationChannel,
         notify_current: bool = False,
-        tui: Optional[TUIProtocol] = None,
         sink: Optional[MonitorSinkProtocol] = None,
         rng: Optional[random.Random] = None,
     ):
@@ -32,7 +31,6 @@ class MCRNewsMonitor:
         self.url = config.mcr_news_url
         self.channel = channel
         self.notify_current = notify_current
-        self.tui = tui
         self.sink = sink
         self._rng = rng or random.Random()
         self.old_news: Optional[str] = None
@@ -62,93 +60,66 @@ class MCRNewsMonitor:
             logger.warning(f"Connection error while fetching MCR news: {e}")
         return None
 
-    async def run(self, stop_event: Optional[asyncio.Event] = None):
-        logger.info(f"MCR Monitor started. Watching {self.url}...")
+    def _set_health(self, status: str) -> None:
         if self.sink:
-            self.sink.update_health("mcr", "starting")
+            self.sink.update_health("mcr", status)
+
+    async def _wait(self, seconds: float) -> bool:
+        """Sleep for `seconds`, or less if a reconnect is requested (returns True)."""
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(self._force_reconnect.wait(), timeout=seconds)
+        requested = self._force_reconnect.is_set()
+        self._force_reconnect.clear()
+        return requested
+
+    def _publish_news(self, news: str) -> None:
+        self.old_news = news
+        if self.sink:
+            self.sink.update_mcr_news(news)
+
+    async def run(self) -> None:
+        """Poll until cancelled."""
+        logger.info(f"MCR Monitor started. Watching {self.url}...")
+        self._set_health("starting")
 
         # TCPConnector with DNS TTL avoids stale connections on long-running sessions
         connector = aiohttp.TCPConnector(ttl_dns_cache=300)
         async with aiohttp.ClientSession(connector=connector) as session:
-            # Initial fetch to establish baseline
-            if not self.notify_current:
-                while self.old_news is None:
-                    if stop_event and stop_event.is_set():
-                        return
-                    self.old_news = await self.get_news(session)
-                    if self.old_news:
-                        logger.info(f"Current MCR News: {self.old_news}")
-                        if self.tui:
-                            self.tui.update_mcr_news(self.old_news)
-                        if self.sink:
-                            self.sink.update_mcr_news(self.old_news)
-                    else:
-                        await asyncio.sleep(self.config.mcr_poll_interval)
+            if self.notify_current:
+                self.old_news = ""  # so the first successful poll is broadcast
             else:
-                self.old_news = ""
+                while (baseline := await self.get_news(session)) is None:
+                    await self._wait(self.config.mcr_poll_interval)
+                logger.info(f"Current MCR News: {baseline}")
+                self._publish_news(baseline)
 
-            # Main polling loop
-            consecutive_failures = 0
-            while stop_event is None or not stop_event.is_set():
-                try:
-                    sleep_secs = self.config.mcr_poll_interval * min(2 ** consecutive_failures, 8)
-                    sleep_task = asyncio.create_task(asyncio.sleep(sleep_secs))
-                    reconnect_task = asyncio.create_task(self._force_reconnect.wait())
-                    done, pending = await asyncio.wait(
-                        {sleep_task, reconnect_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in pending:
-                        task.cancel()
-                    for task in pending:
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await task
+            failures = 0
+            while True:
+                if await self._wait(self.config.mcr_poll_interval * min(2 ** failures, 8)):
+                    failures = 0
+                    self._set_health("reconnecting")
 
-                    if reconnect_task in done and self._force_reconnect.is_set():
-                        self._force_reconnect.clear()
-                        consecutive_failures = 0
-                        if self.sink:
-                            self.sink.update_health("mcr", "reconnecting")
-                except asyncio.CancelledError:
-                    logger.warning(f"MCR News Collection Cancelled")
-                    return
+                news = await self.get_news(session)
+                if news is None:
+                    failures += 1
+                    self._set_health("error")
+                    logger.debug(f"MCR fetch failed (attempt {failures}).")
+                    continue
 
-                if stop_event and stop_event.is_set():
-                    logger.warning(f"MCR News Collection Quit")
-                    return
-
-                new_news = await self.get_news(session)
-                if new_news and new_news != self.old_news:
-                    consecutive_failures = 0
-                    self.old_news = new_news
-                    logger.info(f"New MCR Update: {new_news}")
-                    if self.tui:
-                        self.tui.update_mcr_news(new_news)
-                    if self.sink:
-                        self.sink.update_mcr_news(new_news)
-                        self.sink.update_health("mcr", "connected")
-                    rng = self._rng if self.config.fun_mode else None
-                    notification = mcr_news(
-                        new_news, datetime.now(timezone.utc),
-                        url=self.config.mcr_page_url or None, rng=rng,
-                    )
-                    await self.channel.broadcast(notification)
-                elif new_news:
-                    consecutive_failures = 0
-                    if self.sink:
-                        self.sink.update_health("mcr", "connected")
+                failures = 0
+                self._set_health("connected")
+                if news == self.old_news:
                     logger.debug("No new MCR news.")
-                else:
-                    consecutive_failures += 1
-                    if self.sink:
-                        self.sink.update_health("mcr", "error")
-                    next_retry = self.config.mcr_poll_interval * min(2 ** consecutive_failures, 8)
-                    logger.debug(
-                        f"MCR fetch failed (attempt {consecutive_failures}); "
-                        f"next retry in {next_retry:.0f}s."
-                    )
-            logger.warning(f"MCR News Collection Fall Through")
-            return
+                    continue
+
+                logger.info(f"New MCR Update: {news}")
+                self._publish_news(news)
+                rng = self._rng if self.config.fun_mode else None
+                notification = mcr_news(
+                    news, datetime.now(timezone.utc),
+                    url=self.config.mcr_page_url or None, rng=rng,
+                )
+                await self.channel.broadcast(notification)
 
     def request_reconnect(self) -> bool:
         if self._force_reconnect.is_set():

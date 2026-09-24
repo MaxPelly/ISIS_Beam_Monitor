@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
-import contextlib
 import fcntl
 import json
 import logging
 import os
 import random
 import signal
-from datetime import datetime, timezone
+import sqlite3
+import sys
+import termios
+import tty
+from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Optional
-import sys
-import tty
-import termios
+from typing import Callable, Optional
 
 from isis_monitor.beam import BeamMonitor, CHANNEL_LABELS
 from isis_monitor.config import ConfigError, load_config
@@ -29,69 +29,69 @@ from isis_monitor.tui import RichTUI
 
 logger = logging.getLogger("MAIN")
 
+LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+
 
 class StateLogHandler(logging.Handler):
-    def __init__(self, state: DaemonState):
+    """Mirrors log records into DaemonState, and from there to attached TUIs.
+
+    DaemonState is confined to the event loop, so records emitted from other
+    threads (e.g. asyncio.to_thread workers) are handed over to `loop`.
+    """
+
+    def __init__(self, state: DaemonState, loop: Optional[asyncio.AbstractEventLoop] = None):
         super().__init__()
         self.state = state
+        self.loop = loop
 
     def emit(self, record):
         try:
             msg = self.format(record)
-            self.state.update_log(msg)
+            if self.loop is None or self.loop is _running_loop():
+                self.state.update_log(msg)
+            else:
+                self.loop.call_soon_threadsafe(self.state.update_log, msg)
         except Exception:
             self.handleError(record)
 
 
+def _running_loop() -> Optional[asyncio.AbstractEventLoop]:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
 class SingleInstanceLock:
+    """Holds an exclusive flock on `path` for the lifetime of the daemon.
+
+    The file is deliberately never deleted: unlinking a lock file lets a
+    second process lock the orphaned inode while a third creates a new one.
+    """
+
     def __init__(self, path: Path):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         self._fh = None
 
     def __enter__(self):
-        self._fh = self.path.open("a+")
-        self._fh.seek(0)
-        pid_str = self._fh.read().strip()
-        if pid_str.isdigit():
-            try:
-                os.kill(int(pid_str), 0)
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                raise RuntimeError(f"Lock held by another user's process: {pid_str}")
-            else:
-                # If flock is supported, let flock do its job. But if not, we rely on this check.
-                pass
-        
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fh = self.path.open("a+")
         try:
-            fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
+            fh.close()
             raise RuntimeError(f"Lock file already held: {self.path}") from exc
-        except OSError:
-            # Fallback for systems without flock: rely on the PID check
-            if pid_str.isdigit():
-                try:
-                    os.kill(int(pid_str), 0)
-                    raise RuntimeError(f"Lock file already held by PID {pid_str}")
-                except ProcessLookupError:
-                    pass
-
-        self._fh.seek(0)
-        self._fh.truncate(0)
-        self._fh.write(str(os.getpid()))
-        self._fh.flush()
+        fh.seek(0)
+        fh.truncate()
+        fh.write(str(os.getpid()))
+        fh.flush()
+        self._fh = fh
         return self
 
     def __exit__(self, exc_type, exc, tb):
         if self._fh:
-            try:
-                fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
-            except OSError:
-                pass
-            self._fh.close()
-        with contextlib.suppress(OSError):
-            self.path.unlink()
+            self._fh.close()  # releases the flock
+            self._fh = None
 
 
 def configure_logging(log_file: str, log_level: str, max_bytes: int, backup_count: int) -> None:
@@ -101,115 +101,90 @@ def configure_logging(log_file: str, log_level: str, max_bytes: int, backup_coun
     numeric_level = getattr(logging, log_level.upper(), logging.WARNING)
     logging.basicConfig(
         level=numeric_level,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[
-            RotatingFileHandler(log_path, maxBytes=max_bytes, backupCount=backup_count)
-        ],
+        format=LOG_FORMAT,
+        handlers=[RotatingFileHandler(log_path, maxBytes=max_bytes, backupCount=backup_count)],
     )
 
 
 def install_signal_handlers(stop_event: asyncio.Event) -> None:
     loop = asyncio.get_running_loop()
-
-    def _on_signal():
-        stop_event.set()
-
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _on_signal)
+        loop.add_signal_handler(sig, stop_event.set)
+
+
+async def run_until_stopped(coro, stop_event: asyncio.Event) -> None:
+    """Run `coro` until it returns or `stop_event` is set, then cancel it.
+
+    An exception raised by `coro` itself propagates to the caller.
+    """
+    task = asyncio.ensure_future(coro)
+    stopper = asyncio.ensure_future(stop_event.wait())
+    try:
+        await asyncio.wait({task, stopper}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        stopper.cancel()
+        task.cancel()
+    await asyncio.wait({task})
+    if not task.cancelled():
+        task.result()
 
 
 def build_channels(config, dummy: bool):
-    beam_channel = NotificationChannel("Beam Updates")
-    exp_channel = NotificationChannel("Experiment Updates")
-    mcr_channel = NotificationChannel("MCR News")
+    def channel(name: str, url: str) -> NotificationChannel:
+        ch = NotificationChannel(name)
+        if dummy:
+            ch.add_notifier(DummyNotifier())
+        elif url:
+            ch.add_notifier(TeamsNotifier(url, timeout=config.webhook_timeout))
+        return ch
 
-    if dummy:
-        beam_channel.add_notifier(DummyNotifier())
-        exp_channel.add_notifier(DummyNotifier())
-        mcr_channel.add_notifier(DummyNotifier())
-    else:
-        if config.beam_teams_url:
-            beam_channel.add_notifier(
-                TeamsNotifier(config.beam_teams_url, timeout=config.webhook_timeout)
-            )
-        if config.experiment_teams_url:
-            exp_channel.add_notifier(
-                TeamsNotifier(config.experiment_teams_url, timeout=config.webhook_timeout)
-            )
-        if config.news_teams_url:
-            mcr_channel.add_notifier(
-                TeamsNotifier(config.news_teams_url, timeout=config.webhook_timeout)
-            )
-    return beam_channel, exp_channel, mcr_channel
-
-
-async def close_channels(*channels: NotificationChannel) -> None:
-    to_close = []
-    for channel in channels:
-        for notifier in channel.notifiers:
-            close_fn = getattr(notifier, "close", None)
-            if close_fn is not None:
-                to_close.append(close_fn())
-    if to_close:
-        await asyncio.gather(*to_close, return_exceptions=True)
+    return (
+        channel("Beam Updates", config.beam_teams_url),
+        channel("Experiment Updates", config.experiment_teams_url),
+        channel("MCR News", config.news_teams_url),
+    )
 
 
 async def state_persistence_loop(config, state: DaemonState, store: SQLiteStateStore, stop_event: asyncio.Event):
-    while not stop_event.is_set():
+    """Every sample_interval: sample beam currents into history and persist them."""
+    while True:
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=config.sample_interval)
-            break
+            return
         except asyncio.TimeoutError:
             pass
 
         ts = datetime.now(timezone.utc)
-        state.sample_all_currents(ts)
-        
-        beam_rows = state.get_beam_rows_for_timestamp(ts)
-        cutoff = state.cutoff_for_days(config.retention_days)
+        rows = state.sample_all_currents(ts)
+        cutoff = ts - timedelta(days=config.retention_days)
         state.trim_history_before(cutoff)
         snap = json.dumps(state.snapshot())
-        health = state.get_health()
 
         def _persist():
-            store.write_samples(beam_rows)
+            store.write_samples(rows)
             store.prune_older_than(cutoff)
             store.upsert_snapshot("daemon_state", snap)
-            for component, status in health.items():
-                store.upsert_health(component, status)
             store.commit()
 
-        await asyncio.to_thread(_persist)
-    logger.warning("State Persistance quit")
-    return
-
-
-async def daemon_heartbeat_loop(config, state: DaemonState, stop_event: asyncio.Event):
-    while not stop_event.is_set():
-        state.update_health("daemon", "running")
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=config.heartbeat_interval)
-        except asyncio.TimeoutError:
-            continue
-    logger.warning("Heartbeat quit")
-    return
+            await asyncio.to_thread(_persist)
+        except sqlite3.Error:
+            logger.exception("Failed to persist daemon state; will retry next interval")
 
 
 async def run_daemon(config, args, stop_event: asyncio.Event):
     install_signal_handlers(stop_event)
 
-    state = DaemonState(history_maxlen=max(config.history_maxlen, int((86400 * config.retention_days) / max(config.sample_interval, 1.0))))
+    samples_for_retention = int(86400 * config.retention_days / max(config.sample_interval, 1.0))
+    state = DaemonState(history_maxlen=max(config.history_maxlen, samples_for_retention))
     state.update_health("daemon", "starting")
 
     def _init_db():
         store = SQLiteStateStore(Path(config.daemon_db_path))
-        raw_snap = store.load_snapshot("daemon_state")
-        cutoff = state.cutoff_for_days(config.retention_days)
-        recent = store.load_recent_samples(cutoff)
-        return store, raw_snap, recent
+        cutoff = datetime.now(timezone.utc) - timedelta(days=config.retention_days)
+        return store, store.load_snapshot("daemon_state"), store.load_recent_samples(cutoff)
 
     store, raw_snap, recent_samples = await asyncio.to_thread(_init_db)
-    
     state.restore_from_snapshot_json(raw_snap)
     for row in recent_samples:
         state.append_beam_sample(
@@ -220,11 +195,12 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
             publish=False,
         )
 
-    state_log_handler = StateLogHandler(state)
-    state_log_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    state_log_handler = StateLogHandler(state, asyncio.get_running_loop())
+    state_log_handler.setFormatter(logging.Formatter(LOG_FORMAT))
     logging.getLogger().addHandler(state_log_handler)
 
-    beam_channel, exp_channel, mcr_channel = build_channels(config, args.dummy)
+    channels = build_channels(config, args.dummy)
+    beam_channel, exp_channel, mcr_channel = channels
     beam_monitor = BeamMonitor(
         config,
         beam_channel,
@@ -233,19 +209,11 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
         sink=state,
         debounce_seconds=config.debounce_seconds,
     )
-    mcr_monitor = MCRNewsMonitor(
-        config,
-        mcr_channel,
-        args.notify_current,
-        sink=state,
-    )
+    mcr_monitor = MCRNewsMonitor(config, mcr_channel, args.notify_current, sink=state)
 
     async def command_handler(name: str) -> dict:
         if name in {"force_reconnect", "force_reconnect_all"}:
-            return {
-                "beam": beam_monitor.request_reconnect(),
-                "mcr": mcr_monitor.request_reconnect(),
-            }
+            return {"beam": beam_monitor.request_reconnect(), "mcr": mcr_monitor.request_reconnect()}
         if name == "force_reconnect_beam":
             return {"beam": beam_monitor.request_reconnect()}
         if name == "force_reconnect_mcr":
@@ -256,30 +224,29 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
         return {"error": "unknown_command", "name": name}
 
     ipc_server = IPCServer(Path(config.daemon_socket_path), state, command_handler)
-    await ipc_server.start()
-    state.update_health("daemon", "running")
-
     try:
+        await ipc_server.start()
+        state.update_health("daemon", "running")
         await asyncio.gather(
-            beam_monitor.run(stop_event),
-            mcr_monitor.run(stop_event),
+            run_until_stopped(beam_monitor.run(), stop_event),
+            run_until_stopped(mcr_monitor.run(), stop_event),
             state_persistence_loop(config, state, store, stop_event),
-            daemon_heartbeat_loop(config, state, stop_event),
             daily_summary_loop(config, state, store, beam_channel, stop_event, rng=random.Random()),
         )
     finally:
         logger.warning("Shutting down daemon")
         state.update_health("daemon", "stopping")
+        await ipc_server.stop()
         snap = json.dumps(state.snapshot())
-        
+
         def _close_db():
             store.upsert_snapshot("daemon_state", snap)
             store.commit()
             store.close()
-            
+
         await asyncio.to_thread(_close_db)
-        await ipc_server.stop()
-        await close_channels(beam_channel, exp_channel, mcr_channel)
+        await asyncio.gather(*(ch.close() for ch in channels))
+        logging.getLogger().removeHandler(state_log_handler)
 
 
 def _apply_snapshot_to_tui(tui: RichTUI, snapshot: dict) -> None:
@@ -305,38 +272,89 @@ def _apply_event_to_tui(tui: RichTUI, message: dict) -> None:
         ts_raw = payload.get("timestamp")
         if not ts_raw:
             return
-        ts = datetime.fromisoformat(str(ts_raw))
         tui.add_history_sample(
             str(payload.get("beam", "")),
-            ts,
+            datetime.fromisoformat(str(ts_raw)),
             float(payload.get("current", 0.0)),
             str(payload.get("power", "unknown")),
         )
     elif ev == "health":
-        comp = str(payload.get("component", ""))
-        status = str(payload.get("status", ""))
-        tui.update_log(f"Health: {comp} -> {status}")
+        tui.update_log(f"Health: {payload.get('component', '')} -> {payload.get('status', '')}")
 
-def tui_command_handler(client: IPCClient, stop_event: asyncio.Event, tui: RichTUI):
-    # Read a single character immediately without waiting for enter
-    ch = sys.stdin.read(1)
-    if ch.lower() == 'q':
+
+async def _sync_tui(client: IPCClient, tui: RichTUI, history_limit: int) -> None:
+    snapshot_resp = await client.request({"method": "get_snapshot"})
+    if snapshot_resp.get("ok"):
+        _apply_snapshot_to_tui(tui, snapshot_resp.get("snapshot", {}))
+
+    history_resp = await client.request({"method": "get_history", "limit": history_limit})
+    if history_resp.get("ok"):
+        tui.set_history_snapshot(history_resp.get("history", {}))
+
+    logs_resp = await client.request({"method": "get_logs"})
+    if logs_resp.get("ok"):
+        for line in logs_resp.get("logs", [])[-20:]:
+            tui.update_log(str(line))
+
+    sub_resp = await client.request({"method": "subscribe_updates"})
+    if sub_resp.get("ok"):
+        tui.update_log("Subscribed to daemon updates.")
+
+
+async def tui_connection_loop(config, tui: RichTUI, on_client: Callable[[Optional[IPCClient]], None]) -> None:
+    """Keep `tui` attached to the daemon, reconnecting with backoff, until cancelled.
+
+    `on_client` is told the live client (or None) so key presses can send commands.
+    """
+    backoff = config.tui_reconnect_initial
+    while True:
+        client = IPCClient(Path(config.tui_socket_path))
+        try:
+            tui.update_connection_state("connecting")
+            await client.connect()
+            tui.update_connection_state("connected")
+            await _sync_tui(client, tui, config.history_maxlen)
+            backoff = config.tui_reconnect_initial
+            on_client(client)
+            async for message in client.iter_events():
+                _apply_event_to_tui(tui, message)
+        except (OSError, ValueError) as exc:
+            tui.update_connection_state("disconnected")
+            tui.update_log(f"Daemon connection lost: {exc}")
+        finally:
+            on_client(None)
+            await client.close()
+        await asyncio.sleep(backoff)
+        backoff = min(config.tui_reconnect_max, backoff * 2)
+
+
+async def _send_reconnect(client: IPCClient, tui: RichTUI) -> None:
+    try:
+        response = await client.request({"method": "command", "name": "force_reconnect_all"})
+        tui.update_log(f"Reconnect request result: {response.get('result')}")
+    except Exception as e:
+        tui.update_log(f"Reconnect request failed: {e}")
+
+
+def handle_tui_key(
+    ch: str, client: Optional[IPCClient], stop_event: asyncio.Event, tui: RichTUI, tasks: set
+) -> None:
+    ch = ch.lower()
+    if ch == "q":
         stop_event.set()
-    elif ch.lower() == 'r':
-        async def _send_reconnect():
-            try:
-                response = await client.request({"method": "command", "name": "force_reconnect_all"})
-                tui.update_log(f"Reconnect request result: {response.get('result')}")
-            except Exception as e:
-                tui.update_log(f"Reconnect request failed: {e}")
-        asyncio.create_task(_send_reconnect())
-
+    elif ch == "r":
+        if client is None:
+            tui.update_log("Not connected to the daemon.")
+            return
+        task = asyncio.create_task(_send_reconnect(client, tui))
+        tasks.add(task)  # keep a reference so the task isn't garbage-collected
+        task.add_done_callback(tasks.discard)
 
 
 async def run_tui(config, stop_event: asyncio.Event):
     install_signal_handlers(stop_event)
 
-    # Configure terminal to read keystrokes immediately
+    # Read keystrokes immediately, without waiting for Enter
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     tty.setcbreak(fd)
@@ -348,78 +366,20 @@ async def run_tui(config, stop_event: asyncio.Event):
         logs_maxlen=config.logs_maxlen,
     )
     tui.start()
+
+    client: Optional[IPCClient] = None
+    key_tasks: set = set()
+
+    def set_client(c: Optional[IPCClient]) -> None:
+        nonlocal client
+        client = c
+
     loop = asyncio.get_running_loop()
-
-    backoff = config.tui_reconnect_initial
+    loop.add_reader(fd, lambda: handle_tui_key(sys.stdin.read(1), client, stop_event, tui, key_tasks))
     try:
-        while not stop_event.is_set():
-            client = IPCClient(Path(config.tui_socket_path))
-            has_reader = False
-            try:
-                tui.update_connection_state("connecting")
-                await client.connect()
-                tui.update_connection_state("connected")
-
-                snapshot_resp = await client.request({"method": "get_snapshot"})
-                if snapshot_resp.get("ok"):
-                    _apply_snapshot_to_tui(tui, snapshot_resp.get("snapshot", {}))
-                    
-                history_resp = await client.request({"method": "get_history"})
-                if history_resp.get("ok"):
-                    tui.set_history_snapshot(history_resp.get("history", {}))
-                    
-                logs_resp = await client.request({"method": "get_logs"})
-                if logs_resp.get("ok"):
-                    for line in logs_resp.get("logs", [])[-20:]:
-                        tui.update_log(str(line))
-
-                sub_resp = await client.request({"method": "subscribe_updates"})
-                if sub_resp.get("ok"):
-                    tui.update_log("Subscribed to daemon updates.")
-
-                # Reset backoff only after successful sync
-                backoff = config.tui_reconnect_initial
-
-                loop.add_reader(sys.stdin.fileno(), tui_command_handler, client, stop_event, tui)
-                has_reader = True
-
-                # --- FIX: Race network events against stop_event ---
-                event_iterator = client.iter_events().__aiter__()
-                while not stop_event.is_set():
-                    get_next_event = asyncio.create_task(event_iterator.__anext__())
-                    wait_stop = asyncio.create_task(stop_event.wait())
-                    
-                    done, pending = await asyncio.wait(
-                        [get_next_event, wait_stop],
-                        return_when=asyncio.FIRST_COMPLETED
-                    )
-                    
-                    for task in pending:
-                        task.cancel()
-                        
-                    if wait_stop in done:
-                        break
-                        
-                    try:
-                        message = get_next_event.result()
-                        _apply_event_to_tui(tui, message)
-                    except StopAsyncIteration:
-                        break
-
-                
-            except (FileNotFoundError, ConnectionError, OSError) as exc:
-                tui.update_connection_state("disconnected")
-                tui.update_log(f"Daemon connection lost: {exc}")
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=backoff)
-                except asyncio.TimeoutError:
-                    pass
-                backoff = min(config.tui_reconnect_max, max(config.tui_reconnect_initial, backoff * 2))
-            finally:
-                if has_reader:
-                    loop.remove_reader(sys.stdin.fileno())
-                await client.close()
+        await run_until_stopped(tui_connection_loop(config, tui, set_client), stop_event)
     finally:
+        loop.remove_reader(fd)
         tui.stop()
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
@@ -429,7 +389,7 @@ async def run_stop(config) -> None:
     client = IPCClient(Path(config.daemon_socket_path))
     try:
         await client.connect()
-    except (FileNotFoundError, ConnectionRefusedError, OSError) as exc:
+    except OSError as exc:
         print(f"Could not connect to daemon at {config.daemon_socket_path}: {exc}")
         raise SystemExit(1)
 
@@ -448,7 +408,7 @@ async def run_stop(config) -> None:
         await client.close()
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ISIS Beam and MCR News Monitor")
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
@@ -476,7 +436,7 @@ def parse_args() -> argparse.Namespace:
     stop_parser = subparsers.add_parser("stop", help="Gracefully shut down a running daemon")
     stop_parser.add_argument("config", type=Path, help="Path to .ini configuration file")
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main():

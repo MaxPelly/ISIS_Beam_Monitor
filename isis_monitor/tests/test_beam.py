@@ -4,7 +4,7 @@ import base64
 import random
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 from isis_monitor.config import AppConfig
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.beam import (
@@ -175,8 +175,8 @@ async def test_handle_update_beam_trip_notes_other_targets(mock_config, mock_cha
     await asyncio.sleep(SETTLE)
 
     assert beam_channel.broadcast.call_count == 3
-    for call in beam_channel.broadcast.call_args_list:
-        notification = call.args[0]
+    for sent in beam_channel.broadcast.call_args_list:
+        notification = sent.args[0]
         assert "also went off, likely a facility-wide trip" in notification.text
 
 
@@ -563,3 +563,254 @@ async def test_check_collection_progress_no_active_run_never_warns(mock_config, 
 
     exp_channel.broadcast.assert_not_called()
     assert m.state.collection_stalled_since is None
+
+
+# ---------------------------------------------------------------------------
+# _run_loop() against a real local WebSocket server
+# ---------------------------------------------------------------------------
+
+import contextlib
+import json
+
+import websockets
+
+
+class FakePVWS:
+    """A local PVWS stand-in: records subscriptions, pushes scripted messages."""
+
+    def __init__(self, messages=(), close_after_send=False):
+        self.messages = list(messages)
+        self.close_after_send = close_after_send
+        self.connections = 0
+        self.subscriptions = []
+        self.connected = asyncio.Event()
+        self._server = None
+
+    async def _handler(self, ws):
+        self.connections += 1
+        self.subscriptions.append(json.loads(await ws.recv()))
+        self.connected.set()
+        for msg in self.messages:
+            await ws.send(msg if isinstance(msg, str) else json.dumps(msg))
+        if self.close_after_send:
+            return
+        await ws.wait_closed()
+
+    async def __aenter__(self):
+        self._server = await websockets.serve(self._handler, "127.0.0.1", 0)
+        port = self._server.sockets[0].getsockname()[1]
+        self.url = f"ws://127.0.0.1:{port}"
+        return self
+
+    async def __aexit__(self, *exc):
+        self._server.close()
+        await self._server.wait_closed()
+
+
+async def wait_until(predicate, timeout=2.0):
+    async def _poll():
+        while not predicate():
+            await asyncio.sleep(0.01)
+    await asyncio.wait_for(_poll(), timeout)
+
+
+@contextlib.asynccontextmanager
+async def running(monitor):
+    task = asyncio.create_task(monitor.run())
+    try:
+        yield task
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+def ws_monitor(mock_config, mock_channels, url, sink=None, reconnect_interval=60.0, **kw):
+    config = replace(mock_config, isis_websocket_url=url, beam_reconnect_interval=reconnect_interval)
+    return make_monitor(config, mock_channels, sink=sink, **kw)
+
+
+@pytest.mark.asyncio
+async def test_run_loop_subscribes_and_dispatches_updates(mock_config, mock_channels):
+    sink = MagicMock()
+    update = {"type": "update", "pv": mock_config.ts1_beam_current_pv, "value": 150.0}
+    async with FakePVWS([update]) as server:
+        m = ws_monitor(mock_config, mock_channels, server.url, sink=sink)
+        async with running(m):
+            await wait_until(lambda: sink.update_beam_state.called)
+
+    assert set(server.subscriptions[0]["pvs"]) == {
+        mock_config.ts1_beam_current_pv, mock_config.ts2_beam_current_pv,
+        mock_config.muon_beam_current_pv, mock_config.counts_pv, mock_config.run_name_pv,
+    }
+    sink.update_beam_state.assert_called_with("TS1", 150.0, "high")
+    sink.update_health.assert_any_call("beam", "connected")
+
+
+@pytest.mark.asyncio
+async def test_run_loop_survives_malformed_messages(mock_config, mock_channels, caplog):
+    """Bad frames and handler errors are logged and skipped, not a reconnect."""
+    sink = MagicMock()
+    good = {"type": "update", "pv": mock_config.ts2_beam_current_pv, "value": 40.0}
+    boom = {"type": "update", "pv": mock_config.counts_pv, "text": "1/2"}
+    async with FakePVWS(["not json", "[1, 2]", {"type": "other"}, boom, good]) as server:
+        m = ws_monitor(mock_config, mock_channels, server.url, sink=sink)
+        original = m._handle_update
+
+        async def flaky_handle_update(data):
+            if data is not None and data.get("pv") == mock_config.counts_pv:
+                raise RuntimeError("handler bug")
+            await original(data)
+
+        m._handle_update = flaky_handle_update
+        async with running(m):
+            await wait_until(lambda: sink.update_beam_state.called)
+
+    assert server.connections == 1
+    sink.update_beam_state.assert_called_once_with("TS2", 40.0, "high")
+    assert "handler bug" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_run_loop_reconnects_after_server_closes(mock_config, mock_channels):
+    sink = MagicMock()
+    async with FakePVWS(close_after_send=True) as server:
+        m = ws_monitor(mock_config, mock_channels, server.url, sink=sink, reconnect_interval=0.02)
+        async with running(m):
+            await wait_until(lambda: server.connections >= 3)
+    sink.update_health.assert_any_call("beam", "disconnected")
+
+
+@pytest.mark.asyncio
+async def test_request_reconnect_while_connected_reconnects_immediately(mock_config, mock_channels):
+    sink = MagicMock()
+    async with FakePVWS() as server:
+        m = ws_monitor(mock_config, mock_channels, server.url, sink=sink, reconnect_interval=60.0)
+        async with running(m):
+            await asyncio.wait_for(server.connected.wait(), 2)
+            await wait_until(lambda: m._current_ws is not None)
+            assert m.request_reconnect() is True
+            assert m.request_reconnect() is False  # already pending
+            await wait_until(lambda: server.connections == 2)
+            await wait_until(lambda: not m._force_reconnect.is_set())
+            assert m.request_reconnect() is True  # flag consumed; can request again
+    sink.update_health.assert_any_call("beam", "reconnecting")
+
+
+@pytest.mark.asyncio
+async def test_request_reconnect_while_disconnected_skips_backoff(mock_config, mock_channels):
+    """A reconnect requested during the backoff wait retries at once, and does
+    not linger to tear down the next successful connection."""
+    async with FakePVWS() as server:
+        url = server.url
+    # Server is now closed: the first attempt fails and backs off for 60s.
+    sink = MagicMock()
+    m = ws_monitor(mock_config, mock_channels, url, sink=sink, reconnect_interval=60.0)
+    async with running(m):
+        await wait_until(lambda: call("beam", "disconnected") in sink.update_health.call_args_list)
+        port = int(url.rsplit(":", 1)[1])
+        server = FakePVWS()
+        server._server = await websockets.serve(server._handler, "127.0.0.1", port)
+        try:
+            m.request_reconnect()
+            await asyncio.wait_for(server.connected.wait(), 2)
+            await asyncio.sleep(0.1)
+            assert server.connections == 1  # the stale request didn't force a second one
+        finally:
+            server._server.close()
+            await server._server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_run_cancels_promptly_and_cancels_pending_debounce(mock_config, mock_channels):
+    async with FakePVWS() as server:
+        m = ws_monitor(mock_config, mock_channels, server.url)
+        task = asyncio.create_task(m.run())
+        await asyncio.wait_for(server.connected.wait(), 2)
+        now = datetime.now(timezone.utc)
+        m.change_aggregator.queue_change(BEAM_TARGETS[0], "high", 150, now, "off", 0, 140, now)
+        pending_task = m.change_aggregator._pending["TS1"].task
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 2)
+    await asyncio.sleep(0)
+    assert pending_task.cancelled()
+    assert m.change_aggregator._pending == {}
+
+
+@pytest.mark.asyncio
+async def test_run_without_url_returns_immediately(mock_config, mock_channels, caplog):
+    m = ws_monitor(mock_config, mock_channels, "")
+    await asyncio.wait_for(m.run(), 1)
+    assert "will not run" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_collection_check_loop_calls_progress_check(mock_config, mock_channels):
+    m = make_monitor(mock_config, mock_channels)
+    m._check_collection_progress = AsyncMock()
+    with patch("isis_monitor.beam.COLLECTION_CHECK_INTERVAL", 0.01):
+        task = asyncio.create_task(m._collection_check_loop())
+        await wait_until(lambda: m._check_collection_progress.await_count >= 2)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+def test_fit_rate_with_identical_timestamps_is_zero():
+    t = datetime.now(timezone.utc)
+    assert _fit_rate([(t, 1.0), (t, 5.0)]) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_aggregator_flush_without_pending_is_noop(mock_config, mock_channels):
+    m = make_monitor(mock_config, mock_channels)
+    await m.change_aggregator._flush("TS1")
+    mock_channels[0].broadcast.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_update_run_name_bad_base64_is_ignored(mock_config, mock_channels, caplog):
+    m = make_monitor(mock_config, mock_channels)
+    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": "!!!not base64"})
+    assert m.state.run_name == ""
+    assert "Failed to decode run name" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_handle_update_counts_nan_ignored_and_sink_updated(mock_config, mock_channels):
+    sink = MagicMock()
+    m = make_monitor(mock_config, mock_channels, sink=sink)
+    await m._handle_update({"pv": mock_config.counts_pv, "text": "nan"})
+    sink.update_counts.assert_not_called()
+    await m._handle_update({"pv": mock_config.counts_pv, "text": "1.5/42"})
+    sink.update_counts.assert_called_once_with(42.0)
+
+
+def test_prune_collected_samples_drops_samples_outside_window(mock_config, mock_channels):
+    from isis_monitor.beam import COUNTS_SAMPLE_WINDOW
+    m = make_monitor(mock_config, mock_channels)
+    now = datetime.now(timezone.utc)
+    m.state.collected_samples.extend([
+        (now - COUNTS_SAMPLE_WINDOW - timedelta(seconds=1), 1.0),
+        (now, 2.0),
+    ])
+    m._prune_collected_samples(now)
+    assert list(m.state.collected_samples) == [(now, 2.0)]
+
+
+@pytest.mark.asyncio
+async def test_run_loop_unexpected_error_marks_health_and_retries(mock_config, mock_channels, caplog):
+    sink = MagicMock()
+    m = ws_monitor(mock_config, mock_channels, "not-a-websocket-url", sink=sink, reconnect_interval=0.01)
+    async with running(m):
+        await wait_until(lambda: "Unexpected error in BeamMonitor" in caplog.text)
+        await wait_until(lambda: call("beam", "disconnected") in sink.update_health.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_close_ws_quietly_logs_instead_of_raising(caplog):
+    ws = MagicMock()
+    ws.close = AsyncMock(side_effect=RuntimeError("socket gone"))
+    await BeamMonitor._close_ws_quietly(ws)
+    assert "Error closing WebSocket during reconnect: socket gone" in caplog.text

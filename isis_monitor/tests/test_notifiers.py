@@ -238,3 +238,67 @@ async def test_notification_channel_empty_logs_debug(caplog):
 
     assert "Beam Updates" in caplog.text
     assert "no notifiers" in caplog.text
+
+
+class _FailingNotifier(DummyNotifier):
+    async def send(self, notification):
+        raise RuntimeError("webhook exploded")
+
+
+@pytest.mark.asyncio
+async def test_notification_channel_logs_failing_notifier_and_still_delivers(caplog):
+    channel = NotificationChannel("Beam")
+    good = DummyNotifier()
+    good.send = AsyncMock()
+    channel.add_notifier(_FailingNotifier())
+    channel.add_notifier(good)
+
+    await channel.broadcast(Notification(title="t", text="x"))
+
+    good.send.assert_awaited_once()
+    assert "_FailingNotifier failed on channel 'Beam'" in caplog.text
+    assert "webhook exploded" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_teams_notifier_logs_connection_error(caplog):
+    notifier = TeamsNotifier("http://example.invalid/hook")
+    session = MagicMock()
+    session.closed = False
+    session.post.side_effect = aiohttp.ClientConnectionError("refused")
+    notifier._session = session
+
+    await notifier.send(Notification(title="t", text="x"))
+    assert "Failed to send Teams webhook: refused" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_teams_notifier_reuses_and_closes_session():
+    notifier = TeamsNotifier("http://example.invalid/hook")
+    session = await notifier._get_session()
+    assert await notifier._get_session() is session
+    await notifier.close()
+    assert session.closed
+    assert notifier._session is None
+    await notifier.close()  # idempotent
+
+
+@pytest.mark.asyncio
+async def test_notification_channel_close_closes_all_notifiers():
+    channel = NotificationChannel("Beam")
+    teams = TeamsNotifier("http://example.invalid/hook")
+    await teams._get_session()
+    channel.add_notifier(teams)
+    channel.add_notifier(DummyNotifier())  # base-class close() is a no-op
+    await channel.close()
+    assert teams._session is None
+
+
+def test_create_payload_includes_timestamp_line():
+    from datetime import datetime, timezone
+    notifier = TeamsNotifier("http://x")
+    ts = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    payload = notifier._create_payload(Notification(title="t", text="x", timestamp=ts))
+    body = payload["attachments"][0]["content"]["body"]
+    assert body[-1]["isSubtle"] is True
+    assert "Jan" in body[-1]["text"]

@@ -11,7 +11,7 @@ from isis_monitor.daemon_state import DaemonState
 from isis_monitor.messages import get_timezone
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.storage import SQLiteStateStore
-from isis_monitor.summary import TargetSummary, compute_summary, daily_summary_loop
+from isis_monitor.summary import LAST_SENT_KEY, TargetSummary, compute_summary, daily_summary_loop
 
 
 def make_config(**overrides):
@@ -229,4 +229,56 @@ async def test_daily_summary_loop_no_record_tracking_without_fun_mode(tmp_path):
     )
     assert "New record" not in ts1_notification.text
     assert store.load_snapshot("records") is None
+    store.close()
+
+
+async def _run_summary_loop_briefly(config, state, store, channel, **kw):
+    stop_event = asyncio.Event()
+
+    async def stop_soon():
+        await asyncio.sleep(0.05)
+        stop_event.set()
+
+    with patch("isis_monitor.summary.SUMMARY_CHECK_INTERVAL", 0.01):
+        asyncio.create_task(stop_soon())
+        await daily_summary_loop(config, state, store, channel, stop_event, **kw)
+
+
+@pytest.mark.asyncio
+async def test_daily_summary_not_resent_after_restart_same_day(tmp_path):
+    """The last-sent date is persisted, so restarting the daemon after
+    summary_time doesn't send the day's cards a second time."""
+    config = make_config(summary_time=datetime.now(get_timezone()).strftime("%H:%M"))
+    db = tmp_path / "summary_restart.db"
+
+    store = SQLiteStateStore(db)
+    first = NotificationChannel("Beam")
+    first.broadcast = AsyncMock()
+    await _run_summary_loop_briefly(config, DaemonState(), store, first)
+    store.close()
+    assert first.broadcast.call_count == 3
+
+    store = SQLiteStateStore(db)
+    after_restart = NotificationChannel("Beam")
+    after_restart.broadcast = AsyncMock()
+    await _run_summary_loop_briefly(config, DaemonState(), store, after_restart)
+    store.close()
+    after_restart.broadcast.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_daily_summary_tolerates_corrupt_persisted_values(tmp_path, caplog):
+    config = make_config(summary_time=datetime.now(get_timezone()).strftime("%H:%M"), fun_mode=True)
+    store = SQLiteStateStore(tmp_path / "summary_corrupt.db")
+    store.upsert_snapshot("records", "{not json")
+    store.upsert_snapshot(LAST_SENT_KEY, "yesterday-ish")
+    store.commit()
+    channel = NotificationChannel("Beam")
+    channel.broadcast = AsyncMock()
+
+    await _run_summary_loop_briefly(config, DaemonState(), store, channel, rng=random.Random(1))
+
+    assert "Corrupt records snapshot" in caplog.text
+    assert channel.broadcast.call_count == 3
+    assert store.load_snapshot(LAST_SENT_KEY) == datetime.now(get_timezone()).date().isoformat()
     store.close()

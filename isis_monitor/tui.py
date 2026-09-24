@@ -1,8 +1,6 @@
-import asyncio
 import shutil
 from collections import deque
 from datetime import datetime, timezone
-from threading import RLock
 from typing import Deque, Tuple
 
 from rich.layout import Layout
@@ -77,12 +75,8 @@ def _render_sparkline(
     pad_len = width - len(tail)
 
     chars = sparkline_chars([v for v, _ in tail], width)
-    block_chars = chars[pad_len:] if pad_len > 0 else chars
-
-    if pad_len > 0:
-        text.append(" " * pad_len)
-
-    for char, (_, power) in zip(block_chars, tail):
+    text.append(chars[:pad_len])
+    for char, (_, power) in zip(chars[pad_len:], tail):
         text.append(char, style=_get_state_colour(power))
 
     return text
@@ -114,7 +108,6 @@ class RichTUI:
         self._logs: Deque[str] = deque(maxlen=self.logs_maxlen)
         self.last_update = datetime.now(timezone.utc)
         self.connection_state = "DISCONNECTED"
-        self._lock = RLock()
 
         self.layout = self._make_layout()
         self.live = Live(self.layout, refresh_per_second=self.refresh_per_second, screen=True)
@@ -153,82 +146,50 @@ class RichTUI:
         """Stop the live TUI display."""
         self.live.stop()
 
-    async def run_sampler(self, stop_event: asyncio.Event) -> None:
-        """Coroutine that snapshots the latest beam currents at a fixed interval.
-
-        This is intentionally decoupled from ``beam.py``'s update rate --
-        it wakes every ``sample_interval`` seconds and records whatever the
-        most-recently-received values are.  If beam.py has been silent the
-        last-known values are repeated, producing a flat line on the graph.
-        """
-        while not stop_event.is_set():
-            try:
-                await asyncio.wait_for(
-                    stop_event.wait(),
-                    timeout=self.sample_interval,
-                )
-                # stop_event fired → exit cleanly
-                break
-            except asyncio.TimeoutError:
-                pass  # Normal: interval elapsed, take a sample
-
-            now = datetime.now(timezone.utc)
-            with self._lock:
-                for beam, state in self.beam_states.items():
-                    self._history[beam].append((now, state["current"], state["power"]))
-                self._update_beam_graph()
-
     # ------------------------------------------------------------------
-    # Public update API  (called by beam.py / mcr.py threads)
+    # Public update API  (called from main.py's IPC event handler)
     # ------------------------------------------------------------------
 
     def update_beam_state(self, beam: str, current: float, power: str):
-        """Update the *latest* state of a specific beam target.
-
-        Does NOT write to the history deque -- that is handled exclusively by
-        :meth:`run_sampler` on its own fixed timer.
-        """
-        with self._lock:
-            if beam in self.beam_states:
-                self.beam_states[beam] = {"current": current, "power": power}
-            self.last_update = datetime.now(timezone.utc)
-            self._update_beam_panel()
+        """Update the latest state of a beam target (history comes from the
+        daemon's sample events, not from here)."""
+        if beam in self.beam_states:
+            self.beam_states[beam] = {"current": current, "power": power}
+        self.last_update = datetime.now(timezone.utc)
+        self._update_beam_panel()
 
     def update_mcr_news(self, news: str):
         """Update the MCR news panel."""
-        with self._lock:
-            self.mcr_news = news
-            self.last_update = datetime.now(timezone.utc)
-            self._update_mcr_panel()
+        self.mcr_news = news
+        self.last_update = datetime.now(timezone.utc)
+        self._update_mcr_panel()
 
     def update_log(self, message: str):
         """Append a log message to the log history."""
-        with self._lock:
-            self._logs.append(message)
-            self.last_update = datetime.now(timezone.utc)
-            self._update_logs_panel()
+        self._logs.append(message)
+        self.last_update = datetime.now(timezone.utc)
+        self._update_logs_panel()
 
     # ------------------------------------------------------------------
-    # Internal render helpers  (must be called while _lock is held)
+    # Internal render helpers
     # ------------------------------------------------------------------
 
     def _update_all(self):
-        """Force-refresh every panel. Note: this method may be called while the lock is already held, which is safe due to RLock."""
-        with self._lock:
-            self.layout["header"].update(
-                Panel(
-                    Text(
-                        f"ISIS Facility Monitor  [{self.connection_state}]",
-                        justify="center",
-                        style="bold cyan",
-                    ),
-                    style="blue",
-                )
+        """Force-refresh every panel."""
+        self.layout["header"].update(
+            Panel(
+                Text(
+                    f"ISIS Facility Monitor  [{self.connection_state}]",
+                    justify="center",
+                    style="bold cyan",
+                ),
+                style="blue",
             )
-            self._update_beam_panel()
-            self._update_beam_graph()
-            self._update_mcr_panel()
-            self._update_logs_panel()
+        )
+        self._update_beam_panel()
+        self._update_beam_graph()
+        self._update_mcr_panel()
+        self._update_logs_panel()
 
     def _update_beam_panel(self):
         """Render the current-snapshot table into beam_table."""
@@ -308,34 +269,30 @@ class RichTUI:
         )
 
     def add_history_sample(self, beam: str, timestamp: datetime, current: float, power: str) -> None:
-        with self._lock:
-            if beam in self._history:
-                self._history[beam].append((timestamp, current, power))
-            self.last_update = datetime.now(timezone.utc)
-            self._update_beam_graph()
+        if beam in self._history:
+            self._history[beam].append((timestamp, current, power))
+        self.last_update = datetime.now(timezone.utc)
+        self._update_beam_graph()
 
     def set_history_snapshot(self, history: dict[str, list[dict]]) -> None:
-        with self._lock:
-            for beam in self._history.keys():
-                self._history[beam].clear()
-            for beam, rows in history.items():
-                if beam not in self._history:
-                    continue
-                for row in rows:
-                    ts = datetime.fromisoformat(str(row["timestamp"]))
-                    self._history[beam].append(
-                        (ts, float(row["current"]), str(row["power"]))
-                    )
-            self._update_beam_graph()
+        for beam in self._history.keys():
+            self._history[beam].clear()
+        for beam, rows in history.items():
+            if beam not in self._history:
+                continue
+            for row in rows:
+                ts = datetime.fromisoformat(str(row["timestamp"]))
+                self._history[beam].append(
+                    (ts, float(row["current"]), str(row["power"]))
+                )
+        self._update_beam_graph()
 
     def update_connection_state(self, state: str) -> None:
-        with self._lock:
-            self.connection_state = state.upper()
-            self._update_all()
+        self.connection_state = state.upper()
+        self._update_all()
 
     def _update_logs_panel(self):
         # Only show the latest few logs that fit in the panel height (split size 8)
-        # NOTE: caller must hold self._lock (consistent with all other _update_* helpers)
         logs_to_show = list(self._logs)[-15:]
         log_text = "\n".join(logs_to_show)
         self.layout["logs"].update(

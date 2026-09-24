@@ -19,7 +19,7 @@ experiment_teams_url =
 # instrument_target = TS1
 
 [TUI]
-# Number of 1-minute samples to retain per beam target (default = 60 → 1-hour rolling window).
+# Number of 1-minute samples the TUI shows per beam target (default = 60 → 1-hour rolling window).
 # history_maxlen = 60
 # Interval in seconds between graph samples (default = 60).
 # sample_interval = 60
@@ -37,8 +37,6 @@ experiment_teams_url =
 # lock_file = /tmp/isis_beam_monitor.lock
 # Beam history retention window in days.
 # retention_days = 7
-# Heartbeat update interval in seconds.
-# heartbeat_interval = 30
 
 [TUI_CLIENT]
 # Socket path to connect to daemon (same host).

@@ -24,6 +24,9 @@ class Notifier(ABC):
     async def send(self, notification: Notification):
         pass
 
+    async def close(self) -> None:
+        """Release any resources held by the notifier."""
+
 
 class TeamsNotifier(Notifier):
     """Sends notifications to a Microsoft Teams Incoming Webhook."""
@@ -162,4 +165,12 @@ class NotificationChannel:
             return
         if not notification.channel:
             notification = replace(notification, channel=self.name)
-        await asyncio.gather(*(n.send(notification) for n in self.notifiers), return_exceptions=True)
+        results = await asyncio.gather(
+            *(n.send(notification) for n in self.notifiers), return_exceptions=True
+        )
+        for notifier, result in zip(self.notifiers, results):
+            if isinstance(result, Exception):
+                logger.error(f"{type(notifier).__name__} failed on channel '{self.name}': {result!r}")
+
+    async def close(self) -> None:
+        await asyncio.gather(*(n.close() for n in self.notifiers), return_exceptions=True)

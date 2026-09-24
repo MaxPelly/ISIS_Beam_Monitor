@@ -10,8 +10,7 @@ def test_storage_write_load_and_prune(tmp_path):
     now = datetime.now(timezone.utc)
     old = now - timedelta(days=8)
 
-    store.write_sample(old, "TS1", 1.0, "low")
-    store.write_sample(now, "TS1", 2.0, "medium")
+    store.write_samples([(old, "TS1", 1.0, "low"), (now, "TS1", 2.0, "medium")])
     store.commit()
 
     rows = store.load_recent_samples(now - timedelta(days=7))
@@ -27,27 +26,23 @@ def test_storage_write_load_and_prune(tmp_path):
     store.close()
 
 
-def test_storage_snapshot_and_health(tmp_path):
+def test_storage_snapshot_upsert_and_reopen(tmp_path):
     db = tmp_path / "state.db"
     store = SQLiteStateStore(db)
+    assert store.load_snapshot("daemon_state") is None
 
-    store.upsert_snapshot("daemon_state", '{"ok":true}')
-    store.upsert_health("beam", "connected")
+    store.upsert_snapshot("daemon_state", '{"v":1}')
+    store.upsert_snapshot("daemon_state", '{"v":2}')
     store.commit()
-
-    snap = store.load_snapshot("daemon_state")
-    assert snap == '{"ok":true}'
-
-    health = store.load_health()
-    assert len(health) == 1
-    assert health[0]["component"] == "beam"
-    assert health[0]["status"] == "connected"
     store.close()
+
+    reopened = SQLiteStateStore(db)
+    assert reopened.load_snapshot("daemon_state") == '{"v":2}'
+    reopened.close()
 
 
 def test_storage_sets_busy_timeout(tmp_path):
-    """A busy timeout lets a transient overlap between the persistence and
-    daily-summary loops retry instead of raising 'database is locked'."""
+    """An external reader holding a lock should delay writes, not fail them."""
     db = tmp_path / "state.db"
     store = SQLiteStateStore(db)
     (timeout_ms,) = store.conn.execute("PRAGMA busy_timeout").fetchone()

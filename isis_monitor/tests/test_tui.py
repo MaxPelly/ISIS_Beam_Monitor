@@ -1,7 +1,5 @@
-import asyncio
-import pytest
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
 from isis_monitor.tui import RichTUI, _render_sparkline, sparkline_chars
@@ -33,10 +31,6 @@ class TestInit:
         for target in ("TS1", "TS2", "Muons"):
             assert tui.beam_states[target]["current"] == 0.0
             assert tui.beam_states[target]["power"] == "unknown"
-
-    def test_lock_exists(self):
-        tui = make_tui()
-        assert tui._lock is not None
 
     def test_history_deques_initialised(self):
         tui = make_tui(history_maxlen=10)
@@ -122,7 +116,7 @@ class TestUpdateBeamState:
         mock_panel.assert_called_once()
 
     def test_does_not_write_to_history(self):
-        """History must only be written by run_sampler, not by update_beam_state."""
+        """History comes only from the daemon's sample events, not update_beam_state."""
         tui = make_tui()
         with patch.object(tui, "_update_beam_panel"):
             tui.update_beam_state("TS1", 99.0, "high")
@@ -144,7 +138,7 @@ class TestUpdateBeamState:
 class TestHistoryBuffer:
     def test_maxlen_eviction(self):
         tui = make_tui(history_maxlen=3)
-        # Manually inject samples into the deque (as run_sampler would)
+        # Manually inject samples into the deque
         for v in [1.0, 2.0, 3.0, 4.0]:
             tui._history["TS1"].append((datetime.now(), v, "high"))
         values = [v for _, v, _ in tui._history["TS1"]]
@@ -247,63 +241,42 @@ class TestRenderSparkline:
 
 
 # ---------------------------------------------------------------------------
-# run_sampler()
+# History fed from the daemon (add_history_sample / set_history_snapshot)
 # ---------------------------------------------------------------------------
 
-class TestRunSampler:
-    @pytest.mark.asyncio
-    async def test_sampler_appends_to_history(self):
-        """After one sample interval the deque gains one entry per target."""
-        tui = make_tui(sample_interval=0.05)   # 50 ms for fast test
-        tui.beam_states["TS1"]["current"] = 55.0
+class TestDaemonHistory:
+    def test_add_history_sample_appends_and_redraws(self):
+        tui = make_tui()
+        ts = datetime.now(timezone.utc)
+        with patch.object(tui, "_update_beam_graph") as graph:
+            tui.add_history_sample("TS1", ts, 12.5, "low")
+        assert list(tui._history["TS1"]) == [(ts, 12.5, "low")]
+        graph.assert_called_once()
 
-        stop_event = asyncio.Event()
-        task = asyncio.create_task(tui.run_sampler(stop_event))
+    def test_add_history_sample_ignores_unknown_beam(self):
+        tui = make_tui()
+        tui.add_history_sample("Nope", datetime.now(timezone.utc), 1.0, "low")
+        assert all(len(h) == 0 for h in tui._history.values())
 
-        await asyncio.sleep(0.12)   # allow ~2 intervals
-        stop_event.set()
-        await task
+    def test_set_history_snapshot_replaces_existing_history(self):
+        tui = make_tui(history_maxlen=2)
+        tui._history["TS2"].append((datetime.now(timezone.utc), 99.0, "high"))
+        ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        rows = [
+            {"timestamp": (ts.replace(minute=m)).isoformat(), "current": float(m), "power": "low"}
+            for m in range(3)
+        ]
+        tui.set_history_snapshot({"TS1": rows, "Unknown": rows})
+        assert [v for _, v, _ in tui._history["TS1"]] == [1.0, 2.0]  # maxlen keeps the newest
+        assert len(tui._history["TS2"]) == 0
+        assert tui._history["TS1"][0][0] == ts.replace(minute=1)
 
-        assert len(tui._history["TS1"]) >= 1
-        _, value, _ = tui._history["TS1"][-1]
-        assert value == 55.0
-
-    @pytest.mark.asyncio
-    async def test_sampler_flat_line_when_no_beam_update(self):
-        """Values are repeated when beam.py sends no updates (flat line)."""
-        tui = make_tui(sample_interval=0.05)
-        tui.beam_states["TS2"]["current"] = 77.5
-
-        stop_event = asyncio.Event()
-        task = asyncio.create_task(tui.run_sampler(stop_event))
-        await asyncio.sleep(0.18)
-        stop_event.set()
-        await task
-
-        values = [v for _, v, _ in tui._history["TS2"]]
-        assert len(values) >= 2
-        assert all(v == 77.5 for v in values)
-
-    @pytest.mark.asyncio
-    async def test_sampler_stops_on_event(self):
-        """run_sampler returns promptly when stop_event is set."""
-        tui = make_tui(sample_interval=10.0)   # long interval
-        stop_event = asyncio.Event()
-        task = asyncio.create_task(tui.run_sampler(stop_event))
-        await asyncio.sleep(0.05)
-        stop_event.set()
-        await asyncio.wait_for(task, timeout=1.0)   # must finish quickly
-
-    @pytest.mark.asyncio
-    async def test_sampler_respects_maxlen(self):
-        tui = make_tui(history_maxlen=3, sample_interval=0.05)
-        stop_event = asyncio.Event()
-        task = asyncio.create_task(tui.run_sampler(stop_event))
-        await asyncio.sleep(0.30)   # allow > 3 intervals
-        stop_event.set()
-        await task
-        assert len(tui._history["TS1"]) <= 3
-
+    def test_update_connection_state_uppercases_and_redraws_header(self):
+        tui = make_tui()
+        tui.update_connection_state("connected")
+        assert tui.connection_state == "CONNECTED"
+        header = tui.layout["header"].renderable
+        assert "CONNECTED" in header.renderable.plain
 
 # ---------------------------------------------------------------------------
 # _update_beam_panel() — structural checks via Rich renderable
@@ -381,47 +354,6 @@ class TestUpdateMcrNews:
             tui.update_mcr_news("News update")
         assert tui.last_update >= before
 
-
-# ---------------------------------------------------------------------------
-# Thread-safety (smoke test)
-# ---------------------------------------------------------------------------
-
-class TestThreadSafety:
-    def test_concurrent_updates_do_not_raise(self):
-        """Fire beam and MCR updates from multiple threads and verify no
-        exceptions are raised and the final state is self-consistent."""
-        import threading
-        tui = make_tui()
-        errors = []
-
-        def do_beam():
-            try:
-                for i in range(50):
-                    with patch.object(tui, "_update_beam_panel"):
-                        tui.update_beam_state("TS1", float(i), "high")
-            except Exception as e:
-                errors.append(e)
-
-        def do_mcr():
-            try:
-                for i in range(50):
-                    with patch.object(tui, "_update_mcr_panel"):
-                        tui.update_mcr_news(f"News {i}")
-            except Exception as e:
-                errors.append(e)
-
-        threads = [threading.Thread(target=do_beam),
-                   threading.Thread(target=do_mcr)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert errors == [], f"Exceptions in threads: {errors}"
-        assert isinstance(tui.beam_states["TS1"]["current"], float)
-        assert isinstance(tui.mcr_news, str)
-        # History must still be empty — only run_sampler writes to it
-        assert len(tui._history["TS1"]) == 0
 
 # ---------------------------------------------------------------------------
 # update_log() and _update_logs_panel()

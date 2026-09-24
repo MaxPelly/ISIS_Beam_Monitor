@@ -12,10 +12,8 @@ class SQLiteStateStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        # This connection is shared across asyncio.to_thread() calls from
-        # independently-scheduled loops (state persistence, daily summary);
-        # a busy timeout lets a transient overlap retry instead of raising
-        # "database is locked" immediately.
+        # Lets an external reader (e.g. the sqlite3 CLI) holding a lock delay
+        # our writes briefly instead of failing with "database is locked".
         self.conn.execute("PRAGMA busy_timeout = 5000")
         self._init_schema()
 
@@ -37,24 +35,12 @@ class SQLiteStateStore:
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-
-            CREATE TABLE IF NOT EXISTS health (
-                component TEXT PRIMARY KEY,
-                status TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
             """
         )
         self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
-
-    def write_sample(self, timestamp: datetime, target: str, current: float, power: str) -> None:
-        self.conn.execute(
-            "INSERT INTO beam_samples(timestamp, target, current, power) VALUES (?, ?, ?, ?)",
-            (timestamp.isoformat(), target, current, power),
-        )
 
     def write_samples(self, rows: Iterable[Tuple[datetime, str, float, str]]) -> None:
         self.conn.executemany(
@@ -96,21 +82,6 @@ class SQLiteStateStore:
         cur = self.conn.execute("SELECT value FROM snapshot WHERE key = ?", (key,))
         row = cur.fetchone()
         return row[0] if row else None
-
-    def upsert_health(self, component: str, status: str) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        self.conn.execute(
-            """
-            INSERT INTO health(component, status, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(component) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at
-            """,
-            (component, status, now),
-        )
-
-    def load_health(self) -> list[sqlite3.Row]:
-        cur = self.conn.execute("SELECT component, status FROM health")
-        return list(cur.fetchall())
 
     def commit(self) -> None:
         self.conn.commit()

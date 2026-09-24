@@ -1,14 +1,27 @@
+import argparse
+import asyncio
+import contextlib
+import json
 import logging
-import pytest
-from unittest.mock import MagicMock
 import os
 import signal
-import asyncio
-import fcntl
+import sqlite3
+import threading
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, call, patch
+
+import pytest
+
+import main
+from isis_monitor.config import AppConfig
 from isis_monitor.daemon_state import DaemonState
-from isis_monitor.tui import RichTUI
-from main import StateLogHandler, SingleInstanceLock, _apply_snapshot_to_tui
+from isis_monitor.ipc import IPCClient, IPCServer
+from isis_monitor.notifiers import DummyNotifier, TeamsNotifier
+from isis_monitor.storage import SQLiteStateStore
+from isis_monitor.tests.test_beam import FakePVWS, wait_until
+from main import SingleInstanceLock, StateLogHandler
 
 
 class TestStateLogHandler:
@@ -52,28 +65,23 @@ class TestStateLogHandler:
         handler.emit(record)
         mock_state.update_log.assert_called_once_with("WARNING - something went wrong")
 
-def test_single_instance_lock_success(tmp_path):
-    import os
-    from main import SingleInstanceLock
-    lock_file = tmp_path / "test.lock"
-    with SingleInstanceLock(lock_file) as lock:
-        assert lock_file.exists()
+def test_single_instance_lock_writes_pid_and_releases(tmp_path):
+    lock_file = tmp_path / "sub" / "test.lock"
+    with SingleInstanceLock(lock_file):
         assert lock_file.read_text().strip() == str(os.getpid())
-    assert not lock_file.exists()
+    # The file is kept (unlinking lock files is racy) but the lock is released.
+    assert lock_file.exists()
+    with SingleInstanceLock(lock_file):
+        pass
 
-def test_single_instance_lock_failure(tmp_path):
-    from main import SingleInstanceLock
+
+def test_single_instance_lock_rejects_second_holder(tmp_path):
     lock_file = tmp_path / "test.lock"
-    lock_file.write_text(str(os.getpid()))
-    blocker = lock_file.open("a+")
-    fcntl.flock(blocker.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
-        with pytest.raises(RuntimeError, match="Lock file already held|Lock held by"):
+    with SingleInstanceLock(lock_file):
+        with pytest.raises(RuntimeError, match="Lock file already held"):
             with SingleInstanceLock(lock_file):
                 pass
-    finally:
-        fcntl.flock(blocker.fileno(), fcntl.LOCK_UN)
-        blocker.close()
+
 
 def test_apply_snapshot_to_tui():
     from main import _apply_snapshot_to_tui
@@ -89,3 +97,486 @@ def test_apply_snapshot_to_tui():
     assert tui.mcr_news == "Test news"
     assert "TS1" in tui.beam_states
     assert tui.beam_states["TS1"]["current"] == 42.0
+
+
+# ---------------------------------------------------------------------------
+# StateLogHandler from other threads
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_state_log_handler_hands_off_records_from_other_threads():
+    """DaemonState is loop-confined; a record logged in a worker thread must be
+    applied on the loop thread, not in the worker."""
+    state = MagicMock()
+    applied_on = []
+    state.update_log.side_effect = lambda msg: applied_on.append((threading.get_ident(), msg))
+    handler = StateLogHandler(state, asyncio.get_running_loop())
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    record = logging.LogRecord("t", logging.INFO, "", 0, "from worker", (), None)
+
+    await asyncio.to_thread(handler.emit, record)
+    await wait_until(lambda: applied_on)
+    assert applied_on == [(threading.get_ident(), "from worker")]
+
+    handler.emit(logging.LogRecord("t", logging.INFO, "", 0, "on loop", (), None))
+    assert applied_on[-1] == (threading.get_ident(), "on loop")
+
+
+# ---------------------------------------------------------------------------
+# run_until_stopped / signals
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_run_until_stopped_cancels_on_stop():
+    cancelled = asyncio.Event()
+
+    async def forever():
+        try:
+            await asyncio.sleep(3600)
+        finally:
+            cancelled.set()
+
+    stop = asyncio.Event()
+    task = asyncio.create_task(main.run_until_stopped(forever(), stop))
+    await asyncio.sleep(0.01)
+    stop.set()
+    await asyncio.wait_for(task, 1)
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_run_until_stopped_propagates_errors_and_returns_on_completion():
+    async def boom():
+        raise ValueError("crashed")
+
+    async def quick():
+        return 1
+
+    with pytest.raises(ValueError, match="crashed"):
+        await main.run_until_stopped(boom(), asyncio.Event())
+    await asyncio.wait_for(main.run_until_stopped(quick(), asyncio.Event()), 1)
+
+
+@pytest.mark.asyncio
+async def test_run_until_stopped_propagates_outer_cancellation():
+    inner_cancelled = asyncio.Event()
+
+    async def forever():
+        try:
+            await asyncio.sleep(3600)
+        finally:
+            inner_cancelled.set()
+
+    task = asyncio.create_task(main.run_until_stopped(forever(), asyncio.Event()))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.wait_for(inner_cancelled.wait(), 1)
+
+
+@pytest.mark.asyncio
+async def test_install_signal_handlers_sets_stop_event():
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    main.install_signal_handlers(stop)
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.wait_for(stop.wait(), 1)
+    finally:
+        loop.remove_signal_handler(signal.SIGINT)
+        loop.remove_signal_handler(signal.SIGTERM)
+
+
+# ---------------------------------------------------------------------------
+# build_channels
+# ---------------------------------------------------------------------------
+
+def _config(tmp_path, **overrides) -> AppConfig:
+    return replace(
+        AppConfig(
+            mcr_news_url="http://127.0.0.1:9/news",
+            daemon_db_path=str(tmp_path / "state.db"),
+            daemon_socket_path=str(tmp_path / "d.sock"),
+            tui_socket_path=str(tmp_path / "d.sock"),
+            daemon_lock_file=str(tmp_path / "d.lock"),
+            log_file=str(tmp_path / "monitor.log"),
+            mcr_poll_interval=3600,
+        ),
+        **overrides,
+    )
+
+
+def test_build_channels_dummy_mode_uses_dummy_everywhere(tmp_path):
+    beam, exp, mcr = main.build_channels(_config(tmp_path, beam_teams_url="http://x"), dummy=True)
+    for ch in (beam, exp, mcr):
+        assert [type(n) for n in ch.notifiers] == [DummyNotifier]
+
+
+def test_build_channels_only_configured_webhooks(tmp_path):
+    beam, exp, mcr = main.build_channels(
+        _config(tmp_path, beam_teams_url="http://beam", news_teams_url="http://news", webhook_timeout=3),
+        dummy=False,
+    )
+    assert [n.webhook_url for n in beam.notifiers] == ["http://beam"]
+    assert beam.notifiers[0].timeout == 3
+    assert exp.notifiers == []
+    assert isinstance(mcr.notifiers[0], TeamsNotifier)
+
+
+# ---------------------------------------------------------------------------
+# state_persistence_loop
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_state_persistence_loop_samples_trims_and_persists(tmp_path):
+    config = _config(tmp_path, sample_interval=0.01, retention_days=1)
+    state = DaemonState()
+    state.update_beam_state("TS1", 150.0, "high")
+    stale = datetime.now(timezone.utc) - timedelta(days=2)
+    state.append_beam_sample("TS2", 1.0, "low", ts=stale)
+    store = SQLiteStateStore(tmp_path / "state.db")
+    store.write_samples([(stale, "TS2", 1.0, "low")])
+    store.commit()
+    stop = asyncio.Event()
+
+    task = asyncio.create_task(main.state_persistence_loop(config, state, store, stop))
+    await wait_until(lambda: len(state.history["TS1"]) >= 2)
+    stop.set()
+    await asyncio.wait_for(task, 1)
+
+    rows = store.load_recent_samples(stale - timedelta(days=1))
+    assert all(r["timestamp"] > stale.isoformat() for r in rows)  # stale row pruned
+    assert {r["target"] for r in rows} == {"TS1", "TS2", "Muons"}
+    assert all(ts > stale for ts, _, _ in state.history["TS2"])  # stale sample trimmed
+    assert json.loads(store.load_snapshot("daemon_state"))["beam_states"]["TS1"]["power"] == "high"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_state_persistence_loop_survives_database_errors(tmp_path, caplog):
+    config = _config(tmp_path, sample_interval=0.01)
+    store = MagicMock()
+    store.write_samples.side_effect = [sqlite3.OperationalError("disk I/O error"), None, None, None]
+    stop = asyncio.Event()
+
+    task = asyncio.create_task(main.state_persistence_loop(config, DaemonState(), store, stop))
+    await wait_until(lambda: store.commit.call_count >= 1)
+    stop.set()
+    await asyncio.wait_for(task, 1)
+    assert "Failed to persist daemon state" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# run_daemon end to end
+# ---------------------------------------------------------------------------
+
+def _persisted_samples(db):
+    store = SQLiteStateStore(db)
+    try:
+        return store.load_recent_samples(datetime.now(timezone.utc) - timedelta(hours=1))
+    finally:
+        store.close()
+
+
+DAEMON_ARGS = argparse.Namespace(dummy=True, notify_counts=130.0, notify_current=False)
+
+
+@contextlib.asynccontextmanager
+async def daemon(config):
+    stop = asyncio.Event()
+    with patch("main.install_signal_handlers"):
+        task = asyncio.create_task(main.run_daemon(config, DAEMON_ARGS, stop))
+        try:
+            await wait_until(lambda: os.path.exists(config.daemon_socket_path))
+            yield task, stop
+        finally:
+            stop.set()
+            await asyncio.wait_for(task, 5)
+
+
+@pytest.mark.asyncio
+async def test_run_daemon_serves_ipc_and_shuts_down_cleanly_with_tui_attached(tmp_path):
+    update = {"type": "update", "pv": AppConfig.ts1_beam_current_pv, "value": 150.0}
+    async with FakePVWS([update]) as pvws:
+        config = _config(tmp_path, isis_websocket_url=pvws.url, sample_interval=0.02)
+        root_handlers = list(logging.getLogger().handlers)
+        async with daemon(config) as (task, _stop):
+            client = IPCClient(config.daemon_socket_path)
+            await client.connect()
+            await client.request({"method": "subscribe_updates"})
+
+            async def ts1_power():
+                reply = await client.request({"method": "get_snapshot"})
+                return reply["snapshot"]["beam_states"]["TS1"]["power"]
+
+            for _ in range(200):
+                if await ts1_power() == "high":
+                    break
+                await asyncio.sleep(0.01)
+            assert await ts1_power() == "high"
+            await wait_until(lambda: _persisted_samples(tmp_path / "state.db"))
+
+            replies = {
+                name: (await client.request({"method": "command", "name": name}))["result"]
+                for name in ("force_reconnect_mcr", "bogus")
+            }
+            assert replies["force_reconnect_mcr"] == {"mcr": True}
+            assert replies["bogus"] == {"error": "unknown_command", "name": "bogus"}
+
+            shutdown = await client.request({"method": "command", "name": "shutdown"})
+            assert shutdown["result"] == {"shutdown": "ok"}
+            await asyncio.wait_for(task, 5)  # exits even though our client is still attached
+            await client.close()
+
+    assert not os.path.exists(config.daemon_socket_path)
+    assert logging.getLogger().handlers == root_handlers  # StateLogHandler removed
+    store = SQLiteStateStore(tmp_path / "state.db")
+    snap = json.loads(store.load_snapshot("daemon_state"))
+    store.close()
+    assert snap["health"]["daemon"] == "stopping"
+    assert snap["beam_states"]["TS1"]["power"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
+    ts = datetime.now(timezone.utc) - timedelta(minutes=5)
+    store = SQLiteStateStore(tmp_path / "state.db")
+    store.write_samples([(ts, "TS2", 7.0, "low")])
+    store.upsert_snapshot("daemon_state", json.dumps({"mcr_news": "old news", "total_runs_completed": 30}))
+    store.commit()
+    store.close()
+
+    config = _config(tmp_path)
+    async with daemon(config):
+        client = IPCClient(config.daemon_socket_path)
+        await client.connect()
+        snap = (await client.request({"method": "get_snapshot"}))["snapshot"]
+        history = (await client.request({"method": "get_history"}))["history"]
+        beam_only = (await client.request({"method": "command", "name": "force_reconnect_beam"}))["result"]
+        both = (await client.request({"method": "command", "name": "force_reconnect_all"}))["result"]
+        await client.close()
+
+    assert snap["mcr_news"] == "old news"
+    assert snap["total_runs_completed"] == 30
+    assert history["TS2"][0]["current"] == 7.0
+    assert set(beam_only) == {"beam"}
+    assert set(both) == {"beam", "mcr"}
+
+
+# ---------------------------------------------------------------------------
+# TUI client side
+# ---------------------------------------------------------------------------
+
+def test_apply_event_to_tui_dispatches_each_event_type():
+    tui = MagicMock()
+    ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for message in [
+        {"event": "beam", "payload": {"beam": "TS1", "current": 5, "power": "low"}},
+        {"event": "mcr", "payload": {"news": "hi"}},
+        {"event": "log", "payload": {"message": "line"}},
+        {"event": "sample", "payload": {"beam": "TS2", "timestamp": ts.isoformat(), "current": 1, "power": "off"}},
+        {"event": "sample", "payload": {"beam": "TS2"}},  # no timestamp: ignored
+        {"event": "health", "payload": {"component": "beam", "status": "connected"}},
+        {"event": "counts", "payload": {"counts": 1}},  # not displayed
+    ]:
+        main._apply_event_to_tui(tui, message)
+
+    tui.update_beam_state.assert_called_once_with("TS1", 5.0, "low")
+    tui.update_mcr_news.assert_called_once_with("hi")
+    tui.add_history_sample.assert_called_once_with("TS2", ts, 1.0, "off")
+    assert tui.update_log.call_args_list == [call("line"), call("Health: beam -> connected")]
+
+
+@pytest.mark.asyncio
+async def test_tui_connection_loop_syncs_streams_and_reconnects(tmp_path):
+    config = _config(tmp_path, history_maxlen=2, tui_reconnect_initial=0.01, tui_reconnect_max=0.02)
+    state = DaemonState()
+    state.update_mcr_news("hello")
+    for i in range(5):
+        state.append_beam_sample("TS1", float(i), "low")
+    state.update_log("old log")
+    tui = MagicMock()
+    clients = []
+
+    server = IPCServer(tmp_path / "d.sock", state, AsyncMock(return_value={}))
+    await server.start()
+    task = asyncio.create_task(main.tui_connection_loop(config, tui, clients.append))
+    try:
+        await wait_until(lambda: any(c is not None for c in clients))
+        tui.update_mcr_news.assert_called_with("hello")
+        history = tui.set_history_snapshot.call_args[0][0]
+        assert [r["current"] for r in history["TS1"]] == [3.0, 4.0]  # limited to history_maxlen
+        assert call("old log") in tui.update_log.call_args_list
+
+        state.update_beam_state("TS2", 40.0, "high")
+        await wait_until(lambda: call("TS2", 40.0, "high") in tui.update_beam_state.call_args_list)
+
+        await server.stop()  # daemon goes away: TUI shows it and retries
+        await wait_until(lambda: call("disconnected") in tui.update_connection_state.call_args_list)
+        assert clients[-1] is None
+
+        server = IPCServer(tmp_path / "d.sock", state, AsyncMock(return_value={}))
+        await server.start()
+        await wait_until(lambda: sum(c is not None for c in clients) >= 2)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_handle_tui_key():
+    stop, tui, tasks = asyncio.Event(), MagicMock(), set()
+
+    main.handle_tui_key("r", None, stop, tui, tasks)
+    tui.update_log.assert_called_with("Not connected to the daemon.")
+
+    client = MagicMock()
+    client.request = AsyncMock(return_value={"ok": True, "result": {"beam": True}})
+    main.handle_tui_key("R", client, stop, tui, tasks)
+    assert len(tasks) == 1
+    await asyncio.gather(*tasks)
+    await asyncio.sleep(0)
+    assert not tasks  # done tasks are discarded
+    client.request.assert_awaited_with({"method": "command", "name": "force_reconnect_all"})
+    tui.update_log.assert_called_with("Reconnect request result: {'beam': True}")
+
+    client.request = AsyncMock(side_effect=ConnectionError("gone"))
+    main.handle_tui_key("r", client, stop, tui, tasks)
+    await asyncio.gather(*tasks)
+    tui.update_log.assert_called_with("Reconnect request failed: gone")
+
+    main.handle_tui_key("x", client, stop, tui, tasks)
+    assert not stop.is_set()
+    main.handle_tui_key("Q", client, stop, tui, tasks)
+    assert stop.is_set()
+
+
+# ---------------------------------------------------------------------------
+# run_stop / CLI
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_run_stop_without_daemon_exits_1(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        await main.run_stop(_config(tmp_path))
+    assert exc.value.code == 1
+    assert "Could not connect" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result, expected", [
+    ({"shutdown": "ok"}, "stopping cleanly"),
+    ({"something": "else"}, "Daemon responded"),
+])
+async def test_run_stop_reports_daemon_reply(tmp_path, capsys, result, expected):
+    server = IPCServer(tmp_path / "d.sock", DaemonState(), AsyncMock(return_value=result))
+    await server.start()
+    try:
+        await main.run_stop(_config(tmp_path))
+    finally:
+        await server.stop()
+    assert expected in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_run_stop_error_reply_exits_1(tmp_path, capsys):
+    server = IPCServer(tmp_path / "d.sock", DaemonState(), AsyncMock(side_effect=RuntimeError("x")))
+    await server.start()
+    try:
+        with pytest.raises(SystemExit):
+            await main.run_stop(_config(tmp_path))
+    finally:
+        await server.stop()
+    assert "internal_error" in capsys.readouterr().out
+
+
+def test_parse_args_modes():
+    args = main.parse_args(["daemon", "c.ini", "-nc", "50", "--dummy"])
+    assert (args.mode, args.notify_counts, args.dummy, args.notify_current) == ("daemon", 50.0, True, None)
+    assert main.parse_args(["tui", "c.ini"]).mode == "tui"
+    assert main.parse_args(["stop", "c.ini"]).mode == "stop"
+    with pytest.raises(SystemExit):
+        main.parse_args([])
+
+
+def test_main_reports_config_error(tmp_path, capsys):
+    with patch.object(main.sys, "argv", ["main.py", "stop", str(tmp_path / "missing.ini")]):
+        with pytest.raises(SystemExit):
+            main.main()
+    assert "Configuration error" in capsys.readouterr().out
+
+
+def test_main_daemon_refuses_second_instance(tmp_path, capsys):
+    ini = tmp_path / "c.ini"
+    ini.write_text(f"[DATA]\nmcr_news_url = http://x\n[DAEMON]\nlock_file = {tmp_path / 'd.lock'}\n")
+    with SingleInstanceLock(tmp_path / "d.lock"), \
+         patch.object(main.sys, "argv", ["main.py", "daemon", str(ini)]), \
+         patch("main.configure_logging"), \
+         patch("main.run_daemon") as run_daemon:
+        with pytest.raises(SystemExit):
+            main.main()
+    run_daemon.assert_not_called()
+    assert "Lock file already held" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_run_tui_quits_on_q_and_restores_terminal(tmp_path):
+    """No daemon running: the TUI keeps retrying, and 'q' still quits cleanly."""
+    read_fd, write_fd = os.pipe()
+    stdin = os.fdopen(read_fd, "r")
+    tui = MagicMock()
+    try:
+        with patch.object(main.sys, "stdin", stdin), \
+             patch("main.termios") as termios_mock, \
+             patch("main.tty") as tty_mock, \
+             patch("main.RichTUI", return_value=tui), \
+             patch("main.install_signal_handlers"):
+            termios_mock.tcgetattr.return_value = "saved"
+            config = _config(tmp_path, tui_reconnect_initial=0.01, tui_reconnect_max=0.01)
+            task = asyncio.create_task(main.run_tui(config, asyncio.Event()))
+            await wait_until(lambda: call("disconnected") in tui.update_connection_state.call_args_list)
+            os.write(write_fd, b"q")
+            await asyncio.wait_for(task, 2)
+    finally:
+        os.close(write_fd)
+        stdin.close()
+
+    tty_mock.setcbreak.assert_called_once_with(read_fd)
+    termios_mock.tcsetattr.assert_called_once_with(read_fd, termios_mock.TCSADRAIN, "saved")
+    tui.start.assert_called_once()
+    tui.stop.assert_called_once()
+
+
+def test_configure_logging_resolves_relative_path_next_to_main(tmp_path):
+    with patch("main.RotatingFileHandler") as handler_cls, patch("main.logging.basicConfig") as basic:
+        main.configure_logging("rel.log", "debug", 10, 2)
+        main.configure_logging(str(tmp_path / "abs.log"), "nonsense", 10, 2)
+    paths = [c.args[0] for c in handler_cls.call_args_list]
+    assert paths == [Path(main.__file__).parent / "rel.log", tmp_path / "abs.log"]
+    assert [c.kwargs["level"] for c in basic.call_args_list] == [logging.DEBUG, logging.WARNING]
+
+
+def _ini(tmp_path) -> str:
+    ini = tmp_path / "c.ini"
+    ini.write_text(f"[DATA]\nmcr_news_url = http://x\n[DAEMON]\nlock_file = {tmp_path / 'd.lock'}\n")
+    return str(ini)
+
+
+@pytest.mark.parametrize("mode, target", [("daemon", "run_daemon"), ("tui", "run_tui"), ("stop", "run_stop")])
+def test_main_dispatches_each_mode(tmp_path, mode, target):
+    with patch.object(main.sys, "argv", ["main.py", mode, _ini(tmp_path)]), \
+         patch("main.configure_logging"), \
+         patch(f"main.{target}", new_callable=AsyncMock) as runner:
+        main.main()
+    runner.assert_awaited_once()
+
+
+def test_main_keyboard_interrupt_exits_quietly(tmp_path, capsys):
+    with patch.object(main.sys, "argv", ["main.py", "stop", _ini(tmp_path)]), \
+         patch("main.configure_logging"), \
+         patch("main.run_stop", new_callable=AsyncMock, side_effect=KeyboardInterrupt):
+        main.main()
+    assert "Stopping monitors" in capsys.readouterr().out

@@ -1,11 +1,12 @@
 import asyncio
-import json
 import base64
+import contextlib
+import json
 import logging
 import math
 import random
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
@@ -21,7 +22,7 @@ from isis_monitor.messages import (
     startup_status,
 )
 from isis_monitor.notifiers import NotificationChannel
-from isis_monitor.protocols import TUIProtocol, MonitorSinkProtocol
+from isis_monitor.protocols import MonitorSinkProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -49,18 +50,16 @@ def _fit_rate(samples: List[Tuple[datetime, float]]) -> float:
 
 @dataclass
 class BeamTarget:
-    """Describes one accelerator beam target and how to handle its updates."""
-    state_key: str      # Key into MonitorState.beams
-    channel_label: str  # Passed to the TUI and sink as the channel name
-    display_name: str   # Human-readable name used in log/notification messages
+    """Describes one accelerator beam target."""
+    state_key: str      # Key into MonitorState.beams; also the name used in messages
+    channel_label: str  # Passed to the sink and notifications as the channel name
+
 
 BEAM_TARGETS: List[BeamTarget] = [
-    BeamTarget("TS1",  "TS1",   "TS1"),
-    BeamTarget("TS2",  "TS2",   "TS2"),
-    BeamTarget("Muon", "Muons", "Muon"),
+    BeamTarget("TS1", "TS1"),
+    BeamTarget("TS2", "TS2"),
+    BeamTarget("Muon", "Muons"),
 ]
-
-BEAM_TARGET_BY_KEY: Dict[str, BeamTarget] = {bt.state_key: bt for bt in BEAM_TARGETS}
 
 # The channel labels ("TS1", "TS2", "Muons") that beam.py passes to the TUI
 # and sink — the single source of truth for the three target names used
@@ -76,28 +75,18 @@ class BeamState:
     since: Optional[datetime] = None  # when `power` last changed
 
 
+@dataclass
 class _PendingChange:
     """A not-yet-confirmed state change, awaiting the debounce window."""
-    def __init__(
-        self,
-        bt: BeamTarget,
-        prev_state: str,
-        prev_val: float,
-        prev_since: datetime,
-        new_state: str,
-        beam_val: float,
-        high_threshold: float,
-        started_at: datetime,
-    ):
-        self.bt = bt
-        self.prev_state = prev_state
-        self.prev_val = prev_val
-        self.prev_since = prev_since
-        self.new_state = new_state
-        self.beam_val = beam_val
-        self.high_threshold = high_threshold
-        self.started_at = started_at
-        self.task: Optional[asyncio.Task] = None
+    bt: BeamTarget
+    prev_state: str
+    prev_val: float
+    prev_since: datetime
+    new_state: str
+    beam_val: float
+    high_threshold: float
+    started_at: datetime
+    task: Optional[asyncio.Task] = None
 
 
 class BeamChangeAggregator:
@@ -148,10 +137,7 @@ class BeamChangeAggregator:
         self._pending[bt.state_key] = pending
 
     async def _flush_after_delay(self, state_key: str) -> None:
-        try:
-            await asyncio.sleep(self.debounce_seconds)
-        except asyncio.CancelledError:
-            return
+        await asyncio.sleep(self.debounce_seconds)
         await self._flush(state_key)
 
     async def _flush(self, state_key: str) -> None:
@@ -160,20 +146,20 @@ class BeamChangeAggregator:
             return
 
         if pending.new_state == pending.prev_state:
-            logger.debug(f"{pending.bt.display_name}: flapped back to {pending.prev_state}, dropping.")
+            logger.debug(f"{pending.bt.state_key}: flapped back to {pending.prev_state}, dropping.")
             return
 
         trip_note = ""
         if pending.new_state == "off":
             also_off = [
-                other.bt.display_name
+                other.bt.state_key
                 for key, other in self._pending.items()
                 if key != state_key
                 and other.new_state == "off"
                 and abs((other.started_at - pending.started_at).total_seconds()) <= self.debounce_seconds
             ]
             also_off += [
-                BEAM_TARGET_BY_KEY[key].display_name
+                key
                 for key, off_time in self._recent_offs.items()
                 if key != state_key
                 and abs((off_time - pending.started_at).total_seconds()) <= self.debounce_seconds
@@ -184,7 +170,7 @@ class BeamChangeAggregator:
             self._recent_offs[state_key] = pending.started_at
 
         notification = beam_change(
-            pending.bt.display_name,
+            pending.bt.state_key,
             pending.prev_state,
             pending.new_state,
             pending.beam_val,
@@ -231,7 +217,6 @@ class BeamMonitor:
         beam_channel: NotificationChannel,
         experiment_channel: NotificationChannel,
         counts_target: float,
-        tui: Optional[TUIProtocol] = None,
         sink: Optional[MonitorSinkProtocol] = None,
         debounce_seconds: float = 20.0,
         rng: Optional[random.Random] = None,
@@ -243,7 +228,6 @@ class BeamMonitor:
         self.beam_channel = beam_channel
         self.experiment_channel = experiment_channel
         self.counts_target = counts_target
-        self.tui = tui
         self.sink = sink
         self.state = MonitorState()
         self._rng = rng or random.Random()
@@ -252,6 +236,7 @@ class BeamMonitor:
         )
         self._force_reconnect = asyncio.Event()
         self._current_ws = None
+        self._close_task: Optional[asyncio.Task] = None
 
         # Build dynamic lookups from Config
         self.pv_to_beam: Dict[str, BeamTarget] = {
@@ -266,19 +251,14 @@ class BeamMonitor:
             "Muon": config.muon_boundaries,
         }
 
-    def _safe_float(self, value: Any) -> float:
-        """Safely converts value to float. Returns 0.0 on NaN, None, or error."""
-        if value is None:
-            return 0.0
+    @staticmethod
+    def _safe_float(value: Any) -> float:
+        """Converts value to float, mapping NaN, None and junk to 0.0."""
         try:
-            if isinstance(value, str) and value.strip().lower() == "nan":
-                return 0.0
             val = float(value)
-            if math.isnan(val):
-                return 0.0
-            return val
         except (ValueError, TypeError):
             return 0.0
+        return 0.0 if math.isnan(val) else val
 
     def _get_power_label(self, beam_uA: float, beam: str) -> str:
         boundaries = self.beam_boundaries[beam]
@@ -303,7 +283,7 @@ class BeamMonitor:
                 # First reading for this target — always send immediately, never debounced.
                 rng = self._rng if self.config.fun_mode else None
                 notification = startup_status(
-                    bt.display_name, new_state, beam_val, time_now,
+                    bt.state_key, new_state, beam_val, time_now,
                     rng=rng, channel=bt.channel_label,
                 )
                 logger.info(f"Startup: {notification.to_plain_text()}")
@@ -378,8 +358,10 @@ class BeamMonitor:
                 ):
                     return
                 try:
-                    parts = text_val.split("/")
-                    float(parts[0])  # live beam current — discarded; tracked directly elsewhere
+                    # "live_current/total_collected"; live current is already
+                    # tracked via the beam-current PVs, so only the total is used.
+                    parts = str(text_val).split("/")
+                    float(parts[0])  # validates the format; value unused
                     total_collected = float(parts[1])
                 except (IndexError, ValueError) as e:
                     logger.warning(f"Failed to parse counts from '{text_val}': {e}")
@@ -409,11 +391,6 @@ class BeamMonitor:
                     logger.info(f"Target Reached: {notification.to_plain_text()}")
                     await self.experiment_channel.broadcast(notification)
                     self.state.end_notified = True
-
-        if self.tui:
-            for bt in BEAM_TARGETS:
-                state = self.state.beams[bt.state_key]
-                self.tui.update_beam_state(bt.channel_label, state.current, state.power)
 
     def _prune_collected_samples(self, now: datetime) -> None:
         cutoff = now - COUNTS_SAMPLE_WINDOW
@@ -474,138 +451,86 @@ class BeamMonitor:
             self.state.collection_stalled_since = None
             self.state.stall_warned = False
 
-    async def _collection_check_loop(self, stop_event: Optional[asyncio.Event] = None) -> None:
-        while stop_event is None or not stop_event.is_set():
-            if stop_event is not None:
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=COLLECTION_CHECK_INTERVAL)
-                except asyncio.TimeoutError:
-                    pass
-                if stop_event.is_set():
-                    break
-            else:
-                await asyncio.sleep(COLLECTION_CHECK_INTERVAL)
-
+    async def _collection_check_loop(self) -> None:
+        while True:
+            await asyncio.sleep(COLLECTION_CHECK_INTERVAL)
             await self._check_collection_progress(datetime.now(timezone.utc))
-        logger.warning("Collection check loop quit")
-
-    async def _close_ws_quietly(self, ws) -> None:
-        try:
-            await ws.close()
-        except Exception as e:
-            logger.warning(f"Error closing WebSocket during reconnect: {e}")
 
     def request_reconnect(self) -> bool:
         if self._force_reconnect.is_set():
             return False
         self._force_reconnect.set()
-        ws = self._current_ws
-        if ws is not None:
-            asyncio.create_task(self._close_ws_quietly(ws))
+        if self._current_ws is not None:
+            # Closing ends the `async for` in _run_loop, which then reconnects.
+            self._close_task = asyncio.create_task(self._close_ws_quietly(self._current_ws))
         return True
 
-    async def run(self, stop_event: Optional[asyncio.Event] = None):
+    @staticmethod
+    async def _close_ws_quietly(ws) -> None:
+        try:
+            await ws.close()
+        except Exception as e:
+            logger.warning(f"Error closing WebSocket during reconnect: {e}")
+
+    async def run(self) -> None:
+        """Monitor until cancelled."""
         if not self.data_url:
             logger.warning("No WebSocket URL provided. Beam monitor will not run.")
             return
         try:
-            await asyncio.gather(
-                self._run_loop(stop_event),
-                self._collection_check_loop(stop_event),
-            )
+            await asyncio.gather(self._run_loop(), self._collection_check_loop())
         finally:
             self.change_aggregator.cancel_all()
 
-    async def _run_loop(self, stop_event: Optional[asyncio.Event] = None):
+    def _set_health(self, status: str) -> None:
+        if self.sink:
+            self.sink.update_health("beam", status)
+
+    async def _handle_message(self, raw: Any) -> None:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.debug("Failed to decode WS message: %s", exc)
+            return
+        if not (isinstance(data, dict) and data.get("type") == "update"):
+            return
+        # One malformed PV value must not tear down the connection.
+        try:
+            await self._handle_update(data)
+        except Exception:
+            logger.exception(f"Failed to handle PV update: {data!r:.200}")
+
+    async def _run_loop(self) -> None:
         subscribe_msg = json.dumps({
             "type": "subscribe",
             "pvs": list(self.pv_to_beam.keys()) + [self.counts_pv, self.run_name_pv],
         })
-
         logger.info(f"Beam Monitor started. Connecting to {self.data_url}...")
+        interval = self.config.beam_reconnect_interval
 
-        while stop_event is None or not stop_event.is_set():
+        while True:
             try:
                 async with websockets.connect(self.data_url) as ws:
-                    logger.info("WebSocket connected.")
-                    if self.sink:
-                        self.sink.update_health("beam", "connected")
-                    await ws.send(subscribe_msg)
                     self._current_ws = ws
-
-                    while True:
-                        recv_task = asyncio.create_task(ws.recv())
-                        reconnect_task = asyncio.create_task(self._force_reconnect.wait())
-
-                        tasks = {recv_task, reconnect_task}
-                        stop_task = None
-
-                        if stop_event is not None:
-                            stop_task = asyncio.create_task(stop_event.wait())
-                            tasks.add(stop_task)
-
-                        try:
-                            done, pending = await asyncio.wait(
-                                tasks,
-                                return_when=asyncio.FIRST_COMPLETED,
-                            )
-
-                            # Prioritize shutdown/reconnection if multiple tasks finish together.
-                            if stop_task is not None and stop_task in done:
-                                logger.warning("Deep Beam Loop Quit")
-                                return
-
-                            if reconnect_task in done:
-                                self._force_reconnect.clear()
-                                logger.info("Beam reconnect requested by operator.")
-
-                                if self.sink:
-                                    self.sink.update_health("beam", "reconnecting")
-
-                                break
-
-                            # recv_task completed.
-                            raw_msg = recv_task.result()
-
-                        except websockets.ConnectionClosedOK:
-                            logger.warning("Websocket Closed OK")
-                            break
-
-                        finally:
-                            # Never leave recv/event tasks running into the next iteration.
-                            for task in tasks:
-                                if not task.done():
-                                    task.cancel()
-
-                            await asyncio.gather(*tasks, return_exceptions=True)
-
-                        try:
-                            data = json.loads(raw_msg)
-                            if data.get("type") == "update":
-                                await self._handle_update(data)
-                        except json.JSONDecodeError as exc:
-                            logger.debug("Failed to decode WS message: %s", exc)
-
-            except asyncio.CancelledError:
-                logger.warning(f"Beam Loop Cancelled")
-                return
-            except (websockets.exceptions.ConnectionClosed, OSError):
-                if stop_event and stop_event.is_set():
-                    logger.warning(f"Beam Loop Quit")
-                    return
-                if self.sink:
-                    self.sink.update_health("beam", "disconnected")
-                logger.warning(f"WebSocket Connection lost. Reconnecting in {self.config.beam_reconnect_interval}s...")
-                await asyncio.sleep(self.config.beam_reconnect_interval)
-            except Exception as e:
-                if stop_event and stop_event.is_set():
-                    logger.warning(f"Error Beam Loop Quit")
-                    return
-                if self.sink:
-                    self.sink.update_health("beam", "error")
-                logger.error(f"Unexpected error in BeamMonitor: {e}. Reconnecting in {self.config.beam_reconnect_interval}s...")
-                await asyncio.sleep(self.config.beam_reconnect_interval)
+                    logger.info("WebSocket connected.")
+                    self._set_health("connected")
+                    await ws.send(subscribe_msg)
+                    async for raw in ws:
+                        await self._handle_message(raw)
+                logger.warning("WebSocket closed.")
+            except (websockets.ConnectionClosed, OSError) as exc:
+                logger.warning(f"WebSocket connection lost: {exc}")
+            except Exception as exc:
+                logger.error(f"Unexpected error in BeamMonitor: {exc!r}")
             finally:
                 self._current_ws = None
-        logger.warning(f"Fallthrough Beam Loop Quit")
-        return
+
+            if not self._force_reconnect.is_set():
+                self._set_health("disconnected")
+                logger.warning(f"Reconnecting in {interval}s...")
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(self._force_reconnect.wait(), timeout=interval)
+            if self._force_reconnect.is_set():
+                self._force_reconnect.clear()
+                logger.info("Beam reconnect requested by operator.")
+                self._set_health("reconnecting")

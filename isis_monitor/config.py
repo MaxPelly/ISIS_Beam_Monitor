@@ -1,227 +1,142 @@
 import configparser
-from dataclasses import dataclass, field
-from pathlib import Path
 import logging
+from dataclasses import dataclass, field, fields
+from pathlib import Path
 
 logger = logging.getLogger("isis_monitor.config")
+
+# Must match the state_key values of isis_monitor.beam.BEAM_TARGETS — not
+# imported directly to avoid a circular import (beam.py imports config.py).
+_INSTRUMENT_TARGETS = ("TS1", "TS2", "Muon")
 
 
 class ConfigError(Exception):
     """Raised when the configuration file is missing or contains invalid values."""
-    pass
+
+
+def _ini(section: str, default, key: str = ""):
+    """A config field read from `[section] key` (key defaults to the field name)."""
+    return field(default=default, metadata={"section": section, "key": key})
 
 
 @dataclass
 class AppConfig:
-    # DATA
-    mcr_news_url: str
-    isis_websocket_url: str
+    mcr_news_url: str = _ini("DATA", "")
+    isis_websocket_url: str = _ini("DATA", "")
+    mcr_page_url: str = _ini("DATA", "")  # optional "Open MCR news" button link
 
-    # WEBHOOKS
-    news_teams_url: str
-    beam_teams_url: str
-    experiment_teams_url: str
+    # Blank webhook URL disables that channel's Teams notifier.
+    news_teams_url: str = _ini("WEBHOOKS", "")
+    beam_teams_url: str = _ini("WEBHOOKS", "")
+    experiment_teams_url: str = _ini("WEBHOOKS", "")
 
-    mcr_page_url: str = ""  # [DATA] optional "Open MCR news" button link
+    # Instrument-specific; override in [PVS] for non-PEARL instruments
+    counts_pv: str = _ini("PVS", "IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE")
+    run_name_pv: str = _ini("PVS", "IN:PEARL:DAE:WDTITLE")
+    ts1_beam_current_pv: str = _ini("PVS", "AC:TS1:BEAM:CURR")
+    ts2_beam_current_pv: str = _ini("PVS", "AC:TS2:BEAM:CURR")
+    muon_beam_current_pv: str = _ini("PVS", "AC:MUON:BEAM:CURR")
+    instrument_target: str = _ini("PVS", "TS1")  # which beam target's state to report in run cards
 
-    # PVS — instrument-specific; override in [PVS] for non-PEARL instruments
-    counts_pv: str = "IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE"
-    run_name_pv: str = "IN:PEARL:DAE:WDTITLE"
-    ts1_beam_current_pv: str = "AC:TS1:BEAM:CURR"
-    ts2_beam_current_pv: str = "AC:TS2:BEAM:CURR"
-    muon_beam_current_pv: str = "AC:MUON:BEAM:CURR"
-    instrument_target: str = "TS1"  # which beam target's state to report in run cards
+    # off / low / medium cutoffs in uA
+    ts1_boundaries: tuple = _ini("BEAM_BOUNDARIES", (0.0, 50.0, 140.0))
+    ts2_boundaries: tuple = _ini("BEAM_BOUNDARIES", (0.0, 10.0, 30.0))
+    muon_boundaries: tuple = _ini("BEAM_BOUNDARIES", (0.0, 2.0, 5.0))
 
-    # BEAM_BOUNDARIES (tuples of cutoff thresholds)
-    ts1_boundaries: tuple = (0.0, 50.0, 140.0)
-    ts2_boundaries: tuple = (0.0, 10.0, 30.0)
-    muon_boundaries: tuple = (0.0, 2.0, 5.0)
+    mcr_poll_interval: float = _ini("TIMEOUTS_INTERVALS", 60.0)
+    beam_reconnect_interval: float = _ini("TIMEOUTS_INTERVALS", 5.0)
+    webhook_timeout: float = _ini("TIMEOUTS_INTERVALS", 10.0)
 
-    # TIMEOUTS_INTERVALS
-    mcr_poll_interval: float = 30.0
-    beam_reconnect_interval: float = 5.0
-    webhook_timeout: float = 10.0
+    history_maxlen: int = _ini("TUI", 60)  # samples shown per beam target
+    sample_interval: float = _ini("TUI", 60.0)  # seconds between history samples
+    refresh_per_second: int = _ini("TUI", 4)
+    logs_maxlen: int = _ini("TUI", 50)
 
-    # TUI settings
-    history_maxlen: int = 60    # samples retained per beam target
-    sample_interval: float = 60.0  # seconds between graph samples
-    refresh_per_second: int = 4
-    logs_maxlen: int = 50
+    daemon_db_path: str = _ini("DAEMON", "beam_monitor.db", "db_path")
+    daemon_socket_path: str = _ini("DAEMON", "/tmp/isis_beam_monitor.sock", "socket_path")
+    daemon_lock_file: str = _ini("DAEMON", "/tmp/isis_beam_monitor.lock", "lock_file")
+    retention_days: int = _ini("DAEMON", 7)
 
-    # DAEMON
-    daemon_db_path: str = "beam_monitor.db"
-    daemon_socket_path: str = "/tmp/isis_beam_monitor.sock"
-    daemon_lock_file: str = "/tmp/isis_beam_monitor.lock"
-    retention_days: int = 7
-    heartbeat_interval: float = 30.0
+    # tui_socket_path falls back to daemon_socket_path when unset
+    tui_socket_path: str = _ini("TUI_CLIENT", "/tmp/isis_beam_monitor.sock", "socket_path")
+    tui_reconnect_initial: float = _ini("TUI_CLIENT", 1.0, "reconnect_initial")
+    tui_reconnect_max: float = _ini("TUI_CLIENT", 15.0, "reconnect_max")
 
-    # TUI_CLIENT
-    tui_socket_path: str = "/tmp/isis_beam_monitor.sock"
-    tui_reconnect_initial: float = 1.0
-    tui_reconnect_max: float = 15.0
+    log_file: str = _ini("LOGGING", "monitor.log")
+    log_level: str = _ini("LOGGING", "INFO")
+    log_max_bytes: int = _ini("LOGGING", 5_000_000)
+    log_backup_count: int = _ini("LOGGING", 3)
 
-    # LOGGING
-    log_file: str = "monitor.log"
-    log_level: str = "INFO"
-    log_max_bytes: int = 5_000_000
-    log_backup_count: int = 3
+    fun_mode: bool = _ini("NOTIFICATIONS", False)
+    notifications_timezone: str = _ini("NOTIFICATIONS", "Europe/London", "timezone")
+    debounce_seconds: float = _ini("NOTIFICATIONS", 20.0)
+    stall_minutes: float = _ini("NOTIFICATIONS", 15.0)
+    summary_time: str = _ini("NOTIFICATIONS", "08:00")  # local HH:MM the daily summary is sent at
 
-    # NOTIFICATIONS
-    fun_mode: bool = False
-    notifications_timezone: str = "Europe/London"
-    debounce_seconds: float = 20.0
-    stall_minutes: float = 15.0
-    summary_time: str = "08:00"  # UK-local HH:MM the daily summary is sent at
+
+def _parse_boundaries(raw: str) -> tuple:
+    result = tuple(float(x.strip()) for x in raw.split(","))
+    if len(result) != 3:
+        raise ValueError(f"must have exactly 3 comma-separated values, got {len(result)}")
+    return result
+
+
+def _read_value(parser: configparser.ConfigParser, section: str, key: str, kind: type):
+    if kind is str:
+        return parser.get(section, key)
+    if kind is tuple:
+        return _parse_boundaries(parser.get(section, key))
+    return {int: parser.getint, float: parser.getfloat, bool: parser.getboolean}[kind](section, key)
+
+
+def _validate(config: AppConfig, config_path: Path) -> None:
+    if not config.mcr_news_url:
+        raise ConfigError(f"[DATA] mcr_news_url is required. Please edit config file: {config_path}")
+    if not config.isis_websocket_url:
+        logger.warning(
+            "isis_websocket_url is empty — BeamMonitor will not run. "
+            "Please set [DATA] isis_websocket_url in your config file."
+        )
+    if config.instrument_target not in _INSTRUMENT_TARGETS:
+        raise ConfigError(
+            f"[PVS] instrument_target must be one of {', '.join(_INSTRUMENT_TARGETS)}, "
+            f"got '{config.instrument_target}'"
+        )
+    try:
+        hour, minute = (int(x) for x in config.summary_time.split(":"))
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError
+    except ValueError:
+        raise ConfigError(f"[NOTIFICATIONS] summary_time must be 'HH:MM', got '{config.summary_time}'")
+    if config.retention_days <= 0:
+        raise ConfigError("[DAEMON] retention_days must be a positive integer")
+    if config.tui_reconnect_initial <= 0 or config.tui_reconnect_max <= 0:
+        raise ConfigError("[TUI_CLIENT] reconnect values must be positive")
+    if config.tui_reconnect_initial > config.tui_reconnect_max:
+        raise ConfigError("[TUI_CLIENT] reconnect_initial cannot be greater than reconnect_max")
 
 
 def load_config(config_path: Path) -> AppConfig:
     if not config_path.exists():
         raise ConfigError(f"Config file not found: {config_path}")
 
-    config = configparser.ConfigParser(interpolation=None)
-    config.read(config_path)
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(config_path)
 
-    # DATA
-    mcr_news_url = config.get("DATA", "mcr_news_url", fallback="")
-    if not mcr_news_url:
-        raise ConfigError(
-            f"[DATA] mcr_news_url is required. Please edit config file: {config_path}"
-        )
-
-    isis_websocket_url = config.get("DATA", "isis_websocket_url", fallback="")
-    if not isis_websocket_url:
-        logger.warning(
-            "isis_websocket_url is empty — BeamMonitor will not run. "
-            "Please set [DATA] isis_websocket_url in your config file."
-        )
-    mcr_page_url = config.get("DATA", "mcr_page_url", fallback="")
-
-    # WEBHOOKS
-    news_teams_url = config.get("WEBHOOKS", "news_teams_url", fallback="")
-    beam_teams_url = config.get("WEBHOOKS", "beam_teams_url", fallback="")
-    experiment_teams_url = config.get("WEBHOOKS", "experiment_teams_url", fallback="")
-
-    # PVS (optional — defaults to PEARL instrument values)
-    counts_pv = config.get("PVS", "counts_pv", fallback="IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE")
-    run_name_pv = config.get("PVS", "run_name_pv", fallback="IN:PEARL:DAE:WDTITLE")
-    ts1_beam_current_pv = config.get("PVS", "ts1_beam_current_pv", fallback="AC:TS1:BEAM:CURR")
-    ts2_beam_current_pv = config.get("PVS", "ts2_beam_current_pv", fallback="AC:TS2:BEAM:CURR")
-    muon_beam_current_pv = config.get("PVS", "muon_beam_current_pv", fallback="AC:MUON:BEAM:CURR")
-    instrument_target = config.get("PVS", "instrument_target", fallback="TS1")
-    # Must match the state_key values of isis_monitor.beam.BEAM_TARGETS — not
-    # imported directly to avoid a circular import (beam.py imports config.py).
-    if instrument_target not in ("TS1", "TS2", "Muon"):
-        raise ConfigError(
-            f"[PVS] instrument_target must be one of TS1, TS2, Muon, got '{instrument_target}'"
-        )
-    # BEAM_BOUNDARIES
-    def _parse_tuple(section, key, default):
-        raw = config.get(section, key, fallback="")
-        if not raw:
-            return default
+    values = {}
+    for f in fields(AppConfig):
+        section, key = f.metadata["section"], f.metadata["key"] or f.name
+        if not parser.has_option(section, key):
+            continue
+        # A blank non-string value (e.g. "retention_days =") means "use the default".
+        if f.type is not str and not parser.get(section, key).strip():
+            continue
         try:
-            result = tuple(float(x.strip()) for x in raw.split(","))
-        except ValueError as e:
-            raise ConfigError(f"Invalid comma-separated floats for {key}: {e}")
-        if len(result) != 3:
-            raise ConfigError(
-                f"{key} must have exactly 3 comma-separated values, got {len(result)}"
-            )
-        return result
-            
-    ts1_boundaries = _parse_tuple("BEAM_BOUNDARIES", "ts1_boundaries", (0.0, 50.0, 140.0))
-    ts2_boundaries = _parse_tuple("BEAM_BOUNDARIES", "ts2_boundaries", (0.0, 10.0, 30.0))
-    muon_boundaries = _parse_tuple("BEAM_BOUNDARIES", "muon_boundaries", (0.0, 2.0, 5.0))
+            values[f.name] = _read_value(parser, section, key, f.type)
+        except ValueError as exc:
+            raise ConfigError(f"[{section}] {key}: {exc}") from exc
 
-    # TIMEOUTS_INTERVALS
-    mcr_poll_interval = config.getfloat("TIMEOUTS_INTERVALS", "mcr_poll_interval", fallback=60.0)
-    beam_reconnect_interval = config.getfloat("TIMEOUTS_INTERVALS", "beam_reconnect_interval", fallback=5.0)
-    webhook_timeout = config.getfloat("TIMEOUTS_INTERVALS", "webhook_timeout", fallback=10.0)
-
-    # LOGGING
-    log_file = config.get("LOGGING", "log_file", fallback="monitor.log")
-    log_level = config.get("LOGGING", "log_level", fallback="INFO")
-    log_max_bytes = config.getint("LOGGING", "log_max_bytes", fallback=5_000_000)
-    log_backup_count = config.getint("LOGGING", "log_backup_count", fallback=3)
-
-    # NOTIFICATIONS (optional section)
-    fun_mode = config.getboolean("NOTIFICATIONS", "fun_mode", fallback=False)
-    notifications_timezone = config.get("NOTIFICATIONS", "timezone", fallback="Europe/London")
-    debounce_seconds = config.getfloat("NOTIFICATIONS", "debounce_seconds", fallback=20.0)
-    stall_minutes = config.getfloat("NOTIFICATIONS", "stall_minutes", fallback=15.0)
-    summary_time = config.get("NOTIFICATIONS", "summary_time", fallback="08:00")
-    try:
-        hour_str, minute_str = summary_time.split(":")
-        if not (0 <= int(hour_str) <= 23 and 0 <= int(minute_str) <= 59):
-            raise ValueError
-    except ValueError:
-        raise ConfigError(f"[NOTIFICATIONS] summary_time must be 'HH:MM', got '{summary_time}'")
-
-    # TUI (fully optional section)
-    try:
-        history_maxlen = config.getint("TUI", "history_maxlen", fallback=60)
-        sample_interval = config.getfloat("TUI", "sample_interval", fallback=60.0)
-        refresh_per_second = config.getint("TUI", "refresh_per_second", fallback=4)
-        logs_maxlen = config.getint("TUI", "logs_maxlen", fallback=50)
-    except (ValueError, configparser.Error) as exc:
-        raise ConfigError(f"[TUI] section contains invalid values: {exc}") from exc
-
-    # DAEMON (optional section)
-    daemon_db_path = config.get("DAEMON", "db_path", fallback="beam_monitor.db")
-    daemon_socket_path = config.get("DAEMON", "socket_path", fallback="/tmp/isis_beam_monitor.sock")
-    daemon_lock_file = config.get("DAEMON", "lock_file", fallback="/tmp/isis_beam_monitor.lock")
-    retention_days = config.getint("DAEMON", "retention_days", fallback=7)
-    heartbeat_interval = config.getfloat("DAEMON", "heartbeat_interval", fallback=30.0)
-    if retention_days <= 0:
-        raise ConfigError("[DAEMON] retention_days must be a positive integer")
-
-    # TUI_CLIENT (optional section)
-    tui_socket_path = config.get("TUI_CLIENT", "socket_path", fallback=daemon_socket_path)
-    tui_reconnect_initial = config.getfloat("TUI_CLIENT", "reconnect_initial", fallback=1.0)
-    tui_reconnect_max = config.getfloat("TUI_CLIENT", "reconnect_max", fallback=15.0)
-    if tui_reconnect_initial <= 0 or tui_reconnect_max <= 0:
-        raise ConfigError("[TUI_CLIENT] reconnect values must be positive")
-    if tui_reconnect_initial > tui_reconnect_max:
-        raise ConfigError("[TUI_CLIENT] reconnect_initial cannot be greater than reconnect_max")
-
-    return AppConfig(
-        mcr_news_url=mcr_news_url,
-        isis_websocket_url=isis_websocket_url,
-        mcr_page_url=mcr_page_url,
-        news_teams_url=news_teams_url,
-        beam_teams_url=beam_teams_url,
-        experiment_teams_url=experiment_teams_url,
-        counts_pv=counts_pv,
-        run_name_pv=run_name_pv,
-        ts1_beam_current_pv=ts1_beam_current_pv,
-        ts2_beam_current_pv=ts2_beam_current_pv,
-        muon_beam_current_pv=muon_beam_current_pv,
-        instrument_target=instrument_target,
-        ts1_boundaries=ts1_boundaries,
-        ts2_boundaries=ts2_boundaries,
-        muon_boundaries=muon_boundaries,
-        mcr_poll_interval=mcr_poll_interval,
-        beam_reconnect_interval=beam_reconnect_interval,
-        webhook_timeout=webhook_timeout,
-        history_maxlen=history_maxlen,
-        sample_interval=sample_interval,
-        refresh_per_second=refresh_per_second,
-        logs_maxlen=logs_maxlen,
-        daemon_db_path=daemon_db_path,
-        daemon_socket_path=daemon_socket_path,
-        daemon_lock_file=daemon_lock_file,
-        retention_days=retention_days,
-        heartbeat_interval=heartbeat_interval,
-        tui_socket_path=tui_socket_path,
-        tui_reconnect_initial=tui_reconnect_initial,
-        tui_reconnect_max=tui_reconnect_max,
-        log_file=log_file,
-        log_level=log_level,
-        log_max_bytes=log_max_bytes,
-        log_backup_count=log_backup_count,
-        fun_mode=fun_mode,
-        notifications_timezone=notifications_timezone,
-        debounce_seconds=debounce_seconds,
-        stall_minutes=stall_minutes,
-        summary_time=summary_time,
-    )
+    values.setdefault("tui_socket_path", values.get("daemon_socket_path", AppConfig.tui_socket_path))
+    config = AppConfig(**values)
+    _validate(config, config_path)
+    return config

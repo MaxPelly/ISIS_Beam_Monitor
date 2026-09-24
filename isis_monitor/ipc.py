@@ -1,15 +1,31 @@
+"""Newline-delimited JSON over a UNIX socket between the daemon and its clients.
+
+Every reply carries "ok" and "version". Once a client sends
+`subscribe_updates`, pushed events (which carry an "event" key) are
+interleaved with replies on the same connection.
+"""
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import json
+import logging
 import os
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional, Set
 
-from isis_monitor.daemon_state import DaemonEvent, DaemonState
+from isis_monitor.daemon_state import DaemonState
+
+logger = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = 1
+# Requests are tiny; replies (the history snapshot) can be large.
+SERVER_LINE_LIMIT = 64 * 1024
+CLIENT_LINE_LIMIT = 16 * 1024 * 1024
+
+
+def _encode(payload: dict) -> bytes:
+    return (json.dumps(payload) + "\n").encode()
 
 
 class IPCServer:
@@ -23,162 +39,127 @@ class IPCServer:
         self.state = state
         self.command_handler = command_handler
         self.server: Optional[asyncio.base_events.Server] = None
+        self._clients: Set[asyncio.StreamWriter] = set()
+        self._closing = False
 
     async def start(self) -> None:
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
-        if self.socket_path.exists():
-            self.socket_path.unlink()
-        self.server = await asyncio.start_unix_server(self._handle_client, path=str(self.socket_path), limit=1024*1024*10)
+        self.socket_path.unlink(missing_ok=True)
+        self.server = await asyncio.start_unix_server(
+            self._handle_client, path=str(self.socket_path), limit=SERVER_LINE_LIMIT
+        )
         os.chmod(self.socket_path, 0o600)
 
     async def stop(self) -> None:
+        self._closing = True
         if self.server is not None:
             self.server.close()
+            # Since Python 3.12.1, wait_closed() also waits for every open
+            # connection, so a still-attached TUI would block shutdown forever.
+            for writer in list(self._clients):
+                writer.close()
             await self.server.wait_closed()
-        if self.socket_path.exists():
-            self.socket_path.unlink()
+        self.socket_path.unlink(missing_ok=True)
 
-    async def _send(self, writer: asyncio.StreamWriter, payload: dict) -> None:
-        writer.write((json.dumps(payload) + "\n").encode())
-        await writer.drain()
+    async def _reply(self, req: dict) -> dict:
+        method = req.get("method")
+        if method == "get_snapshot":
+            return {"snapshot": self.state.snapshot()}
+        if method == "get_history":
+            limit = req.get("limit")
+            return {"history": self.state.get_history_snapshot(limit if isinstance(limit, int) else None)}
+        if method == "get_logs":
+            return {"logs": self.state.get_logs_snapshot()}
+        if method == "command":
+            return {"result": await self.command_handler(str(req.get("name", "")))}
+        return {"ok": False, "error": "unknown_method"}
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        queue = None
-        subscription_task = None
+        if self._closing:  # accepted just before stop(), but not yet tracked by it
+            writer.close()
+            return
+        self._clients.add(writer)
+        queue: Optional[asyncio.Queue] = None
+        forwarder: Optional[asyncio.Task] = None
         try:
-            while True:
-                line = await reader.readline()
-                if not line:
-                    break
+            while line := await reader.readline():
                 try:
-                    req = json.loads(line.decode())
+                    req = json.loads(line)
                 except json.JSONDecodeError:
-                    await self._send(
-                        writer,
-                        {"ok": False, "error": "invalid_json", "version": PROTOCOL_VERSION},
-                    )
-                    continue
-
-                method = req.get("method")
-                if method == "get_snapshot":
-                    await self._send(
-                        writer,
-                        {
-                            "ok": True,
-                            "version": PROTOCOL_VERSION,
-                            "snapshot": self.state.snapshot(),
-                        },
-                    )
-                elif method == "get_history":
-                    await self._send(
-                        writer,
-                        {
-                            "ok": True,
-                            "version": PROTOCOL_VERSION,
-                            "history": self.state.get_history_snapshot(),
-                        },
-                    )
-                elif method == "get_logs":
-                    await self._send(
-                        writer,
-                        {
-                            "ok": True,
-                            "version": PROTOCOL_VERSION,
-                            "logs": self.state.get_logs_snapshot(),
-                        },
-                    )
-                elif method == "subscribe_updates":
-                    if queue is None:
-                        queue = self.state.subscribe()
-                        subscription_task = asyncio.create_task(
-                            self._forward_events(queue, writer)
-                        )
-                    await self._send(
-                        writer,
-                        {"ok": True, "version": PROTOCOL_VERSION, "subscribed": True},
-                    )
-                elif method == "command":
-                    command = str(req.get("name", ""))
-                    result = await self.command_handler(command)
-                    await self._send(
-                        writer,
-                        {"ok": True, "version": PROTOCOL_VERSION, "result": result},
-                    )
+                    reply = {"ok": False, "error": "invalid_json"}
                 else:
-                    await self._send(
-                        writer,
-                        {
-                            "ok": False,
-                            "version": PROTOCOL_VERSION,
-                            "error": "unknown_method",
-                        },
-                    )
+                    if not isinstance(req, dict):
+                        reply = {"ok": False, "error": "invalid_request"}
+                    elif req.get("method") == "subscribe_updates":
+                        if queue is None:
+                            queue = self.state.subscribe()
+                            forwarder = asyncio.create_task(self._forward_events(queue, writer))
+                        reply = {"subscribed": True}
+                    else:
+                        try:
+                            reply = await self._reply(req)
+                        except Exception as exc:
+                            logger.exception(f"IPC request {req.get('method')!r} failed")
+                            reply = {"ok": False, "error": "internal_error", "detail": str(exc)}
+                writer.write(_encode({"ok": True, **reply, "version": PROTOCOL_VERSION}))
+                await writer.drain()
+        except (ConnectionError, ValueError):
+            pass  # client went away, or sent a line over SERVER_LINE_LIMIT
         finally:
-            if subscription_task:
-                subscription_task.cancel()
+            self._clients.discard(writer)
+            if forwarder is not None:
+                forwarder.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
-                    await subscription_task
+                    await forwarder
             if queue is not None:
                 self.state.unsubscribe(queue)
             writer.close()
-            await writer.wait_closed()
+            with contextlib.suppress(ConnectionError):
+                await writer.wait_closed()
 
     async def _forward_events(self, queue: asyncio.Queue, writer: asyncio.StreamWriter) -> None:
-        while True:
-            ev: DaemonEvent = await queue.get()
-            payload = {
-                "ok": True,
-                "version": PROTOCOL_VERSION,
-                "event": ev.event,
-                "payload": ev.payload,
-            }
-            try:
-                await self._send(writer, payload)
-            except (ConnectionError, BrokenPipeError, OSError):
-                break
+        try:
+            while (ev := await queue.get()) is not None:
+                writer.write(_encode({
+                    "ok": True, "version": PROTOCOL_VERSION, "event": ev.event, "payload": ev.payload,
+                }))
+                await writer.drain()
+        except ConnectionError:
+            pass
+        # Dropped for falling behind, or the peer is gone: closing the
+        # connection makes the client reconnect and resync from a snapshot.
+        writer.close()
 
 
 class IPCClient:
-    """A single socket carries both request/response replies and, once
-    subscribed, pushed events — both `request()` and `iter_events()` used to
-    call `reader.readline()` directly, so using both concurrently (e.g. a
-    command sent while the TUI's event-stream loop is running) raised
-    "readline() called while another coroutine is already waiting for
-    incoming data". A single background task now owns the reader and
-    demultiplexes each line into either the pending-response queue or the
-    event queue, so callers never touch the reader themselves.
+    """One background task owns the reader and routes each line to either
+    the reply queue or the event queue, so request() and iter_events() can
+    be used concurrently without two coroutines calling readline() at once.
     """
+
     def __init__(self, socket_path: Path):
         self.socket_path = Path(socket_path)
-        self.reader: Optional[asyncio.StreamReader] = None
         self.writer: Optional[asyncio.StreamWriter] = None
-        self._responses: "Optional[asyncio.Queue]" = None
-        self._events: "Optional[asyncio.Queue]" = None
+        self._responses: asyncio.Queue = asyncio.Queue()
+        self._events: asyncio.Queue = asyncio.Queue()
         self._read_task: Optional[asyncio.Task] = None
 
     async def connect(self) -> None:
-        self.reader, self.writer = await asyncio.open_unix_connection(str(self.socket_path), limit=1024*1024*10)
-        self._responses = asyncio.Queue()
-        self._events = asyncio.Queue()
-        self._read_task = asyncio.create_task(self._read_loop())
+        reader, self.writer = await asyncio.open_unix_connection(
+            str(self.socket_path), limit=CLIENT_LINE_LIMIT
+        )
+        self._read_task = asyncio.create_task(self._read_loop(reader))
 
-    async def _read_loop(self) -> None:
-        """The sole reader of `self.reader`; routes each line by content."""
+    async def _read_loop(self, reader: asyncio.StreamReader) -> None:
+        end: object = ConnectionError("Daemon closed IPC connection")
         try:
-            while True:
-                line = await self.reader.readline()
-                if not line:
-                    await self._responses.put(None)
-                    await self._events.put(None)
-                    return
-                msg = json.loads(line.decode())
-                if "event" in msg:
-                    await self._events.put(msg)
-                else:
-                    await self._responses.put(msg)
+            while line := await reader.readline():
+                msg = json.loads(line)
+                (self._events if "event" in msg else self._responses).put_nowait(msg)
         except Exception as exc:
-            await self._responses.put(exc)
-            await self._events.put(exc)
+            end = exc
+        self._responses.put_nowait(end)
+        self._events.put_nowait(end)
 
     async def close(self) -> None:
         if self._read_task is not None:
@@ -186,33 +167,29 @@ class IPCClient:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._read_task
             self._read_task = None
-        if self.writer:
+        if self.writer is not None:
             self.writer.close()
-            await self.writer.wait_closed()
-        self.reader = None
-        self.writer = None
-        self._responses = None
-        self._events = None
+            with contextlib.suppress(ConnectionError):
+                await self.writer.wait_closed()
+            self.writer = None
 
-    async def request(self, payload: dict) -> dict:
-        if not self.writer or not self.reader or self._responses is None:
-            raise RuntimeError("IPC client is not connected")
-        self.writer.write((json.dumps(payload) + "\n").encode())
-        await self.writer.drain()
-        msg = await self._responses.get()
-        if msg is None:
-            raise ConnectionError("Daemon closed IPC connection")
-        if isinstance(msg, Exception):
+    @staticmethod
+    async def _take(queue: asyncio.Queue):
+        msg = await queue.get()
+        if isinstance(msg, BaseException):
+            queue.put_nowait(msg)  # so later callers fail too, instead of hanging
             raise msg
         return msg
 
+    async def request(self, payload: dict) -> dict:
+        if self.writer is None:
+            raise RuntimeError("IPC client is not connected")
+        self.writer.write(_encode(payload))
+        await self.writer.drain()
+        return await self._take(self._responses)
+
     async def iter_events(self):
-        if not self.reader or self._events is None:
+        if self.writer is None:
             raise RuntimeError("IPC client is not connected")
         while True:
-            msg = await self._events.get()
-            if msg is None:
-                raise ConnectionError("Daemon closed IPC stream")
-            if isinstance(msg, Exception):
-                raise msg
-            yield msg
+            yield await self._take(self._events)

@@ -19,15 +19,15 @@ The system uses a two-tier architecture (daemon and client) communicating via lo
 
 ### `isis_monitor/beam.py`
 The core logic for accelerator beam monitoring.
--   **`BeamMonitor`**: Manages the WebSocket connection and state. It dispatches updates based on PV names, and runs a second periodic loop (`_collection_check_loop`, gathered alongside the websocket loop in `run()`) that checks for stalled data collection roughly every 60s.
--   **`BeamTarget`**: Configuration for specific beam targets (TS1, TS2, Muons).
+-   **`BeamMonitor`**: Manages the WebSocket connection and state. `run()` works until cancelled: it gathers the websocket loop (`_run_loop`, a plain `async for` over messages that reconnects after `beam_reconnect_interval`, or immediately when `request_reconnect()` closes the socket) with `_collection_check_loop`, which checks for stalled data collection roughly every 60s. A malformed PV update is logged and skipped rather than dropping the connection.
+-   **`BeamTarget`**: `state_key` ("TS1"/"TS2"/"Muon", also used in messages) and `channel_label` ("TS1"/"TS2"/"Muons", used by the sink, TUI and notification routing).
 -   **State Management**: Tracks current beam currents and power levels (off, low, medium, high) to detect transitions, plus per-target `since` timestamps and a 15-minute deque of `(time, counts_collected)` samples used for the run-finishing card's rate/ETA. `counts_pv`'s text is `live_current/total_collected` — only the total is tracked; live current is discarded since beam current is already tracked directly via the TS1/TS2/Muon PVs.
 -   **`BeamChangeAggregator`**: Debounces raw beam-state transitions for `debounce_seconds` before turning them into notifications, dropping ones that flap back to their original state, and noting when other targets went off in the same window (the three targets share one accelerator, so correlated trips are the common case, not an edge case).
 -   **Run-count milestones**: `DaemonState.record_run_completed()` is called whenever a run completes; `beam.py` checks the returned all-time total against `RUN_MILESTONE_INTERVAL` (25) to fire a milestone card when `fun_mode` is on.
 
 ### `isis_monitor/mcr.py`
 Handles MCR news polling.
--   **`MCRNewsMonitor`**: Polls the news feed at a configurable interval. It uses regex to parse the feed and detect changes in the latest news entry.
+-   **`MCRNewsMonitor`**: Polls the news feed at a configurable interval until cancelled. It uses regex to parse the feed and detect changes in the latest news entry; `request_reconnect()` wakes the poll wait early.
 -   **Adaptive Polling**: Implements exponential backoff on fetch failures to reduce load on the source during outages.
 -   **Severity classification**: `messages.mcr_news()` classifies each update as GOOD/ATTENTION/WARNING/INFO by keyword (see `messages.py` below) and can attach an "Open MCR news" link via `[DATA] mcr_page_url`.
 
@@ -46,32 +46,31 @@ Optional personality content shown only when `fun_mode = true`.
 ### `isis_monitor/summary.py`
 Daily per-target uptime summaries and milestone tracking.
 -   **`compute_summary(history, since)`**: a pure function over `DaemonState.history`'s 1-minute samples, returning each target's uptime %, trip count, longest continuous on-streak and a sparkline (via `tui.sparkline_chars`).
--   **`daily_summary_loop`**: runs inside `run_daemon`, checks the configured local time (`[NOTIFICATIONS] summary_time`) once a minute, and sends one card per target when it's reached (deduped to once per day). When `fun_mode` is on, it also tracks each target's longest-ever on-streak in the SQLite snapshot under the key `"records"` and flags a new record.
+-   **`daily_summary_loop`**: runs inside `run_daemon`, checks the configured local time (`[NOTIFICATIONS] summary_time`) once a minute, and sends one card per target when it's reached (deduped to once per day via the `"summary_last_sent"` snapshot key, so a restart doesn't resend). When `fun_mode` is on, it also tracks each target's longest-ever on-streak in the SQLite snapshot under the key `"records"` and flags a new record.
 
 ### `isis_monitor/notifiers.py`
 A decoupled notification system.
 -   **`Notifier` (Abstract)**: Base class for notification implementations; `send()` takes a `Notification`.
 -   **`TeamsNotifier`**: Renders a `Notification` as a Microsoft Teams Adaptive Card (severity-coloured header, body text, italic flavour line, `FactSet`, optional `Action.OpenUrl` button) and posts it via webhook.
--   **`NotificationChannel`**: Groups multiple notifiers for a specific category of updates (e.g., "Beam Updates").
+-   **`NotificationChannel`**: Groups multiple notifiers for a specific category of updates (e.g., "Beam Updates"). A failing notifier is logged without affecting the others; `close()` releases every notifier's resources.
 
 ### `isis_monitor/tui.py`
 The live terminal interface.
--   **`RichTUI`**: Coordinates the layout and rendering. It uses a `threading.RLock` to safely handle updates from multiple async tasks.
+-   **`RichTUI`**: Coordinates the layout and rendering. All updates arrive on the event loop from the IPC event stream (`main.tui_connection_loop`); history comes from the daemon's `sample` events.
 -   **`sparkline_chars(values, width)`**: a pure, uncoloured sparkline renderer shared with `summary.py`; `_render_sparkline()` wraps it to add per-block colour for the TUI.
--   **Sampler**: An independent coroutine that snapshots state at fixed intervals to ensure consistent graph pacing.
 
 ### `isis_monitor/daemon_state.py` & `storage.py`
 The core state management and persistence layer.
--   **`DaemonState`**: A thread-safe, lock-protected singleton holding current beam statuses, historical data buffers, MCR news, health checks, and run-completion tracking (`record_run_completed()`, `count_runs_completed_since()`; `total_runs_completed` persists across restarts via the snapshot, the rolling 24h `run_completions` deque does not). It manages a pub/sub queue system for IPC clients.
--   **`SQLiteStateStore`**: Handles synchronizing the daemon's state to disk (including the `"records"` snapshot key used for uptime milestones), enabling crash recovery and historical lookups.
+-   **`DaemonState`**: An event-loop-confined object (not thread-safe; `main.StateLogHandler` hands off log records from other threads via `call_soon_threadsafe`) holding current beam statuses, historical data buffers, MCR news, health checks, and run-completion tracking (`record_run_completed()`, `count_runs_completed_since()`; `total_runs_completed` persists across restarts via the snapshot, the rolling 24h `run_completions` deque does not). It manages a pub/sub queue system for IPC clients: a subscriber whose queue fills is dropped and sent a `None` sentinel, so its connection closes and the client resyncs. `update_health()` only publishes actual status changes.
+-   **`SQLiteStateStore`**: Persists 1-minute beam samples and JSON snapshots (`"daemon_state"`, `"records"`, `"summary_last_sent"`), enabling crash recovery and historical lookups. `main.state_persistence_loop` writes to it every `sample_interval`, logging and retrying on `sqlite3.Error` rather than crashing the daemon.
 
 ### `isis_monitor/ipc.py`
 Manages local communication between the daemon and clients.
--   **`IPCServer`**: A UNIX domain socket server that handles requests (like fetching a state snapshot or history) and multiplexes event streams to subscribed clients using a newline-delimited JSON protocol.
--   **`IPCClient`**: A resilient async client that manages connection state and reconnection backoff.
+-   **`IPCServer`**: A UNIX domain socket server speaking newline-delimited JSON. Methods: `get_snapshot`, `get_history` (optional `limit` = newest N samples per beam), `get_logs`, `subscribe_updates` and `command`. Malformed or failing requests get an `ok: false` reply without dropping the connection. `stop()` closes attached clients itself, since Python 3.12's `Server.wait_closed()` otherwise waits for them forever.
+-   **`IPCClient`**: One background reader task routes replies and pushed events to separate queues, so `request()` and `iter_events()` can run concurrently. Once the connection ends, every later call raises instead of hanging. Reconnection backoff lives in `main.tui_connection_loop`.
 
 ### `isis_monitor/protocols.py`
-Defines runtime-checkable protocols (e.g., `MonitorSinkProtocol`, `TUIProtocol`) allowing monitors to interact with the daemon or the TUI interchangeably during testing.
+Defines `MonitorSinkProtocol`, the interface monitors use to report into `DaemonState` (or a mock in tests).
 
 ---
 
@@ -107,9 +106,11 @@ In `RichTUI._make_layout()`, sections are defined using `split_column` and `spli
 
 ### Technical Debt & Improvements
 -   **Error Handling**: Enhance WebSocket reconnection logic with more granular error classification (e.g., distinguishing network errors from authentication issues).
--   **Testing**: Expand unit tests for `tui.py` and `main.py`. Currently, core logic is well-tested, but UI rendering and orchestration could benefit from more coverage.
 -   **Performance**: If the SQLite persistence overhead grows, consider migrating `storage.py` to use `aiosqlite` for native async database access instead of `asyncio.to_thread`.
 -   **Finishing-card ETA**: `beam.py` only builds the "run about to finish" card once counts have *already* crossed `counts_target`, so the ETA fact is always ~0s at that point — accurate, but not predictive. Making it fire in advance (with a real ETA) would mean changing that trigger condition; see `NOTIFICATIONS_PLAN.md` Phase 5 for the full note.
+-   **No webhook retry**: `TeamsNotifier.send()` makes a single attempt and only logs failures, so a Teams rate-limit (HTTP 429), a 5xx response or a network blip drops that notification for good. A small retry with backoff for 429/5xx/connection errors (honouring `Retry-After`) would fix this. Keep it bounded so a Teams outage can't pile up sends.
+-   **Notifications block beam processing**: `BeamMonitor._handle_update()` awaits `broadcast()` for run-started/finishing/milestone/stall and startup cards inside the WebSocket message loop, so a slow webhook (up to `webhook_timeout`, 10s by default) holds up every PV update behind it. Debounced beam-change cards already send from their own tasks. A fix would move sending off the loop, e.g. one queue plus a worker task per `NotificationChannel`, which also keeps notifications in order.
+-   **Stale beam state recorded after a restart**: `run_daemon` restores `beam_states` from the last snapshot, and `state_persistence_loop` samples them every minute. If the WebSocket can't connect at startup (or drops later), the last known values keep being written as fresh samples, which inflates the daily summary's uptime figures. One option is to set beams to `"unknown"` when the beam connection is lost or not yet established (the summary already treats `"unknown"` as off), or to skip sampling while beam health isn't `"connected"`.
 -   **24h run count after a restart**: `DaemonState.run_completions` (used for the daily summary's "runs in last 24h" count) is in-memory only, so a daemon restart loses that rolling window until it refills naturally. `total_runs_completed` (used for the 25-run milestone) does persist. See `NOTIFICATIONS_PLAN.md` Phase 6.
 
 ### Potential Features
@@ -120,4 +121,5 @@ In `RichTUI._make_layout()`, sections are defined using `split_column` and `spli
 ### Best Practices for Extension
 1.  **Follow the Protocols**: Always use `isis_monitor.protocols` when adding new sinks to keep monitors decoupled.
 2.  **Async/Await**: Ensure all blocking I/O (like networking or DB access) is handled asynchronously (or wrapped in `to_thread`) to prevent freezing the TUI or Daemon.
-3.  **State Safety**: Always use `self._lock` when modifying `DaemonState` or `RichTUI` state to prevent race conditions.
+3.  **State Safety**: `DaemonState` and `RichTUI` are only touched from the event-loop thread. Code running in a worker thread must hand results back to the loop rather than mutating them directly.
+4.  **Shutdown**: Monitors run until cancelled (`main.run_until_stopped`), so they need no stop-event plumbing; loops that write to SQLite instead watch `stop_event` so an in-flight write finishes before the store is closed.

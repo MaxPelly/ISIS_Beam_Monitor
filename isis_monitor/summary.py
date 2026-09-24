@@ -21,6 +21,8 @@ SUMMARY_CHECK_INTERVAL = 60.0
 SUMMARY_WINDOW = timedelta(hours=24)
 SPARKLINE_WIDTH = 60
 _OFF_LIKE = ("off", "unknown")
+# Persisted so a daemon restart later the same day doesn't resend the summary.
+LAST_SENT_KEY = "summary_last_sent"
 
 
 @dataclass
@@ -85,8 +87,18 @@ def _load_records(store: SQLiteStateStore) -> Dict[str, float]:
         return {}
 
 
-def _save_records(store: SQLiteStateStore, records: Dict[str, float]) -> None:
-    store.upsert_snapshot("records", json.dumps(records))
+def _load_last_sent(store: SQLiteStateStore) -> Optional[date]:
+    raw = store.load_snapshot(LAST_SENT_KEY)
+    try:
+        return date.fromisoformat(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def _save_progress(store: SQLiteStateStore, sent: date, records: Dict[str, float]) -> None:
+    store.upsert_snapshot(LAST_SENT_KEY, sent.isoformat())
+    if records:
+        store.upsert_snapshot("records", json.dumps(records))
     store.commit()
 
 
@@ -100,7 +112,7 @@ async def daily_summary_loop(
 ) -> None:
     """Send one summary card per target at config.summary_time (local time), once a day."""
     records = await asyncio.to_thread(_load_records, store)
-    last_sent_date: Optional[date] = None
+    last_sent_date = await asyncio.to_thread(_load_last_sent, store)
     target_hour, target_minute = (int(x) for x in config.summary_time.split(":"))
 
     while not stop_event.is_set():
@@ -147,7 +159,6 @@ async def daily_summary_loop(
             )
             await beam_channel.broadcast(notification)
 
-        if config.fun_mode and records:
-            await asyncio.to_thread(_save_records, store, records)
+        await asyncio.to_thread(_save_progress, store, last_sent_date, records)
 
     logger.warning("Daily summary loop quit")
