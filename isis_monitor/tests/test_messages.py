@@ -114,6 +114,15 @@ def test_beam_change_builder_going_up_is_good():
         ("Was low", "for 3h 12m"),
     ]
     assert n.timestamp == dt
+    assert n.channel == ""
+
+
+def test_beam_change_builder_sets_explicit_channel():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = beam_change(
+        "TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), dt, channel="TS1",
+    )
+    assert n.channel == "TS1"
 
 
 def test_beam_change_builder_dropping_to_low_is_warning():
@@ -189,11 +198,12 @@ def test_beam_change_builder_includes_trip_note():
 
 def test_startup_status_builder():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = startup_status("TS1", "high", 150.0, dt)
+    n = startup_status("TS1", "high", 150.0, dt, channel="TS1")
     assert n.title == "Monitor online: TS1 is high"
     assert n.emoji == "🛰️"
     assert "150.000 uA" in n.text
     assert n.flavour == ""
+    assert n.channel == "TS1"
 
 
 def test_startup_status_builder_picks_flavour_when_rng_given():
@@ -346,6 +356,7 @@ def test_daily_summary_builder():
         ("Sparkline", "▁▂▃▄▅"),
         ("Runs in last 24h", "7"),
     ]
+    assert n.channel == "TS1"  # display_name doubles as the channel label here
 
 
 def test_daily_summary_builder_low_uptime_is_info():

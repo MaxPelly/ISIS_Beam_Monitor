@@ -93,6 +93,7 @@ async def test_handle_update_beam_startup_sends_immediately(mock_config, mock_ch
     beam_channel.broadcast.assert_called_once()
     notification = beam_channel.broadcast.call_args[0][0]
     assert notification.title == "Monitor online: TS1 is low"
+    assert notification.channel == "TS1"
 
 
 @pytest.mark.asyncio
@@ -129,6 +130,7 @@ async def test_handle_update_beam_change_is_debounced(mock_config, mock_channels
     beam_channel.broadcast.assert_called_once()
     notification = beam_channel.broadcast.call_args[0][0]
     assert notification.title == "TS1 ⬆️ low → medium"
+    assert notification.channel == "TS1"
 
 
 @pytest.mark.asyncio

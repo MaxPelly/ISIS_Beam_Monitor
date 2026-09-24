@@ -108,6 +108,8 @@ async def test_daily_summary_loop_sends_one_card_per_target_at_summary_time(tmp_
     # One card per target (TS1, TS2, Muons), even though multiple ticks
     # elapsed before stop_event fired — last_sent_date dedupes to once/day.
     assert beam_channel.broadcast.call_count == 3
+    sent_channels = {call.args[0].channel for call in beam_channel.broadcast.call_args_list}
+    assert sent_channels == {"TS1", "TS2", "Muons"}
     store.close()
 
 

@@ -1,6 +1,7 @@
 import logging
 import asyncio
 from abc import ABC, abstractmethod
+from dataclasses import replace
 from typing import List, Optional
 
 import aiohttp
@@ -88,7 +89,14 @@ class TeamsNotifier(Notifier):
                 "wrap": True,
             })
 
+        plain_text = notification.to_plain_text()
+        summary = plain_text.splitlines()[0] if plain_text else notification.title
+
         card = {
+            # Not part of the Adaptive Card schema — kept for downstream (e.g.
+            # Power Automate) flows that route on these two fields.
+            "summary": summary,
+            "channel": notification.channel,
             "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
             "type": "AdaptiveCard",
             "version": "1.2",
@@ -99,9 +107,6 @@ class TeamsNotifier(Notifier):
             card["actions"] = [
                 {"type": "Action.OpenUrl", "title": notification.url_label, "url": notification.url}
             ]
-
-        plain_text = notification.to_plain_text()
-        summary = plain_text.splitlines()[0] if plain_text else notification.title
 
         return {
             "type": "message",
@@ -155,4 +160,6 @@ class NotificationChannel:
                 f"Channel '{self.name}' has no notifiers configured; skipping broadcast."
             )
             return
+        if not notification.channel:
+            notification = replace(notification, channel=self.name)
         await asyncio.gather(*(n.send(notification) for n in self.notifiers), return_exceptions=True)

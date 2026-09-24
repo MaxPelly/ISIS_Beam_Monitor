@@ -71,6 +71,8 @@ class Notification:
     url: Optional[str] = None
     url_label: str = "Open"
     timestamp: Optional[datetime] = None
+    channel: str = ""  # e.g. "TS1"/"TS2"/"Muons"; falls back to the NotificationChannel's
+                        # name in NotificationChannel.broadcast() when left blank
 
     def to_plain_text(self) -> str:
         """Render as plain text, e.g. for log lines or the dummy notifier."""
@@ -99,6 +101,7 @@ def beam_change(
     time_now: datetime,
     trip_note: str = "",
     rng: Optional[random.Random] = None,
+    channel: str = "",
 ) -> Notification:
     """Build a card for a confirmed (debounced) beam state transition."""
     going_up = _STATE_ORDER[new_state] > _STATE_ORDER[prev_state]
@@ -136,6 +139,7 @@ def beam_change(
         ],
         flavour=flavour.pick((display_name, transition), rng) if rng else "",
         timestamp=time_now,
+        channel=channel,
     )
 
 
@@ -145,6 +149,7 @@ def startup_status(
     beam_val: float,
     time_now: datetime,
     rng: Optional[random.Random] = None,
+    channel: str = "",
 ) -> Notification:
     return Notification(
         title=f"Monitor online: {display_name} is {state}",
@@ -152,6 +157,7 @@ def startup_status(
         emoji="🛰️",
         flavour=flavour.pick((display_name, "startup"), rng) if rng else "",
         timestamp=time_now,
+        channel=channel,
     )
 
 
@@ -297,6 +303,7 @@ def daily_summary(
         ],
         flavour=fact_of_the_day,
         timestamp=time_now,
+        channel=display_name,  # already the beam target's channel label (e.g. "TS1")
     )
 
 

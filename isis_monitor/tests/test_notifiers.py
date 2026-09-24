@@ -1,4 +1,5 @@
 import pytest
+from dataclasses import replace
 from unittest.mock import patch, MagicMock, AsyncMock
 from isis_monitor.notifiers import TeamsNotifier, DummyNotifier, NotificationChannel
 from isis_monitor.messages import Notification, Severity
@@ -71,6 +72,23 @@ async def test_teams_notifier_sends_request():
     assert card["type"] == "AdaptiveCard"
     body_texts = [item["text"] for item in card["body"] if "text" in item]
     assert "Test message" in body_texts
+
+
+@pytest.mark.asyncio
+async def test_teams_notifier_payload_includes_channel_and_content_summary():
+    """Downstream routing (e.g. Power Automate) reads these two fields from
+    inside `content`, not just the top-level `summary` — both must be present."""
+    notifier = TeamsNotifier("http://fake.webhook.url")
+    mock_session = make_mock_session(status=200)
+    notification = Notification(title="Test title", text="Test message", channel="TS1")
+
+    with patch("isis_monitor.notifiers.aiohttp.ClientSession", return_value=mock_session):
+        await notifier.send(notification)
+
+    payload = mock_session.post.call_args.kwargs["json"]
+    card = payload["attachments"][0]["content"]
+    assert card["channel"] == "TS1"
+    assert card["summary"] == payload["summary"]
 
 
 @pytest.mark.asyncio
@@ -189,8 +207,24 @@ async def test_notification_channel():
     notification = Notification(title="Title", text="Broadcast message")
     await channel.broadcast(notification)
 
-    mock_notifier1.send.assert_called_once_with(notification)
-    mock_notifier2.send.assert_called_once_with(notification)
+    # broadcast() fills in a blank channel with the NotificationChannel's own
+    # name, so the notifiers receive a copy rather than the exact same object.
+    expected = replace(notification, channel="TestChannel")
+    mock_notifier1.send.assert_called_once_with(expected)
+    mock_notifier2.send.assert_called_once_with(expected)
+
+
+@pytest.mark.asyncio
+async def test_notification_channel_does_not_override_explicit_channel():
+    channel = NotificationChannel("TestChannel")
+    mock_notifier = MagicMock()
+    mock_notifier.send = AsyncMock()
+    channel.add_notifier(mock_notifier)
+
+    notification = Notification(title="Title", text="Text", channel="TS1")
+    await channel.broadcast(notification)
+
+    mock_notifier.send.assert_called_once_with(notification)
 
 
 @pytest.mark.asyncio

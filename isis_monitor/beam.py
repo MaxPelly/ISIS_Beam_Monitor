@@ -194,6 +194,7 @@ class BeamChangeAggregator:
             pending.started_at,
             trip_note=trip_note,
             rng=self.rng if self.fun_mode else None,
+            channel=pending.bt.channel_label,
         )
         logger.info(f"State Change: {notification.to_plain_text()}")
         await self.beam_channel.broadcast(notification)
@@ -306,7 +307,10 @@ class BeamMonitor:
             if prev_state == "":
                 # First reading for this target — always send immediately, never debounced.
                 rng = self._rng if self.config.fun_mode else None
-                notification = startup_status(bt.display_name, new_state, beam_val, time_now, rng=rng)
+                notification = startup_status(
+                    bt.display_name, new_state, beam_val, time_now,
+                    rng=rng, channel=bt.channel_label,
+                )
                 logger.info(f"Startup: {notification.to_plain_text()}")
                 await self.beam_channel.broadcast(notification)
             else:
