@@ -10,8 +10,15 @@ from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.beam import (
     BeamMonitor,
     BEAM_TARGETS,
+    VETO_CHECK_WINDOW,
     _fit_rate,
 )
+
+
+def _seed_frame_baseline(m, now, good, raw):
+    """Insert a frame sample older than VETO_CHECK_WINDOW so
+    _check_frame_progress has something to compare the current reading to."""
+    m.state.frame_samples.append((now - VETO_CHECK_WINDOW - timedelta(seconds=30), good, raw))
 
 DEBOUNCE_SECONDS = 0.05
 SETTLE = DEBOUNCE_SECONDS * 3  # wait comfortably past the debounce window in tests
@@ -457,10 +464,9 @@ async def test_check_frame_progress_detects_veto(mock_config, mock_channels):
     m.state.run_name = "Run 1"
     now = datetime.now(timezone.utc)
 
-    m.state.current_good_frames = 100.0
-    m.state.current_raw_frames = 200.0
-    m.state.last_check_good = 100.0
-    m.state.last_check_raw = 150.0  # raw rose, good didn't
+    _seed_frame_baseline(m, now, good=100.0, raw=150.0)
+    m.state.current_good_frames = 100.0  # unmoved over the window
+    m.state.current_raw_frames = 200.0   # raw rose over the window
 
     await m._check_frame_progress(now)
 
@@ -471,16 +477,57 @@ async def test_check_frame_progress_detects_veto(mock_config, mock_channels):
 
 
 @pytest.mark.asyncio
+async def test_check_frame_progress_no_false_veto_when_good_updates_in_batches(mock_config, mock_channels):
+    """Regression: a source that updates 'good frames' in less frequent
+    batches than the 60s check interval must not look vetoed just because a
+    batch hasn't landed in the latest minute — movement is judged over
+    VETO_CHECK_WINDOW, not the last tick."""
+    beam_channel, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+    m.state.run_name = "Run 1"
+    now = datetime.now(timezone.utc)
+
+    # A good-frames batch landed 4 minutes ago (inside the 5-minute window),
+    # so good genuinely moved over the window even though it hasn't ticked
+    # in the last minute; raw ticks up every check as usual.
+    m.state.frame_samples.append((now - timedelta(minutes=6), 50.0, 100.0))
+    m.state.frame_samples.append((now - timedelta(minutes=4), 100.0, 150.0))
+    m.state.current_good_frames = 100.0
+    m.state.current_raw_frames = 200.0
+
+    await m._check_frame_progress(now)
+
+    exp_channel.broadcast.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_check_frame_progress_no_check_without_enough_history(mock_config, mock_channels):
+    """Fewer than VETO_CHECK_WINDOW worth of samples means there's nothing
+    to compare against yet — must not warn."""
+    beam_channel, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+    m.state.run_name = "Run 1"
+    now = datetime.now(timezone.utc)
+
+    m.state.frame_samples.append((now - timedelta(minutes=1), 100.0, 100.0))
+    m.state.current_good_frames = 100.0
+    m.state.current_raw_frames = 200.0
+
+    await m._check_frame_progress(now)
+
+    exp_channel.broadcast.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_check_frame_progress_veto_warns_once_then_resets_on_movement(mock_config, mock_channels):
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
     m.state.run_name = "Run 1"
     now = datetime.now(timezone.utc)
 
+    _seed_frame_baseline(m, now, good=100.0, raw=150.0)
     m.state.current_good_frames = 100.0
     m.state.current_raw_frames = 200.0
-    m.state.last_check_good = 100.0
-    m.state.last_check_raw = 150.0
     await m._check_frame_progress(now)
     exp_channel.broadcast.assert_called_once()
 
@@ -505,10 +552,9 @@ async def test_check_frame_progress_detects_stall_when_instrument_beam_on(mock_c
     m.state.beams["TS1"].power = "high"  # instrument beam is on
 
     now = datetime.now(timezone.utc)
+    _seed_frame_baseline(m, now, good=100.0, raw=100.0)
     m.state.current_good_frames = 100.0
     m.state.current_raw_frames = 100.0
-    m.state.last_check_good = 100.0
-    m.state.last_check_raw = 100.0
 
     await m._check_frame_progress(now)  # starts the stall clock
     exp_channel.broadcast.assert_not_called()
@@ -528,10 +574,9 @@ async def test_check_frame_progress_no_stall_warning_when_instrument_beam_off(mo
     m.state.beams["TS1"].power = "off"  # instrument beam is off — no warning expected
 
     now = datetime.now(timezone.utc)
+    _seed_frame_baseline(m, now, good=100.0, raw=100.0)
     m.state.current_good_frames = 100.0
     m.state.current_raw_frames = 100.0
-    m.state.last_check_good = 100.0
-    m.state.last_check_raw = 100.0
 
     await m._check_frame_progress(now)
     await m._check_frame_progress(now + timedelta(seconds=1))
@@ -547,10 +592,9 @@ async def test_check_frame_progress_movement_resets_stall_clock(mock_config, moc
     m.state.beams["TS1"].power = "high"
 
     now = datetime.now(timezone.utc)
+    _seed_frame_baseline(m, now, good=100.0, raw=100.0)
     m.state.current_good_frames = 100.0
     m.state.current_raw_frames = 100.0
-    m.state.last_check_good = 100.0
-    m.state.last_check_raw = 100.0
     await m._check_frame_progress(now)
     assert m.state.frames_stalled_since is not None
 
@@ -574,10 +618,9 @@ async def test_check_frame_progress_no_active_run_never_warns(mock_config, mock_
     m.state.beams["TS1"].power = "high"
 
     now = datetime.now(timezone.utc)
+    _seed_frame_baseline(m, now, good=100.0, raw=100.0)
     m.state.current_good_frames = 100.0
     m.state.current_raw_frames = 100.0
-    m.state.last_check_good = 100.0
-    m.state.last_check_raw = 100.0
 
     await m._check_frame_progress(now)
     await m._check_frame_progress(now + timedelta(seconds=1))

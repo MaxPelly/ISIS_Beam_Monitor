@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 FRAME_SAMPLE_WINDOW = timedelta(minutes=15)
 FRAME_CHECK_INTERVAL = 60.0
+VETO_CHECK_WINDOW = timedelta(minutes=5)
 RUN_MILESTONE_INTERVAL = 25
 
 
@@ -222,8 +223,6 @@ class MonitorState:
         self.end_notified: bool = False
 
         # Periodic frame-progress check (BeamMonitor._check_frame_progress)
-        self.last_check_good: float = -1.0
-        self.last_check_raw: float = -1.0
         self.frames_stalled_since: Optional[datetime] = None
         self.veto_warned: bool = False
         self.stall_warned: bool = False
@@ -365,8 +364,6 @@ class BeamMonitor:
                     self.state.current_raw_frames = 0.0
                     self.state.end_notified = False
                     self.state.frame_samples.clear()
-                    self.state.last_check_good = -1.0
-                    self.state.last_check_raw = -1.0
                     self.state.frames_stalled_since = None
                     self.state.veto_warned = False
                     self.state.stall_warned = False
@@ -448,21 +445,40 @@ class BeamMonitor:
         beam_state = self.state.beams.get(self.config.instrument_target)
         return beam_state.power if beam_state else "unknown"
 
+    def _frame_baseline_before(self, cutoff: datetime) -> Optional[Tuple[float, float]]:
+        """Most recent (good, raw) sample at or before `cutoff`, or None if
+        there isn't `VETO_CHECK_WINDOW` worth of history yet."""
+        baseline = None
+        for t, good, raw in self.state.frame_samples:
+            if t > cutoff:
+                break
+            baseline = (good, raw)
+        return baseline
+
     async def _check_frame_progress(self, time_now: datetime) -> None:
         """Detect vetoed or stalled frame collection (called roughly every 60s).
 
         Only meaningful while a run is active — between runs, frame counts are
         naturally static, which would otherwise look identical to a stall.
+
+        Movement is judged over VETO_CHECK_WINDOW rather than since the last
+        tick: some DAQs update "good frames" in less frequent batches than
+        "raw frames", so comparing only the last ~60s made a perfectly
+        healthy, just-batchy source look vetoed every time a batch hadn't
+        landed yet in that particular minute.
         """
         if not self.state.run_name:
             return
 
+        baseline = self._frame_baseline_before(time_now - VETO_CHECK_WINDOW)
+        if baseline is None:
+            return  # not enough history yet to judge movement over the window
+        baseline_good, baseline_raw = baseline
+
         good = self.state.current_good_frames
         raw = self.state.current_raw_frames
-        good_moved = self.state.last_check_good >= 0 and good > self.state.last_check_good
-        raw_moved = self.state.last_check_raw >= 0 and raw > self.state.last_check_raw
-        self.state.last_check_good = good
-        self.state.last_check_raw = raw
+        good_moved = good > baseline_good
+        raw_moved = raw > baseline_raw
 
         if raw_moved and not good_moved:
             if not self.state.veto_warned:
