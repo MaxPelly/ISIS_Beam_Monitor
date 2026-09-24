@@ -31,7 +31,6 @@ class AppConfig:
     ts2_beam_current_pv: str = "AC:TS2:BEAM:CURR"
     muon_beam_current_pv: str = "AC:MUON:BEAM:CURR"
     instrument_target: str = "TS1"  # which beam target's state to report in run cards
-    counts_type: str = "raw"  # "good" or "raw" — which frame count counts_target is measured against
 
     # BEAM_BOUNDARIES (tuples of cutoff thresholds)
     ts1_boundaries: tuple = (0.0, 50.0, 140.0)
@@ -115,10 +114,6 @@ def load_config(config_path: Path) -> AppConfig:
         raise ConfigError(
             f"[PVS] instrument_target must be one of TS1, TS2, Muon, got '{instrument_target}'"
         )
-    counts_type = config.get("PVS", "counts_type", fallback="raw")
-    if counts_type not in ("good", "raw"):
-        raise ConfigError(f"[PVS] counts_type must be 'good' or 'raw', got '{counts_type}'")
-
     # BEAM_BOUNDARIES
     def _parse_tuple(section, key, default):
         raw = config.get(section, key, fallback="")
@@ -202,7 +197,6 @@ def load_config(config_path: Path) -> AppConfig:
         ts2_beam_current_pv=ts2_beam_current_pv,
         muon_beam_current_pv=muon_beam_current_pv,
         instrument_target=instrument_target,
-        counts_type=counts_type,
         ts1_boundaries=ts1_boundaries,
         ts2_boundaries=ts2_boundaries,
         muon_boundaries=muon_boundaries,

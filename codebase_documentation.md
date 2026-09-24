@@ -19,9 +19,9 @@ The system uses a two-tier architecture (daemon and client) communicating via lo
 
 ### `isis_monitor/beam.py`
 The core logic for accelerator beam monitoring.
--   **`BeamMonitor`**: Manages the WebSocket connection and state. It dispatches updates based on PV names, and runs a second periodic loop (`_frame_check_loop`, gathered alongside the websocket loop in `run()`) that checks for vetoed or stalled frame collection roughly every 60s.
+-   **`BeamMonitor`**: Manages the WebSocket connection and state. It dispatches updates based on PV names, and runs a second periodic loop (`_collection_check_loop`, gathered alongside the websocket loop in `run()`) that checks for stalled data collection roughly every 60s.
 -   **`BeamTarget`**: Configuration for specific beam targets (TS1, TS2, Muons).
--   **State Management**: Tracks current beam currents and power levels (off, low, medium, high) to detect transitions, plus per-target `since` timestamps and a 15-minute deque of `(time, good, raw)` frame-count samples used for the run-finishing card's rate/ETA.
+-   **State Management**: Tracks current beam currents and power levels (off, low, medium, high) to detect transitions, plus per-target `since` timestamps and a 15-minute deque of `(time, counts_collected)` samples used for the run-finishing card's rate/ETA. `counts_pv`'s text is `live_current/total_collected` — only the total is tracked; live current is discarded since beam current is already tracked directly via the TS1/TS2/Muon PVs.
 -   **`BeamChangeAggregator`**: Debounces raw beam-state transitions for `debounce_seconds` before turning them into notifications, dropping ones that flap back to their original state, and noting when other targets went off in the same window (the three targets share one accelerator, so correlated trips are the common case, not an edge case).
 -   **Run-count milestones**: `DaemonState.record_run_completed()` is called whenever a run completes; `beam.py` checks the returned all-time total against `RUN_MILESTONE_INTERVAL` (25) to fire a milestone card when `fun_mode` is on.
 
@@ -35,7 +35,7 @@ Handles MCR news polling.
 Builds the structured, channel-agnostic notifications used everywhere else.
 -   **`Notification`**: A dataclass (title, text, severity, emoji, facts, flavour, url/url_label, timestamp) with a `to_plain_text()` method used by `DummyNotifier` and log lines.
 -   **`Severity`**: `INFO` / `GOOD` / `WARNING` / `ATTENTION`, mapped to Adaptive Card container styles by `notifiers.py`.
--   **Builders**: one pure function per notification-worthy event — `beam_change`, `startup_status`, `run_started`, `run_finishing`, `frames_vetoed`, `frames_stalled`, `mcr_news`, `daily_summary`, `run_milestone`. Each takes an optional `rng: random.Random` so callers can opt into a `flavour.py` line (only when `fun_mode` is on) while keeping the builders deterministic and pure for tests.
+-   **Builders**: one pure function per notification-worthy event — `beam_change`, `startup_status`, `run_started`, `run_finishing`, `collection_stalled`, `mcr_news`, `daily_summary`, `run_milestone`. Each takes an optional `rng: random.Random` so callers can opt into a `flavour.py` line (only when `fun_mode` is on) while keeping the builders deterministic and pure for tests.
 -   **`fmt_time` / `fmt_duration` / `set_timezone` / `get_timezone`**: shared formatting helpers; the display timezone is process-global, set once from `[NOTIFICATIONS] timezone` at startup.
 
 ### `isis_monitor/flavour.py`
@@ -80,11 +80,11 @@ Defines runtime-checkable protocols (e.g., `MonitorSinkProtocol`, `TUIProtocol`)
 Configuration is managed via `config.ini` files, loaded through `isis_monitor/config.py`. Key sections include:
 -   **`[DATA]`**: WebSocket and HTTP URLs for data sources, plus the optional `mcr_page_url` link button.
 -   **`[WEBHOOKS]`**: URLs for Teams integration (should be kept secure). A blank URL disables that channel's Teams notifier.
--   **`[PVS]`**: PV names for a non-PEARL instrument, `instrument_target` (which beam target's state is reported on run cards) and `counts_type` (`good`/`raw` — which frame count `counts_target` is measured against).
+-   **`[PVS]`**: PV names for a non-PEARL instrument, and `instrument_target` (which beam target's state is reported on run cards).
 -   **`[DAEMON]`** / **`[TUI_CLIENT]`**: Paths for UNIX sockets, SQLite database, and retention settings.
 -   **`[BEAM_BOUNDARIES]`**: Thresholds for power level classification.
 -   **`[TUI]`**: Display settings like history length and refresh rates.
--   **`[NOTIFICATIONS]`**: `fun_mode` (personality lines/milestones), `timezone` (for card timestamps and `summary_time`), `debounce_seconds` (beam-change confirmation window), `stall_minutes` (frame-stall warning threshold), and `summary_time` (HH:MM local time the daily summary is sent).
+-   **`[NOTIFICATIONS]`**: `fun_mode` (personality lines/milestones), `timezone` (for card timestamps and `summary_time`), `debounce_seconds` (beam-change confirmation window), `stall_minutes` (collection-stall warning threshold), and `summary_time` (HH:MM local time the daily summary is sent).
 
 ---
 
@@ -109,7 +109,7 @@ In `RichTUI._make_layout()`, sections are defined using `split_column` and `spli
 -   **Error Handling**: Enhance WebSocket reconnection logic with more granular error classification (e.g., distinguishing network errors from authentication issues).
 -   **Testing**: Expand unit tests for `tui.py` and `main.py`. Currently, core logic is well-tested, but UI rendering and orchestration could benefit from more coverage.
 -   **Performance**: If the SQLite persistence overhead grows, consider migrating `storage.py` to use `aiosqlite` for native async database access instead of `asyncio.to_thread`.
--   **Finishing-card ETA**: `beam.py` only builds the "run about to finish" card once frame counts have *already* crossed `counts_target`, so the ETA fact is always ~0s at that point — accurate, but not predictive. Making it fire in advance (with a real ETA) would mean changing that trigger condition; see `NOTIFICATIONS_PLAN.md` Phase 5 for the full note.
+-   **Finishing-card ETA**: `beam.py` only builds the "run about to finish" card once counts have *already* crossed `counts_target`, so the ETA fact is always ~0s at that point — accurate, but not predictive. Making it fire in advance (with a real ETA) would mean changing that trigger condition; see `NOTIFICATIONS_PLAN.md` Phase 5 for the full note.
 -   **24h run count after a restart**: `DaemonState.run_completions` (used for the daily summary's "runs in last 24h" count) is in-memory only, so a daemon restart loses that rolling window until it refills naturally. `total_runs_completed` (used for the 25-run milestone) does persist. See `NOTIFICATIONS_PLAN.md` Phase 6.
 
 ### Potential Features

@@ -17,8 +17,6 @@ experiment_teams_url =
 # run_name_pv = IN:PEARL:DAE:WDTITLE
 # Which beam target's state is reported as "the instrument's beam" on run cards.
 # instrument_target = TS1
-# Which frame count counts_target is measured against: "good" or "raw".
-# counts_type = raw
 
 [TUI]
 # Number of 1-minute samples to retain per beam target (default = 60 → 1-hour rolling window).
@@ -75,8 +73,8 @@ experiment_teams_url =
 # How long a beam state change must persist before a card is sent, in
 # seconds. Filters out brief flickers rather than reporting every one.
 # debounce_seconds = 20
-# How many minutes good and raw frames can both stay flat, while the
-# instrument beam is on, before a stall warning is sent.
+# How many minutes counts collected can stay flat, while the instrument
+# beam is on, before a stall warning is sent.
 # stall_minutes = 15
 # UK-local time (HH:MM) the daily beam-uptime summary is sent at.
 # summary_time = 08:00

@@ -10,15 +10,15 @@ from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.beam import (
     BeamMonitor,
     BEAM_TARGETS,
-    VETO_CHECK_WINDOW,
+    STALL_CHECK_WINDOW,
     _fit_rate,
 )
 
 
-def _seed_frame_baseline(m, now, good, raw):
-    """Insert a frame sample older than VETO_CHECK_WINDOW so
-    _check_frame_progress has something to compare the current reading to."""
-    m.state.frame_samples.append((now - VETO_CHECK_WINDOW - timedelta(seconds=30), good, raw))
+def _seed_collected_baseline(m, now, value):
+    """Insert a counts-collected sample older than STALL_CHECK_WINDOW so
+    _check_collection_progress has something to compare the current reading to."""
+    m.state.collected_samples.append((now - STALL_CHECK_WINDOW - timedelta(seconds=30), value))
 
 DEBOUNCE_SECONDS = 0.05
 SETTLE = DEBOUNCE_SECONDS * 3  # wait comfortably past the debounce window in tests
@@ -252,8 +252,7 @@ async def test_handle_update_run_name_change(mock_config, mock_channels):
     # Seed first run
     m.state.run_name = "Run 12345"
     m.state.run_started_at = datetime.now(timezone.utc) - timedelta(hours=2)
-    m.state.current_good_frames = 900.0
-    m.state.current_raw_frames = 1000.0
+    m.state.current_counts = 1000.0
 
     new_run = "Run 12346"
     b64 = base64.b64encode(new_run.encode()).decode()
@@ -267,12 +266,9 @@ async def test_handle_update_run_name_change(mock_config, mock_channels):
     assert notification.facts == [
         ("Previous run", "Run 12345"),
         ("Duration", "2h 0m"),
-        ("Final good frames", "900"),
-        ("Final raw frames", "1000"),
+        ("Final counts collected", "1000"),
     ]
     assert m.state.current_counts == 0
-    assert m.state.current_good_frames == 0.0
-    assert m.state.current_raw_frames == 0.0
 
 
 @pytest.mark.asyncio
@@ -375,6 +371,8 @@ async def test_handle_update_run_name_change_no_milestone_without_fun_mode(mock_
 
 @pytest.mark.asyncio
 async def test_handle_update_counts_below_threshold(mock_config, mock_channels):
+    """counts_pv's text is live_current/total_collected — only the total
+    (parts[1]) is tracked; live current is discarded."""
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels, counts_target=100)
     m.state.run_name = "Run 1"
@@ -391,30 +389,16 @@ async def test_handle_update_counts_triggers_notification(mock_config, mock_chan
     m.state.run_name = "Run 1"
 
     await m._handle_update({"pv": mock_config.counts_pv, "text": "50/110"})
-    assert m.state.current_counts == 110.0  # counts_type defaults to "raw"
-    assert m.state.current_good_frames == 50.0
-    assert m.state.current_raw_frames == 110.0
+    assert m.state.current_counts == 110.0
     assert m.state.end_notified is True
     exp_channel.broadcast.assert_called_once()
     notification = exp_channel.broadcast.call_args[0][0]
     assert "about to finish" in notification.title
     assert notification.text == "Run 1"
     fact_keys = [key for key, _ in notification.facts]
-    assert fact_keys == ["Frames", "Rate", "Good-frame efficiency", "Instrument beam"]
-    assert ("Frames", "110 / 100") in notification.facts
+    assert fact_keys == ["Counts", "Rate", "Instrument beam"]
+    assert ("Counts", "110 / 100") in notification.facts
     assert ("Instrument beam", "") in notification.facts  # TS1 never seen a beam-current update
-
-
-@pytest.mark.asyncio
-async def test_handle_update_counts_tracks_good_frames_when_configured(mock_config, mock_channels):
-    good_config = replace(mock_config, counts_type="good")
-    beam_channel, exp_channel = mock_channels
-    m = make_monitor(good_config, mock_channels, counts_target=100)
-    m.state.run_name = "Run 1"
-
-    await m._handle_update({"pv": good_config.counts_pv, "text": "110/200"})
-    assert m.state.current_counts == 110.0  # tracks good frames, not raw
-    exp_channel.broadcast.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -454,97 +438,54 @@ def test_fit_rate_computes_slope_per_second():
 
 
 # ---------------------------------------------------------------------------
-# _check_frame_progress — veto / stall detection
+# _check_collection_progress — stall detection
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_check_frame_progress_detects_veto(mock_config, mock_channels):
-    beam_channel, exp_channel = mock_channels
-    m = make_monitor(mock_config, mock_channels)
-    m.state.run_name = "Run 1"
-    now = datetime.now(timezone.utc)
-
-    _seed_frame_baseline(m, now, good=100.0, raw=150.0)
-    m.state.current_good_frames = 100.0  # unmoved over the window
-    m.state.current_raw_frames = 200.0   # raw rose over the window
-
-    await m._check_frame_progress(now)
-
-    exp_channel.broadcast.assert_called_once()
-    notification = exp_channel.broadcast.call_args[0][0]
-    assert notification.title == "Frames being vetoed"
-    assert m.state.veto_warned is True
-
-
-@pytest.mark.asyncio
-async def test_check_frame_progress_no_false_veto_when_good_updates_in_batches(mock_config, mock_channels):
-    """Regression: a source that updates 'good frames' in less frequent
-    batches than the 60s check interval must not look vetoed just because a
-    batch hasn't landed in the latest minute — movement is judged over
-    VETO_CHECK_WINDOW, not the last tick."""
-    beam_channel, exp_channel = mock_channels
-    m = make_monitor(mock_config, mock_channels)
-    m.state.run_name = "Run 1"
-    now = datetime.now(timezone.utc)
-
-    # A good-frames batch landed 4 minutes ago (inside the 5-minute window),
-    # so good genuinely moved over the window even though it hasn't ticked
-    # in the last minute; raw ticks up every check as usual.
-    m.state.frame_samples.append((now - timedelta(minutes=6), 50.0, 100.0))
-    m.state.frame_samples.append((now - timedelta(minutes=4), 100.0, 150.0))
-    m.state.current_good_frames = 100.0
-    m.state.current_raw_frames = 200.0
-
-    await m._check_frame_progress(now)
-
-    exp_channel.broadcast.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_check_frame_progress_no_check_without_enough_history(mock_config, mock_channels):
-    """Fewer than VETO_CHECK_WINDOW worth of samples means there's nothing
+async def test_check_collection_progress_no_check_without_enough_history(mock_config, mock_channels):
+    """Fewer than STALL_CHECK_WINDOW worth of samples means there's nothing
     to compare against yet — must not warn."""
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
     m.state.run_name = "Run 1"
     now = datetime.now(timezone.utc)
 
-    m.state.frame_samples.append((now - timedelta(minutes=1), 100.0, 100.0))
-    m.state.current_good_frames = 100.0
-    m.state.current_raw_frames = 200.0
+    m.state.collected_samples.append((now - timedelta(minutes=1), 100.0))
+    m.state.current_counts = 100.0
 
-    await m._check_frame_progress(now)
+    await m._check_collection_progress(now)
 
     exp_channel.broadcast.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_check_frame_progress_veto_warns_once_then_resets_on_movement(mock_config, mock_channels):
+async def test_check_collection_progress_no_false_stall_when_counts_update_in_batches(mock_config, mock_channels):
+    """Regression: a source that updates the collected count in less frequent
+    batches than the 60s check interval must not look stalled just because a
+    batch hasn't landed in the latest minute — movement is judged over
+    STALL_CHECK_WINDOW, not the last tick."""
+    beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
-    m = make_monitor(mock_config, mock_channels)
+    m = make_monitor(beam_config, mock_channels)
     m.state.run_name = "Run 1"
+    m.state.beams["TS1"].power = "high"
     now = datetime.now(timezone.utc)
 
-    _seed_frame_baseline(m, now, good=100.0, raw=150.0)
-    m.state.current_good_frames = 100.0
-    m.state.current_raw_frames = 200.0
-    await m._check_frame_progress(now)
-    exp_channel.broadcast.assert_called_once()
+    # A counts batch landed 4 minutes ago (inside the 5-minute window), so
+    # the total genuinely moved over the window even though it hasn't ticked
+    # in the last minute.
+    m.state.collected_samples.append((now - timedelta(minutes=6), 50.0))
+    m.state.collected_samples.append((now - timedelta(minutes=4), 100.0))
+    m.state.current_counts = 100.0
 
-    # Still vetoed on the next tick — no repeat warning.
-    exp_channel.broadcast.reset_mock()
-    m.state.current_raw_frames = 300.0
-    await m._check_frame_progress(now + timedelta(seconds=60))
+    await m._check_collection_progress(now)
+    await m._check_collection_progress(now + timedelta(seconds=1))
+
     exp_channel.broadcast.assert_not_called()
-
-    # Good frames finally move — resets the warning flag.
-    m.state.current_good_frames = 250.0
-    await m._check_frame_progress(now + timedelta(seconds=120))
-    assert m.state.veto_warned is False
 
 
 @pytest.mark.asyncio
-async def test_check_frame_progress_detects_stall_when_instrument_beam_on(mock_config, mock_channels):
+async def test_check_collection_progress_detects_stall_when_instrument_beam_on(mock_config, mock_channels):
     beam_config = replace(mock_config, stall_minutes=0.01)  # ~0.6s, fast for tests
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
@@ -552,21 +493,20 @@ async def test_check_frame_progress_detects_stall_when_instrument_beam_on(mock_c
     m.state.beams["TS1"].power = "high"  # instrument beam is on
 
     now = datetime.now(timezone.utc)
-    _seed_frame_baseline(m, now, good=100.0, raw=100.0)
-    m.state.current_good_frames = 100.0
-    m.state.current_raw_frames = 100.0
+    _seed_collected_baseline(m, now, 100.0)
+    m.state.current_counts = 100.0  # unmoved over the window
 
-    await m._check_frame_progress(now)  # starts the stall clock
+    await m._check_collection_progress(now)  # starts the stall clock
     exp_channel.broadcast.assert_not_called()
 
-    await m._check_frame_progress(now + timedelta(seconds=1))  # past stall_minutes
+    await m._check_collection_progress(now + timedelta(seconds=1))  # past stall_minutes
     exp_channel.broadcast.assert_called_once()
     notification = exp_channel.broadcast.call_args[0][0]
-    assert notification.title == "Frames stalled"
+    assert notification.title == "Data collection stalled"
 
 
 @pytest.mark.asyncio
-async def test_check_frame_progress_no_stall_warning_when_instrument_beam_off(mock_config, mock_channels):
+async def test_check_collection_progress_no_stall_warning_when_instrument_beam_off(mock_config, mock_channels):
     beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
@@ -574,17 +514,16 @@ async def test_check_frame_progress_no_stall_warning_when_instrument_beam_off(mo
     m.state.beams["TS1"].power = "off"  # instrument beam is off — no warning expected
 
     now = datetime.now(timezone.utc)
-    _seed_frame_baseline(m, now, good=100.0, raw=100.0)
-    m.state.current_good_frames = 100.0
-    m.state.current_raw_frames = 100.0
+    _seed_collected_baseline(m, now, 100.0)
+    m.state.current_counts = 100.0
 
-    await m._check_frame_progress(now)
-    await m._check_frame_progress(now + timedelta(seconds=1))
+    await m._check_collection_progress(now)
+    await m._check_collection_progress(now + timedelta(seconds=1))
     exp_channel.broadcast.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_check_frame_progress_movement_resets_stall_clock(mock_config, mock_channels):
+async def test_check_collection_progress_movement_resets_stall_clock(mock_config, mock_channels):
     beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
@@ -592,25 +531,23 @@ async def test_check_frame_progress_movement_resets_stall_clock(mock_config, moc
     m.state.beams["TS1"].power = "high"
 
     now = datetime.now(timezone.utc)
-    _seed_frame_baseline(m, now, good=100.0, raw=100.0)
-    m.state.current_good_frames = 100.0
-    m.state.current_raw_frames = 100.0
-    await m._check_frame_progress(now)
-    assert m.state.frames_stalled_since is not None
+    _seed_collected_baseline(m, now, 100.0)
+    m.state.current_counts = 100.0
+    await m._check_collection_progress(now)
+    assert m.state.collection_stalled_since is not None
 
-    # Frames move again — stall clock resets.
-    m.state.current_good_frames = 110.0
-    m.state.current_raw_frames = 110.0
-    await m._check_frame_progress(now + timedelta(seconds=0.5))
-    assert m.state.frames_stalled_since is None
+    # Counts move again — stall clock resets.
+    m.state.current_counts = 110.0
+    await m._check_collection_progress(now + timedelta(seconds=0.5))
+    assert m.state.collection_stalled_since is None
 
     exp_channel.broadcast.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_check_frame_progress_no_active_run_never_warns(mock_config, mock_channels):
-    """Between runs, frame counts are naturally static — that must not look
-    like a stall or a veto just because no run is currently in progress."""
+async def test_check_collection_progress_no_active_run_never_warns(mock_config, mock_channels):
+    """Between runs, the collected count is naturally static — that must not
+    look like a stall just because no run is currently in progress."""
     beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
@@ -618,12 +555,11 @@ async def test_check_frame_progress_no_active_run_never_warns(mock_config, mock_
     m.state.beams["TS1"].power = "high"
 
     now = datetime.now(timezone.utc)
-    _seed_frame_baseline(m, now, good=100.0, raw=100.0)
-    m.state.current_good_frames = 100.0
-    m.state.current_raw_frames = 100.0
+    _seed_collected_baseline(m, now, 100.0)
+    m.state.current_counts = 100.0
 
-    await m._check_frame_progress(now)
-    await m._check_frame_progress(now + timedelta(seconds=1))
+    await m._check_collection_progress(now)
+    await m._check_collection_progress(now + timedelta(seconds=1))
 
     exp_channel.broadcast.assert_not_called()
-    assert m.state.frames_stalled_since is None
+    assert m.state.collection_stalled_since is None

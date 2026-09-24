@@ -7,7 +7,7 @@ This is a Python application that monitors the status of the ISIS beam, experime
 ## Features
 
 - **Beam Updates**: Monitors the ISIS beam status and sends debounced state-change cards (with severity colour, emoji, current/previous readings and time-in-state) based on configurable thresholds. Correlated multi-target trips are called out in the same card.
-- **Experiment Updates**: Tracks run starts/finishes, including previous-run stats, frame counts, an ETA and good-frame efficiency, plus warnings for vetoed or stalled frame collection.
+- **Experiment Updates**: Tracks run starts/finishes, including previous-run stats, counts collected, a collection-rate ETA, and a warning if data collection stalls while the instrument beam is on.
 - **MCR News**: Fetches the latest Main Control Room (MCR) news and classifies each update's severity (good/attention/warning) by keyword, with an optional "Open MCR news" link.
 - **Daily Summary**: Sends a per-target uptime/trip/sparkline summary card once a day at a configurable time.
 - **`fun_mode`**: Optional personality lines, longest-uptime records, run-count milestones and a daily fact, on top of the always-on severity/emoji information.
@@ -63,8 +63,8 @@ The application requires an INI configuration file to set up the Teams webhook U
 # How long a beam state change must persist, in seconds, before a card
 # is sent — filters out brief flickers (default = 20).
 # debounce_seconds = 20
-# How many minutes good and raw frames can both stay flat, while the
-# instrument beam is on, before a stall warning is sent (default = 15).
+# How many minutes counts collected can stay flat, while the instrument
+# beam is on, before a stall warning is sent (default = 15).
 # stall_minutes = 15
 # UK-local time (HH:MM) the daily beam-uptime summary is sent at (default = 08:00).
 # summary_time = 08:00
@@ -78,16 +78,13 @@ The application requires an INI configuration file to set up the Teams webhook U
 # mcr_page_url = https://www.isis.stfc.ac.uk/gallery/beam-status/
 ```
 
-### Optional frame-tracking settings in `[PVS]`
+### Optional instrument setting in `[PVS]`
 
 ```ini
 [PVS]
 # Which beam target's state is reported as "the instrument's beam" on run
 # cards (default = TS1).
 # instrument_target = TS1
-# Which frame count counts_target is measured against: "good" or "raw"
-# (default = raw, preserving existing behaviour).
-# counts_type = raw
 ```
 
 ## Usage

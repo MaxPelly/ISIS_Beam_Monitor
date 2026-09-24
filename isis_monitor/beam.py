@@ -14,8 +14,7 @@ import websockets
 from isis_monitor.config import AppConfig
 from isis_monitor.messages import (
     beam_change,
-    frames_stalled,
-    frames_vetoed,
+    collection_stalled,
     run_milestone,
     run_started,
     run_finishing,
@@ -26,9 +25,9 @@ from isis_monitor.protocols import TUIProtocol, MonitorSinkProtocol
 
 logger = logging.getLogger(__name__)
 
-FRAME_SAMPLE_WINDOW = timedelta(minutes=15)
-FRAME_CHECK_INTERVAL = 60.0
-VETO_CHECK_WINDOW = timedelta(minutes=5)
+COUNTS_SAMPLE_WINDOW = timedelta(minutes=15)
+COLLECTION_CHECK_INTERVAL = 60.0
+STALL_CHECK_WINDOW = timedelta(minutes=5)
 RUN_MILESTONE_INTERVAL = 25
 
 
@@ -216,15 +215,12 @@ class MonitorState:
         }
         self.run_name: str = ""
         self.run_started_at: Optional[datetime] = None
-        self.current_counts: float = -1.0  # whichever of good/raw counts_type tracks
-        self.current_good_frames: float = -1.0
-        self.current_raw_frames: float = -1.0
-        self.frame_samples: Deque[Tuple[datetime, float, float]] = deque()  # (time, good, raw)
+        self.current_counts: float = -1.0  # total current collected so far this experiment
+        self.collected_samples: Deque[Tuple[datetime, float]] = deque()  # (time, current_counts)
         self.end_notified: bool = False
 
-        # Periodic frame-progress check (BeamMonitor._check_frame_progress)
-        self.frames_stalled_since: Optional[datetime] = None
-        self.veto_warned: bool = False
+        # Periodic collection-progress check (BeamMonitor._check_collection_progress)
+        self.collection_stalled_since: Optional[datetime] = None
         self.stall_warned: bool = False
 
 
@@ -352,20 +348,16 @@ class BeamMonitor:
                         name,
                         self.state.run_name,
                         time_now - self.state.run_started_at,
-                        self.state.current_good_frames,
-                        self.state.current_raw_frames,
+                        self.state.current_counts,
                         time_now,
                         rng=self._rng if self.config.fun_mode else None,
                     )
                     logger.info(f"New Run: {notification.to_plain_text()}")
                     await self.experiment_channel.broadcast(notification)
                     self.state.current_counts = 0
-                    self.state.current_good_frames = 0.0
-                    self.state.current_raw_frames = 0.0
                     self.state.end_notified = False
-                    self.state.frame_samples.clear()
-                    self.state.frames_stalled_since = None
-                    self.state.veto_warned = False
+                    self.state.collected_samples.clear()
+                    self.state.collection_stalled_since = None
                     self.state.stall_warned = False
 
                     if self.sink:
@@ -387,34 +379,28 @@ class BeamMonitor:
                     return
                 try:
                     parts = text_val.split("/")
-                    good_frames = float(parts[0])
-                    raw_frames = float(parts[1])
+                    float(parts[0])  # live beam current — discarded; tracked directly elsewhere
+                    total_collected = float(parts[1])
                 except (IndexError, ValueError) as e:
                     logger.warning(f"Failed to parse counts from '{text_val}': {e}")
                     return
 
-                tracked = good_frames if self.config.counts_type == "good" else raw_frames
-
-                self.state.current_good_frames = good_frames
-                self.state.current_raw_frames = raw_frames
-                self.state.current_counts = tracked
-                self.state.frame_samples.append((time_now, good_frames, raw_frames))
-                self._prune_frame_samples(time_now)
+                self.state.current_counts = total_collected
+                self.state.collected_samples.append((time_now, total_collected))
+                self._prune_collected_samples(time_now)
 
                 if self.sink:
-                    self.sink.update_counts(tracked)
+                    self.sink.update_counts(total_collected)
 
-                if self.state.end_notified and tracked < (self.counts_target - 25):
+                if self.state.end_notified and total_collected < (self.counts_target - 25):
                     self.state.end_notified = False
 
-                if tracked > self.counts_target and not self.state.end_notified:
-                    rate = _fit_rate(self._tracked_frame_samples())
+                if total_collected > self.counts_target and not self.state.end_notified:
+                    rate = _fit_rate(list(self.state.collected_samples))
                     notification = run_finishing(
                         self.state.run_name,
-                        tracked,
+                        total_collected,
                         self.counts_target,
-                        good_frames,
-                        raw_frames,
                         rate,
                         self._instrument_beam_state(),
                         time_now,
@@ -429,97 +415,79 @@ class BeamMonitor:
                 state = self.state.beams[bt.state_key]
                 self.tui.update_beam_state(bt.channel_label, state.current, state.power)
 
-    def _prune_frame_samples(self, now: datetime) -> None:
-        cutoff = now - FRAME_SAMPLE_WINDOW
-        samples = self.state.frame_samples
+    def _prune_collected_samples(self, now: datetime) -> None:
+        cutoff = now - COUNTS_SAMPLE_WINDOW
+        samples = self.state.collected_samples
         while samples and samples[0][0] < cutoff:
             samples.popleft()
-
-    def _tracked_frame_samples(self) -> List[Tuple[datetime, float]]:
-        """The (time, value) series counts_target is measured against."""
-        if self.config.counts_type == "good":
-            return [(t, good) for t, good, _ in self.state.frame_samples]
-        return [(t, raw) for t, _, raw in self.state.frame_samples]
 
     def _instrument_beam_state(self) -> str:
         beam_state = self.state.beams.get(self.config.instrument_target)
         return beam_state.power if beam_state else "unknown"
 
-    def _frame_baseline_before(self, cutoff: datetime) -> Optional[Tuple[float, float]]:
-        """Most recent (good, raw) sample at or before `cutoff`, or None if
-        there isn't `VETO_CHECK_WINDOW` worth of history yet."""
+    def _collected_baseline_before(self, cutoff: datetime) -> Optional[float]:
+        """Most recent counts-collected sample at or before `cutoff`, or None
+        if there isn't `STALL_CHECK_WINDOW` worth of history yet."""
         baseline = None
-        for t, good, raw in self.state.frame_samples:
+        for t, value in self.state.collected_samples:
             if t > cutoff:
                 break
-            baseline = (good, raw)
+            baseline = value
         return baseline
 
-    async def _check_frame_progress(self, time_now: datetime) -> None:
-        """Detect vetoed or stalled frame collection (called roughly every 60s).
+    async def _check_collection_progress(self, time_now: datetime) -> None:
+        """Detect stalled data collection (called roughly every 60s).
 
-        Only meaningful while a run is active — between runs, frame counts are
-        naturally static, which would otherwise look identical to a stall.
+        Only meaningful while a run is active — between runs, the collected
+        count is naturally static, which would otherwise look identical to a
+        stall.
 
-        Movement is judged over VETO_CHECK_WINDOW rather than since the last
-        tick: some DAQs update "good frames" in less frequent batches than
-        "raw frames", so comparing only the last ~60s made a perfectly
-        healthy, just-batchy source look vetoed every time a batch hadn't
-        landed yet in that particular minute.
+        Movement is judged over STALL_CHECK_WINDOW rather than since the last
+        tick: the counts PV can plausibly update in batches, so comparing
+        only the last ~60s could make a perfectly healthy, just-batchy source
+        look stalled every time a batch hadn't landed yet in that particular
+        minute.
         """
         if not self.state.run_name:
             return
 
-        baseline = self._frame_baseline_before(time_now - VETO_CHECK_WINDOW)
+        baseline = self._collected_baseline_before(time_now - STALL_CHECK_WINDOW)
         if baseline is None:
             return  # not enough history yet to judge movement over the window
-        baseline_good, baseline_raw = baseline
 
-        good = self.state.current_good_frames
-        raw = self.state.current_raw_frames
-        good_moved = good > baseline_good
-        raw_moved = raw > baseline_raw
+        moved = self.state.current_counts > baseline
 
-        if raw_moved and not good_moved:
-            if not self.state.veto_warned:
-                self.state.veto_warned = True
-                notification = frames_vetoed(time_now)
-                logger.info(f"Veto Warning: {notification.to_plain_text()}")
-                await self.experiment_channel.broadcast(notification)
-        elif good_moved:
-            self.state.veto_warned = False
-
-        if not good_moved and not raw_moved:
-            if self.state.frames_stalled_since is None:
-                self.state.frames_stalled_since = time_now
-            stalled_for = time_now - self.state.frames_stalled_since
+        if not moved:
+            if self.state.collection_stalled_since is None:
+                self.state.collection_stalled_since = time_now
+            stalled_for = time_now - self.state.collection_stalled_since
             if (
                 stalled_for >= timedelta(minutes=self.config.stall_minutes)
                 and self._instrument_beam_state() != "off"
                 and not self.state.stall_warned
             ):
                 self.state.stall_warned = True
-                notification = frames_stalled(self.config.instrument_target, stalled_for, time_now)
+                notification = collection_stalled(self.config.instrument_target, stalled_for, time_now)
                 logger.info(f"Stall Warning: {notification.to_plain_text()}")
                 await self.experiment_channel.broadcast(notification)
         else:
-            self.state.frames_stalled_since = None
+            self.state.collection_stalled_since = None
             self.state.stall_warned = False
 
-    async def _frame_check_loop(self, stop_event: Optional[asyncio.Event] = None) -> None:
+    async def _collection_check_loop(self, stop_event: Optional[asyncio.Event] = None) -> None:
         while stop_event is None or not stop_event.is_set():
             if stop_event is not None:
                 try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=FRAME_CHECK_INTERVAL)
+                    await asyncio.wait_for(stop_event.wait(), timeout=COLLECTION_CHECK_INTERVAL)
                 except asyncio.TimeoutError:
                     pass
                 if stop_event.is_set():
                     break
             else:
-                await asyncio.sleep(FRAME_CHECK_INTERVAL)
+                await asyncio.sleep(COLLECTION_CHECK_INTERVAL)
 
-            await self._check_frame_progress(datetime.now(timezone.utc))
-        logger.warning("Frame check loop quit")
+            await self._check_collection_progress(datetime.now(timezone.utc))
+        logger.warning("Collection check loop quit")
 
     async def _close_ws_quietly(self, ws) -> None:
         try:
@@ -543,7 +511,7 @@ class BeamMonitor:
         try:
             await asyncio.gather(
                 self._run_loop(stop_event),
-                self._frame_check_loop(stop_event),
+                self._collection_check_loop(stop_event),
             )
         finally:
             self.change_aggregator.cancel_all()
