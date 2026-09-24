@@ -64,6 +64,16 @@ The application requires an INI configuration file to set up the Teams webhook U
 # How many minutes good and raw frames can both stay flat, while the
 # instrument beam is on, before a stall warning is sent (default = 15).
 # stall_minutes = 15
+# UK-local time (HH:MM) the daily beam-uptime summary is sent at (default = 08:00).
+# summary_time = 08:00
+```
+
+### Optional `mcr_page_url` setting in `[DATA]`
+
+```ini
+[DATA]
+# Optional link shown as an "Open MCR news" button on MCR notification cards.
+# mcr_page_url = https://www.isis.stfc.ac.uk/gallery/beam-status/
 ```
 
 ### Optional frame-tracking settings in `[PVS]`

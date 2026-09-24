@@ -5,12 +5,15 @@ from isis_monitor.messages import (
     Notification,
     Severity,
     beam_change,
+    daily_summary,
     fmt_duration,
     fmt_time,
     frames_stalled,
     frames_vetoed,
+    get_timezone,
     mcr_news,
     run_finishing,
+    run_milestone,
     run_started,
     set_timezone,
     startup_status,
@@ -34,6 +37,14 @@ def test_set_timezone_changes_fmt_time():
         assert fmt_time(dt) == "Wed 23 Sep 09:05"
     finally:
         set_timezone("Europe/London")  # restore the default for other tests
+
+
+def test_get_timezone_reflects_set_timezone():
+    try:
+        set_timezone("America/New_York")
+        assert get_timezone().key == "America/New_York"
+    finally:
+        set_timezone("Europe/London")
 
 
 # ---------------------------------------------------------------------------
@@ -230,11 +241,49 @@ def test_run_finishing_builder_zero_raw_frames_has_zero_efficiency():
 
 def test_mcr_news_builder():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = mcr_news("Beam restored after fault.", dt)
+    n = mcr_news("Machine update: nothing to report.", dt)
     assert n.title == "MCR News"
-    assert n.text == "Beam restored after fault."
+    assert n.text == "Machine update: nothing to report."
+    assert n.severity == Severity.INFO
     assert n.emoji == "📰"
     assert n.flavour == ""
+    assert n.url is None
+
+
+def test_mcr_news_builder_good_keyword():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = mcr_news("Timing issues have been rectified. Beam back on @ 15:35", dt)
+    assert n.severity == Severity.GOOD
+    assert n.emoji == "🎉"
+
+
+def test_mcr_news_builder_attention_keyword():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = mcr_news("We are investigating a water flow fault on Target 2.", dt)
+    assert n.severity == Severity.ATTENTION
+    assert n.emoji == "🚨"
+
+
+def test_mcr_news_builder_warning_keyword():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = mcr_news("Scheduled maintenance will take place this evening.", dt)
+    assert n.severity == Severity.WARNING
+    assert n.emoji == "🔧"
+
+
+def test_mcr_news_builder_good_checked_before_attention():
+    """A resolution message naming the fault it just fixed must classify as GOOD."""
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = mcr_news("The faulty power supply in the Inner Synchrotron has been repaired.", dt)
+    assert n.severity == Severity.GOOD
+    assert n.emoji == "🎉"
+
+
+def test_mcr_news_builder_includes_url_and_label():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = mcr_news("Machine update.", dt, url="https://example.com/mcr")
+    assert n.url == "https://example.com/mcr"
+    assert n.url_label == "Open MCR news"
 
 
 def test_run_and_mcr_builders_default_to_info_severity():
@@ -274,3 +323,52 @@ def test_frames_stalled_builder():
     assert n.emoji == "⚠️"
     assert "17m" in n.text
     assert "TS1" in n.text
+
+
+def test_daily_summary_builder():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = daily_summary("TS1", 95.0, 2, timedelta(hours=5, minutes=30), "▁▂▃▄▅", 7, dt)
+    assert n.title == "TS1 daily summary"
+    assert n.severity == Severity.GOOD  # >= 90% uptime
+    assert n.emoji == "📊"
+    assert "New record" not in n.text
+    assert n.facts == [
+        ("Uptime", "95%"),
+        ("Trips", "2"),
+        ("Longest continuous on", "5h 30m"),
+        ("Sparkline", "▁▂▃▄▅"),
+        ("Runs in last 24h", "7"),
+    ]
+
+
+def test_daily_summary_builder_low_uptime_is_info():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = daily_summary("TS1", 50.0, 5, timedelta(hours=1), "▁▂", 1, dt)
+    assert n.severity == Severity.INFO
+
+
+def test_daily_summary_builder_new_record_note():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = daily_summary("TS1", 95.0, 0, timedelta(hours=10), "▇", 3, dt, is_new_record=True)
+    assert "New record" in n.text
+
+
+def test_daily_summary_builder_carries_fact_of_the_day_as_flavour():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = daily_summary("TS1", 95.0, 0, timedelta(hours=10), "▇", 3, dt, fact_of_the_day="Neutrons are neutral.")
+    assert n.flavour == "Neutrons are neutral."
+
+
+def test_run_milestone_builder():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = run_milestone(25, dt)
+    assert "25" in n.title
+    assert n.severity == Severity.GOOD
+    assert n.emoji == "🏆"
+    assert n.flavour == ""
+
+
+def test_run_milestone_builder_picks_flavour_when_rng_given():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = run_milestone(25, dt, rng=random.Random(1))
+    assert n.flavour != ""

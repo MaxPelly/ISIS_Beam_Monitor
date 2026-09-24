@@ -4,7 +4,7 @@ from collections import deque
 from datetime import datetime
 from unittest.mock import patch, MagicMock
 
-from isis_monitor.tui import RichTUI, _render_sparkline
+from isis_monitor.tui import RichTUI, _render_sparkline, sparkline_chars
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +172,34 @@ class TestHistoryBuffer:
 # ---------------------------------------------------------------------------
 # _render_sparkline() helper
 # ---------------------------------------------------------------------------
+
+class TestSparklineChars:
+    def test_empty_values_returns_spaces(self):
+        assert sparkline_chars([], 10) == " " * 10
+
+    def test_length_matches_width_when_enough_samples(self):
+        result = sparkline_chars(list(range(20)), 10)
+        assert len(result) == 10
+
+    def test_left_padded_when_fewer_samples_than_width(self):
+        result = sparkline_chars([1.0, 2.0, 3.0], 10)
+        assert len(result) == 10
+        assert result.startswith("       ")   # 7 leading spaces
+
+    def test_all_zero_renders_as_flat_baseline(self):
+        assert sparkline_chars([0.0] * 5, 5).strip() == ""
+
+    def test_max_value_uses_full_block(self):
+        from isis_monitor.tui import _BLOCKS
+        result = sparkline_chars([0.0, 100.0], 2)
+        assert _BLOCKS[-1] in result
+
+    def test_matches_render_sparkline_block_characters(self):
+        """sparkline_chars and _render_sparkline must select identical characters."""
+        values = [1.0, 5.0, 3.0, 8.0, 2.0]
+        history_data = [(v, "high") for v in values]
+        assert _render_sparkline(history_data, 5).plain == sparkline_chars(values, 5)
+
 
 class TestRenderSparkline:
     def test_empty_values_returns_spaces(self):

@@ -36,6 +36,8 @@ class DaemonState(MonitorSinkProtocol):
         self.logs: Deque[str] = deque(maxlen=logs_maxlen)
         self.run_name = ""
         self.current_counts = -1.0
+        self.run_completions: Deque[datetime] = deque(maxlen=2000)
+        self.total_runs_completed = 0
         self.last_update = datetime.now(timezone.utc)
         self.health: Dict[str, str] = {
             "daemon": "starting",
@@ -139,6 +141,18 @@ class DaemonState(MonitorSinkProtocol):
             self.last_update = datetime.now(timezone.utc)
             self._publish("health", {"component": component, "status": status})
 
+    def record_run_completed(self, ts: datetime) -> int:
+        """Record a completed run and return the new all-time total."""
+        with self._lock:
+            self.run_completions.append(ts)
+            self.total_runs_completed += 1
+            self.last_update = ts
+            return self.total_runs_completed
+
+    def count_runs_completed_since(self, since: datetime) -> int:
+        with self._lock:
+            return sum(1 for ts in self.run_completions if ts >= since)
+
     def snapshot(self) -> dict:
         with self._lock:
             return {
@@ -147,6 +161,7 @@ class DaemonState(MonitorSinkProtocol):
                 "mcr_news": self.mcr_news,
                 "run_name": self.run_name,
                 "current_counts": self.current_counts,
+                "total_runs_completed": self.total_runs_completed,
                 "health": dict(self.health),
             }
 
@@ -214,6 +229,7 @@ class DaemonState(MonitorSinkProtocol):
             self.mcr_news = str(snap.get("mcr_news", self.mcr_news))
             self.run_name = str(snap.get("run_name", self.run_name))
             self.current_counts = float(snap.get("current_counts", self.current_counts))
+            self.total_runs_completed = int(snap.get("total_runs_completed", self.total_runs_completed))
             health = snap.get("health", {})
             if isinstance(health, dict):
                 for k, v in health.items():

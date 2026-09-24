@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import pytest
 
 from isis_monitor.daemon_state import DaemonState, DaemonEvent
@@ -76,3 +76,33 @@ def test_restore_from_snapshot():
     state.restore_from_snapshot_json("{bad_json: True")
     # State should remain intact
     assert state.mcr_news == "Restored News"
+
+
+def test_record_run_completed_returns_running_total():
+    state = DaemonState()
+    now = datetime.now(timezone.utc)
+    assert state.record_run_completed(now) == 1
+    assert state.record_run_completed(now) == 2
+    assert state.total_runs_completed == 2
+
+
+def test_count_runs_completed_since_filters_by_window():
+    state = DaemonState()
+    now = datetime.now(timezone.utc)
+    state.record_run_completed(now - timedelta(hours=30))  # outside 24h window
+    state.record_run_completed(now - timedelta(hours=1))
+    state.record_run_completed(now)
+
+    assert state.count_runs_completed_since(now - timedelta(hours=24)) == 2
+
+
+def test_total_runs_completed_persists_through_snapshot():
+    state = DaemonState()
+    state.record_run_completed(datetime.now(timezone.utc))
+    state.record_run_completed(datetime.now(timezone.utc))
+
+    snap_json = json.dumps(state.snapshot())
+
+    restored = DaemonState()
+    restored.restore_from_snapshot_json(snap_json)
+    assert restored.total_runs_completed == 2

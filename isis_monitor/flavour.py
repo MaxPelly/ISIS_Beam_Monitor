@@ -55,6 +55,11 @@ _LINES: Dict[Key, List[str]] = {
         "Monitor's awake and watching.",
         "On watch from here.",
     ],
+    ("*", "milestone"): [
+        "Another one for the books.",
+        "Racking them up nicely.",
+        "The counter keeps climbing.",
+    ],
 }
 
 
@@ -65,3 +70,18 @@ def pick(key: Key, rng: random.Random) -> str:
     if not lines:
         return ""
     return rng.choice(lines)
+
+
+# Shown once per day on the daily summary card, when fun_mode is enabled.
+FACTS_OF_THE_DAY = [
+    "Neutrons have no electric charge, which lets them pass through materials that block X-rays.",
+    "A neutron still has a magnetic moment despite carrying no charge, which is what makes it useful for probing magnetism.",
+    "Spallation neutron sources like ISIS fire high-energy protons at a heavy metal target to knock loose bursts of neutrons.",
+    "ISIS is named after the stretch of the River Thames that runs through Oxford, itself named for the Egyptian goddess.",
+    "Unlike a nuclear reactor, a spallation source only produces neutrons in short pulses, not a continuous stream.",
+]
+
+
+def fact_of_the_day(rng: random.Random) -> str:
+    """Pick a random fact for the daily summary card."""
+    return rng.choice(FACTS_OF_THE_DAY)

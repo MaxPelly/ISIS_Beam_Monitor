@@ -16,6 +16,7 @@ from isis_monitor.messages import (
     beam_change,
     frames_stalled,
     frames_vetoed,
+    run_milestone,
     run_started,
     run_finishing,
     startup_status,
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 FRAME_SAMPLE_WINDOW = timedelta(minutes=15)
 FRAME_CHECK_INTERVAL = 60.0
+RUN_MILESTONE_INTERVAL = 25
 
 
 def _fit_rate(samples: List[Tuple[datetime, float]]) -> float:
@@ -358,6 +360,13 @@ class BeamMonitor:
                     self.state.frames_stalled_since = None
                     self.state.veto_warned = False
                     self.state.stall_warned = False
+
+                    if self.sink:
+                        total_runs = self.sink.record_run_completed(time_now)
+                        if self.config.fun_mode and total_runs % RUN_MILESTONE_INTERVAL == 0:
+                            milestone = run_milestone(total_runs, time_now, rng=self._rng)
+                            logger.info(f"Milestone: {milestone.to_plain_text()}")
+                            await self.experiment_channel.broadcast(milestone)
 
                 self.state.run_name = name
                 self.state.run_started_at = time_now

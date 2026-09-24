@@ -128,7 +128,10 @@ class MCRNewsMonitor:
                         self.sink.update_mcr_news(new_news)
                         self.sink.update_health("mcr", "connected")
                     rng = self._rng if self.config.fun_mode else None
-                    notification = mcr_news(new_news, datetime.now(timezone.utc), rng=rng)
+                    notification = mcr_news(
+                        new_news, datetime.now(timezone.utc),
+                        url=self.config.mcr_page_url or None, rng=rng,
+                    )
                     await self.channel.broadcast(notification)
                 elif new_news:
                     consecutive_failures = 0

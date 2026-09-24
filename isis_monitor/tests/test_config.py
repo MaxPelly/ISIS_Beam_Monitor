@@ -291,3 +291,60 @@ counts_type = bogus
 """)
     with pytest.raises(ConfigError, match="counts_type"):
         load_config(config_file)
+
+
+def test_load_config_mcr_page_url_and_summary_time_defaults(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[DATA]
+mcr_news_url = http://test.com/news
+isis_websocket_url = wss://test.com/ws
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+""")
+    config = load_config(config_file)
+    assert config.mcr_page_url == ""
+    assert config.summary_time == "08:00"
+
+
+def test_load_config_mcr_page_url_and_summary_time_custom(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[DATA]
+mcr_news_url = http://test.com/news
+isis_websocket_url = wss://test.com/ws
+mcr_page_url = https://example.com/mcr
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+
+[NOTIFICATIONS]
+summary_time = 07:30
+""")
+    config = load_config(config_file)
+    assert config.mcr_page_url == "https://example.com/mcr"
+    assert config.summary_time == "07:30"
+
+
+def test_load_config_invalid_summary_time(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[DATA]
+mcr_news_url = http://test.com/news
+isis_websocket_url = wss://test.com/ws
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+
+[NOTIFICATIONS]
+summary_time = not-a-time
+""")
+    with pytest.raises(ConfigError, match="summary_time"):
+        load_config(config_file)

@@ -6,6 +6,7 @@ import fcntl
 import json
 import logging
 import os
+import random
 import signal
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
@@ -23,6 +24,7 @@ from isis_monitor.mcr import MCRNewsMonitor
 from isis_monitor.messages import set_timezone
 from isis_monitor.notifiers import DummyNotifier, NotificationChannel, TeamsNotifier
 from isis_monitor.storage import SQLiteStateStore
+from isis_monitor.summary import daily_summary_loop
 from isis_monitor.tui import RichTUI
 
 logger = logging.getLogger("MAIN")
@@ -263,6 +265,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
             mcr_monitor.run(stop_event),
             state_persistence_loop(config, state, store, stop_event),
             daemon_heartbeat_loop(config, state, stop_event),
+            daily_summary_loop(config, state, store, beam_channel, stop_event, rng=random.Random()),
         )
     finally:
         logger.warning("Shutting down daemon")

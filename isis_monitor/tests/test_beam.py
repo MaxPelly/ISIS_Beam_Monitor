@@ -4,7 +4,7 @@ import base64
 import random
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from isis_monitor.config import AppConfig
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.beam import (
@@ -37,11 +37,11 @@ def mock_channels():
     return beam_channel, exp_channel
 
 
-def make_monitor(mock_config, mock_channels, counts_target=100, rng=None):
+def make_monitor(mock_config, mock_channels, counts_target=100, rng=None, sink=None):
     beam_channel, exp_channel = mock_channels
     return BeamMonitor(
         mock_config, beam_channel, exp_channel, counts_target=counts_target,
-        debounce_seconds=DEBOUNCE_SECONDS, rng=rng,
+        debounce_seconds=DEBOUNCE_SECONDS, rng=rng, sink=sink,
     )
 
 
@@ -274,6 +274,68 @@ async def test_handle_update_run_name_nan_ignored(mock_config, mock_channels):
     await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": "nan"})
     assert m.state.run_name == ""
     exp_channel.broadcast.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_update_run_name_change_records_completion_on_sink(mock_config, mock_channels):
+    beam_channel, exp_channel = mock_channels
+    sink = MagicMock()
+    sink.record_run_completed.return_value = 5  # not a multiple of 25
+    m = make_monitor(mock_config, mock_channels, sink=sink)
+    m.state.run_name = "Run 1"
+    m.state.run_started_at = datetime.now(timezone.utc)
+
+    b64 = base64.b64encode(b"Run 2").decode()
+    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": b64})
+
+    sink.record_run_completed.assert_called_once()
+    exp_channel.broadcast.assert_called_once()  # only the "new run" card, no milestone
+
+
+@pytest.mark.asyncio
+async def test_handle_update_run_name_change_no_completion_on_first_ever_run(mock_config, mock_channels):
+    """The very first run seen isn't a completion — nothing to count yet."""
+    beam_channel, exp_channel = mock_channels
+    sink = MagicMock()
+    m = make_monitor(mock_config, mock_channels, sink=sink)
+
+    b64 = base64.b64encode(b"Run 1").decode()
+    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": b64})
+
+    sink.record_run_completed.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_update_run_name_change_milestone_every_25_runs(mock_config, mock_channels):
+    fun_config = replace(mock_config, fun_mode=True)
+    beam_channel, exp_channel = mock_channels
+    sink = MagicMock()
+    sink.record_run_completed.return_value = 25
+    m = make_monitor(fun_config, mock_channels, sink=sink)
+    m.state.run_name = "Run 24"
+    m.state.run_started_at = datetime.now(timezone.utc)
+
+    b64 = base64.b64encode(b"Run 25").decode()
+    await m._handle_update({"pv": fun_config.run_name_pv, "b64byt": b64})
+
+    assert exp_channel.broadcast.call_count == 2  # "new run" card + milestone card
+    milestone = exp_channel.broadcast.call_args_list[1].args[0]
+    assert "25" in milestone.title
+
+
+@pytest.mark.asyncio
+async def test_handle_update_run_name_change_no_milestone_without_fun_mode(mock_config, mock_channels):
+    beam_channel, exp_channel = mock_channels
+    sink = MagicMock()
+    sink.record_run_completed.return_value = 25
+    m = make_monitor(mock_config, mock_channels, sink=sink)  # fun_mode defaults to False
+    m.state.run_name = "Run 24"
+    m.state.run_started_at = datetime.now(timezone.utc)
+
+    b64 = base64.b64encode(b"Run 25").decode()
+    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": b64})
+
+    exp_channel.broadcast.assert_called_once()  # only the "new run" card
 
 
 # ---------------------------------------------------------------------------

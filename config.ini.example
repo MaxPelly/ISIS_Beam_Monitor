@@ -1,6 +1,8 @@
 [DATA]
 mcr_news_url = https://www.isis.stfc.ac.uk/gallery/beam-status/mcrnews.txt
 isis_websocket_url = wss://ndaextweb4.nd.rl.ac.uk/pvws/pv
+# Optional link shown as an "Open MCR news" button on MCR notification cards.
+# mcr_page_url = https://www.isis.stfc.ac.uk/gallery/beam-status/
 
 [WEBHOOKS]
 # Webhook URLs should be kept secret. Consider restricting permissions on this file (e.g. chmod 600)
@@ -77,3 +79,5 @@ experiment_teams_url =
 # How many minutes good and raw frames can both stay flat, while the
 # instrument beam is on, before a stall warning is sent.
 # stall_minutes = 15
+# UK-local time (HH:MM) the daily beam-uptime summary is sent at.
+# summary_time = 08:00

@@ -97,7 +97,7 @@ class TeamsNotifier(Notifier):
 
         if notification.url:
             card["actions"] = [
-                {"type": "Action.OpenUrl", "title": "Open", "url": notification.url}
+                {"type": "Action.OpenUrl", "title": notification.url_label, "url": notification.url}
             ]
 
         plain_text = notification.to_plain_text()

@@ -22,6 +22,8 @@ class AppConfig:
     beam_teams_url: str
     experiment_teams_url: str
 
+    mcr_page_url: str = ""  # [DATA] optional "Open MCR news" button link
+
     # PVS — instrument-specific; override in [PVS] for non-PEARL instruments
     counts_pv: str = "IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE"
     run_name_pv: str = "IN:PEARL:DAE:WDTITLE"
@@ -70,6 +72,7 @@ class AppConfig:
     notifications_timezone: str = "Europe/London"
     debounce_seconds: float = 20.0
     stall_minutes: float = 15.0
+    summary_time: str = "08:00"  # UK-local HH:MM the daily summary is sent at
 
 
 def load_config(config_path: Path) -> AppConfig:
@@ -92,6 +95,7 @@ def load_config(config_path: Path) -> AppConfig:
             "isis_websocket_url is empty — BeamMonitor will not run. "
             "Please set [DATA] isis_websocket_url in your config file."
         )
+    mcr_page_url = config.get("DATA", "mcr_page_url", fallback="")
 
     # WEBHOOKS
     news_teams_url = config.get("WEBHOOKS", "news_teams_url", fallback="")
@@ -144,6 +148,13 @@ def load_config(config_path: Path) -> AppConfig:
     notifications_timezone = config.get("NOTIFICATIONS", "timezone", fallback="Europe/London")
     debounce_seconds = config.getfloat("NOTIFICATIONS", "debounce_seconds", fallback=20.0)
     stall_minutes = config.getfloat("NOTIFICATIONS", "stall_minutes", fallback=15.0)
+    summary_time = config.get("NOTIFICATIONS", "summary_time", fallback="08:00")
+    try:
+        hour_str, minute_str = summary_time.split(":")
+        if not (0 <= int(hour_str) <= 23 and 0 <= int(minute_str) <= 59):
+            raise ValueError
+    except ValueError:
+        raise ConfigError(f"[NOTIFICATIONS] summary_time must be 'HH:MM', got '{summary_time}'")
 
     # TUI (fully optional section)
     try:
@@ -175,6 +186,7 @@ def load_config(config_path: Path) -> AppConfig:
     return AppConfig(
         mcr_news_url=mcr_news_url,
         isis_websocket_url=isis_websocket_url,
+        mcr_page_url=mcr_page_url,
         news_teams_url=news_teams_url,
         beam_teams_url=beam_teams_url,
         experiment_teams_url=experiment_teams_url,
@@ -211,4 +223,5 @@ def load_config(config_path: Path) -> AppConfig:
         notifications_timezone=notifications_timezone,
         debounce_seconds=debounce_seconds,
         stall_minutes=stall_minutes,
+        summary_time=summary_time,
     )

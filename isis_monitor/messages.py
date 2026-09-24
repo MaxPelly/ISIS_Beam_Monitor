@@ -18,6 +18,11 @@ def set_timezone(tz_name: str) -> None:
     _display_tz = ZoneInfo(tz_name)
 
 
+def get_timezone() -> ZoneInfo:
+    """The timezone currently configured via set_timezone()."""
+    return _display_tz
+
+
 def fmt_time(dt: datetime) -> str:
     """Format a datetime in the configured local timezone, e.g. 'Wed 23 Sep 14:05'."""
     return dt.astimezone(_display_tz).strftime("%a %d %b %H:%M")
@@ -64,6 +69,7 @@ class Notification:
     facts: List[Tuple[str, str]] = field(default_factory=list)
     flavour: str = ""
     url: Optional[str] = None
+    url_label: str = "Open"
     timestamp: Optional[datetime] = None
 
     def to_plain_text(self) -> str:
@@ -222,13 +228,84 @@ def frames_stalled(instrument_target: str, stalled_for: timedelta, time_now: dat
     )
 
 
+# Checked in this order — GOOD first, since a resolution message routinely
+# names the fault it just cleared in the same sentence (e.g. "The faulty
+# power supply ... has been repaired").
+_MCR_GOOD_KEYWORDS = ("restored", "back on", "beam on", "resolved", "rectified", "repaired", "fixed")
+_MCR_ATTENTION_KEYWORDS = ("fault", "trip", "issue", "problem", "investigating")
+_MCR_WARNING_KEYWORDS = ("maintenance", "shutdown")
+
+
+def _mcr_severity_and_emoji(news_text: str) -> Tuple[Severity, str]:
+    lowered = news_text.lower()
+    if any(kw in lowered for kw in _MCR_GOOD_KEYWORDS):
+        return Severity.GOOD, "🎉"
+    if any(kw in lowered for kw in _MCR_ATTENTION_KEYWORDS):
+        return Severity.ATTENTION, "🚨"
+    if any(kw in lowered for kw in _MCR_WARNING_KEYWORDS):
+        return Severity.WARNING, "🔧"
+    return Severity.INFO, MCR_NEWS_EMOJI
+
+
 def mcr_news(
-    news_text: str, time_now: datetime, rng: Optional[random.Random] = None
+    news_text: str,
+    time_now: datetime,
+    url: Optional[str] = None,
+    rng: Optional[random.Random] = None,
 ) -> Notification:
+    severity, emoji = _mcr_severity_and_emoji(news_text)
     return Notification(
         title="MCR News",
         text=news_text,
-        emoji=MCR_NEWS_EMOJI,
+        severity=severity,
+        emoji=emoji,
         flavour=flavour.pick(("*", "mcr_news"), rng) if rng else "",
+        url=url,
+        url_label="Open MCR news",
+        timestamp=time_now,
+    )
+
+
+def daily_summary(
+    display_name: str,
+    uptime_pct: float,
+    trips: int,
+    longest_on_streak: timedelta,
+    sparkline: str,
+    runs_last_24h: int,
+    time_now: datetime,
+    is_new_record: bool = False,
+    fact_of_the_day: str = "",
+) -> Notification:
+    text = f"{display_name}: {uptime_pct:.0f}% uptime over the last 24h."
+    if is_new_record:
+        text = f"{text} 🏆 New record!"
+
+    return Notification(
+        title=f"{display_name} daily summary",
+        text=text,
+        severity=Severity.GOOD if uptime_pct >= 90 else Severity.INFO,
+        emoji="📊",
+        facts=[
+            ("Uptime", f"{uptime_pct:.0f}%"),
+            ("Trips", str(trips)),
+            ("Longest continuous on", fmt_duration(longest_on_streak)),
+            ("Sparkline", sparkline),
+            ("Runs in last 24h", str(runs_last_24h)),
+        ],
+        flavour=fact_of_the_day,
+        timestamp=time_now,
+    )
+
+
+def run_milestone(
+    run_count: int, time_now: datetime, rng: Optional[random.Random] = None
+) -> Notification:
+    return Notification(
+        title=f"🏆 {run_count} runs completed",
+        text=f"That's {run_count} runs since records began.",
+        severity=Severity.GOOD,
+        emoji="🏆",
+        flavour=flavour.pick(("*", "milestone"), rng) if rng else "",
         timestamp=time_now,
     )

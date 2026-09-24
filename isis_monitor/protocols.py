@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 
@@ -61,4 +62,8 @@ class MonitorSinkProtocol(Protocol):
         ...
 
     def update_health(self, component: str, status: str) -> None:
+        ...
+
+    def record_run_completed(self, ts: datetime) -> int:
+        """Record a completed run and return the new all-time total."""
         ...
