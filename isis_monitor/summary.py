@@ -112,9 +112,11 @@ async def daily_summary_loop(
 
         now_utc = datetime.now(timezone.utc)
         now_local = now_utc.astimezone(get_timezone())
+        # ">=" rather than exact-minute equality: a slow tick (e.g. one that
+        # overlaps DB I/O) could otherwise step straight over the target
+        # minute and silently skip the whole day's summary.
         if not (
-            now_local.hour == target_hour
-            and now_local.minute == target_minute
+            (now_local.hour, now_local.minute) >= (target_hour, target_minute)
             and last_sent_date != now_local.date()
         ):
             continue

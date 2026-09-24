@@ -145,6 +145,13 @@ def test_beam_change_builder_short_outage_keeps_state_emoji():
     assert n.emoji == "🟢"
 
 
+def test_beam_change_builder_zero_high_threshold_does_not_crash():
+    """A misconfigured (0.0) high boundary must degrade gracefully, not raise."""
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = beam_change("Muon", "low", "high", 3.0, 1.0, 0.0, timedelta(minutes=5), dt)
+    assert ("% of high threshold", "n/a") in n.facts
+
+
 def test_beam_change_builder_long_outage_is_restored():
     """Recovering from an hour-plus outage gets the celebratory emoji instead."""
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)

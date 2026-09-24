@@ -267,6 +267,28 @@ async def test_handle_update_run_name_change(mock_config, mock_channels):
 
 
 @pytest.mark.asyncio
+async def test_handle_update_run_name_change_resets_end_notified(mock_config, mock_channels):
+    """A new run must re-arm the 'about to finish' notification for itself,
+    even if the previous run ended with end_notified already set."""
+    beam_channel, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels, counts_target=10)
+    m.state.run_name = "Run 1"
+    m.state.run_started_at = datetime.now(timezone.utc)
+    m.state.end_notified = True
+
+    b64 = base64.b64encode(b"Run 2").decode()
+    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": b64})
+    assert m.state.end_notified is False
+
+    exp_channel.broadcast.reset_mock()
+    # counts_target=10 is small enough that the old "< target - 25" reset
+    # path would never trip; the run-start reset must do it instead.
+    await m._handle_update({"pv": mock_config.counts_pv, "text": "5/12"})
+    exp_channel.broadcast.assert_called_once()
+    assert "about to finish" in exp_channel.broadcast.call_args[0][0].title
+
+
+@pytest.mark.asyncio
 async def test_handle_update_run_name_nan_ignored(mock_config, mock_channels):
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
@@ -430,6 +452,7 @@ def test_fit_rate_computes_slope_per_second():
 async def test_check_frame_progress_detects_veto(mock_config, mock_channels):
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
+    m.state.run_name = "Run 1"
     now = datetime.now(timezone.utc)
 
     m.state.current_good_frames = 100.0
@@ -449,6 +472,7 @@ async def test_check_frame_progress_detects_veto(mock_config, mock_channels):
 async def test_check_frame_progress_veto_warns_once_then_resets_on_movement(mock_config, mock_channels):
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
+    m.state.run_name = "Run 1"
     now = datetime.now(timezone.utc)
 
     m.state.current_good_frames = 100.0
@@ -475,6 +499,7 @@ async def test_check_frame_progress_detects_stall_when_instrument_beam_on(mock_c
     beam_config = replace(mock_config, stall_minutes=0.01)  # ~0.6s, fast for tests
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
+    m.state.run_name = "Run 1"
     m.state.beams["TS1"].power = "high"  # instrument beam is on
 
     now = datetime.now(timezone.utc)
@@ -497,6 +522,7 @@ async def test_check_frame_progress_no_stall_warning_when_instrument_beam_off(mo
     beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
+    m.state.run_name = "Run 1"
     m.state.beams["TS1"].power = "off"  # instrument beam is off — no warning expected
 
     now = datetime.now(timezone.utc)
@@ -515,6 +541,7 @@ async def test_check_frame_progress_movement_resets_stall_clock(mock_config, moc
     beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
+    m.state.run_name = "Run 1"
     m.state.beams["TS1"].power = "high"
 
     now = datetime.now(timezone.utc)
@@ -532,3 +559,26 @@ async def test_check_frame_progress_movement_resets_stall_clock(mock_config, moc
     assert m.state.frames_stalled_since is None
 
     exp_channel.broadcast.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_check_frame_progress_no_active_run_never_warns(mock_config, mock_channels):
+    """Between runs, frame counts are naturally static — that must not look
+    like a stall or a veto just because no run is currently in progress."""
+    beam_config = replace(mock_config, stall_minutes=0.01)
+    beam_channel, exp_channel = mock_channels
+    m = make_monitor(beam_config, mock_channels)
+    assert m.state.run_name == ""  # no run active
+    m.state.beams["TS1"].power = "high"
+
+    now = datetime.now(timezone.utc)
+    m.state.current_good_frames = 100.0
+    m.state.current_raw_frames = 100.0
+    m.state.last_check_good = 100.0
+    m.state.last_check_raw = 100.0
+
+    await m._check_frame_progress(now)
+    await m._check_frame_progress(now + timedelta(seconds=1))
+
+    exp_channel.broadcast.assert_not_called()
+    assert m.state.frames_stalled_since is None

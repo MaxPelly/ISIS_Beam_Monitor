@@ -121,6 +121,8 @@ def beam_change(
     if trip_note:
         text = f"{text}\n\n{trip_note}"
 
+    pct_of_high = f"{beam_val / high_threshold * 100:.0f}%" if high_threshold > 0 else "n/a"
+
     return Notification(
         title=f"{display_name} {arrow} {prev_state} → {new_state}",
         text=text,
@@ -129,7 +131,7 @@ def beam_change(
         facts=[
             ("Current", f"{beam_val:.3f} uA"),
             ("Previous", f"{prev_val:.3f} uA"),
-            ("% of high threshold", f"{beam_val / high_threshold * 100:.0f}%"),
+            ("% of high threshold", pct_of_high),
             (f"Was {prev_state}", f"for {fmt_duration(time_in_prev_state)}"),
         ],
         flavour=flavour.pick((display_name, transition), rng) if rng else "",

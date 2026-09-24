@@ -43,3 +43,13 @@ def test_storage_snapshot_and_health(tmp_path):
     assert health[0]["component"] == "beam"
     assert health[0]["status"] == "connected"
     store.close()
+
+
+def test_storage_sets_busy_timeout(tmp_path):
+    """A busy timeout lets a transient overlap between the persistence and
+    daily-summary loops retry instead of raising 'database is locked'."""
+    db = tmp_path / "state.db"
+    store = SQLiteStateStore(db)
+    (timeout_ms,) = store.conn.execute("PRAGMA busy_timeout").fetchone()
+    assert timeout_ms > 0
+    store.close()

@@ -112,9 +112,38 @@ async def test_daily_summary_loop_sends_one_card_per_target_at_summary_time(tmp_
 
 
 @pytest.mark.asyncio
-async def test_daily_summary_loop_does_not_fire_outside_summary_time(tmp_path):
+async def test_daily_summary_loop_fires_even_if_the_exact_minute_was_missed(tmp_path):
+    """A slow tick that steps past the target minute must still send today's
+    summary rather than silently waiting for tomorrow (regression guard)."""
     now_local = datetime.now(get_timezone())
-    off_time = (now_local + timedelta(hours=6)).strftime("%H:%M")
+    just_passed = now_local.replace(minute=max(now_local.minute - 1, 0)).strftime("%H:%M")
+    config = make_config(summary_time=just_passed)
+
+    state = DaemonState()
+    store = SQLiteStateStore(tmp_path / "summary_test_missed_minute.db")
+    beam_channel = NotificationChannel("Beam")
+    beam_channel.broadcast = AsyncMock()
+    stop_event = asyncio.Event()
+
+    async def stop_soon():
+        await asyncio.sleep(0.05)
+        stop_event.set()
+
+    with patch("isis_monitor.summary.SUMMARY_CHECK_INTERVAL", 0.01):
+        asyncio.create_task(stop_soon())
+        await daily_summary_loop(config, state, store, beam_channel, stop_event)
+
+    assert beam_channel.broadcast.call_count == 3
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_daily_summary_loop_does_not_fire_outside_summary_time(tmp_path):
+    # 23:59 is guaranteed later today without the hour-wraparound that
+    # `now + timedelta(hours=6)` could hit (e.g. run at 22:00 -> 04:00,
+    # which is numerically "earlier" and would wrongly look already-past).
+    now_local = datetime.now(get_timezone())
+    off_time = "23:58" if now_local.strftime("%H:%M") == "23:59" else "23:59"
     config = make_config(summary_time=off_time)
 
     state = DaemonState()

@@ -293,6 +293,48 @@ counts_type = bogus
         load_config(config_file)
 
 
+def test_load_config_invalid_instrument_target(tmp_path):
+    """A typo like the display label "Muons" instead of the state_key "Muon"
+    must be rejected at load time rather than silently degrading to
+    "unknown" in every run-card fact."""
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("""\
+[DATA]
+mcr_news_url = http://test.com/news
+isis_websocket_url = wss://test.com/ws
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+
+[PVS]
+instrument_target = Muons
+""")
+    with pytest.raises(ConfigError, match="instrument_target"):
+        load_config(config_file)
+
+
+def test_load_config_valid_instrument_targets(tmp_path):
+    for target in ("TS1", "TS2", "Muon"):
+        config_file = tmp_path / f"config_{target}.ini"
+        config_file.write_text(f"""\
+[DATA]
+mcr_news_url = http://test.com/news
+isis_websocket_url = wss://test.com/ws
+
+[WEBHOOKS]
+news_teams_url =
+beam_teams_url =
+experiment_teams_url =
+
+[PVS]
+instrument_target = {target}
+""")
+        config = load_config(config_file)
+        assert config.instrument_target == target
+
+
 def test_load_config_mcr_page_url_and_summary_time_defaults(tmp_path):
     config_file = tmp_path / "config.ini"
     config_file.write_text("""\

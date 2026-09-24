@@ -109,6 +109,12 @@ def load_config(config_path: Path) -> AppConfig:
     ts2_beam_current_pv = config.get("PVS", "ts2_beam_current_pv", fallback="AC:TS2:BEAM:CURR")
     muon_beam_current_pv = config.get("PVS", "muon_beam_current_pv", fallback="AC:MUON:BEAM:CURR")
     instrument_target = config.get("PVS", "instrument_target", fallback="TS1")
+    # Must match the state_key values of isis_monitor.beam.BEAM_TARGETS — not
+    # imported directly to avoid a circular import (beam.py imports config.py).
+    if instrument_target not in ("TS1", "TS2", "Muon"):
+        raise ConfigError(
+            f"[PVS] instrument_target must be one of TS1, TS2, Muon, got '{instrument_target}'"
+        )
     counts_type = config.get("PVS", "counts_type", fallback="raw")
     if counts_type not in ("good", "raw"):
         raise ConfigError(f"[PVS] counts_type must be 'good' or 'raw', got '{counts_type}'")

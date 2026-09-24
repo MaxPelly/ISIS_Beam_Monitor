@@ -354,6 +354,7 @@ class BeamMonitor:
                     self.state.current_counts = 0
                     self.state.current_good_frames = 0.0
                     self.state.current_raw_frames = 0.0
+                    self.state.end_notified = False
                     self.state.frame_samples.clear()
                     self.state.last_check_good = -1.0
                     self.state.last_check_raw = -1.0
@@ -439,7 +440,14 @@ class BeamMonitor:
         return beam_state.power if beam_state else "unknown"
 
     async def _check_frame_progress(self, time_now: datetime) -> None:
-        """Detect vetoed or stalled frame collection (called roughly every 60s)."""
+        """Detect vetoed or stalled frame collection (called roughly every 60s).
+
+        Only meaningful while a run is active — between runs, frame counts are
+        naturally static, which would otherwise look identical to a stall.
+        """
+        if not self.state.run_name:
+            return
+
         good = self.state.current_good_frames
         raw = self.state.current_raw_frames
         good_moved = self.state.last_check_good >= 0 and good > self.state.last_check_good

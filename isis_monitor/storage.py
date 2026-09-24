@@ -12,6 +12,11 @@ class SQLiteStateStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        # This connection is shared across asyncio.to_thread() calls from
+        # independently-scheduled loops (state persistence, daily summary);
+        # a busy timeout lets a transient overlap retry instead of raising
+        # "database is locked" immediately.
+        self.conn.execute("PRAGMA busy_timeout = 5000")
         self._init_schema()
 
     def _init_schema(self) -> None:
