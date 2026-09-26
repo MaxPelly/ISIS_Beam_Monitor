@@ -1,5 +1,6 @@
 import configparser
 import logging
+import math
 import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -13,6 +14,8 @@ _INSTRUMENT_TARGETS = ("TS1", "TS2", "Muon")
 
 INSTRUMENT_SECTION_PREFIX = "INSTRUMENT:"
 _INSTRUMENT_KEYS = ("counts_pv", "notify_counts", "beam_target")
+# The name becomes part of the derived run-name PV, so it must be one PV segment.
+_INSTRUMENT_NAME_RE = re.compile(r"[A-Z0-9_-]+")
 
 
 class ConfigError(Exception):
@@ -32,6 +35,8 @@ class InstrumentConfig:
     notify_counts: float
     beam_target: str  # which beam target's state to report in run cards
     run_name_pv: str = ""  # derived from the name when blank
+    # The INI section it was read from, for error messages
+    section: str = field(default="", compare=False, repr=False)
 
     def __post_init__(self):
         if not self.run_name_pv:
@@ -127,7 +132,7 @@ def _read_instruments(
 ) -> List[InstrumentConfig]:
     """Instruments from the [INSTRUMENT:<NAME>] sections, or one built from the
     legacy [PVS] keys when there are none."""
-    sections = [s for s in parser.sections() if s.startswith(INSTRUMENT_SECTION_PREFIX)]
+    sections = [s for s in parser.sections() if s.upper().startswith(INSTRUMENT_SECTION_PREFIX)]
     if not sections:
         return [InstrumentConfig(
             name=_legacy_instrument_name(config),
@@ -135,6 +140,7 @@ def _read_instruments(
             notify_counts=config.notify_counts,
             beam_target=config.instrument_target,
             run_name_pv=config.run_name_pv,
+            section="PVS",
         )]
 
     instruments = []
@@ -142,7 +148,12 @@ def _read_instruments(
         name = section[len(INSTRUMENT_SECTION_PREFIX):].strip().upper()
         if not name:
             raise ConfigError(f"[{section}] needs an instrument name, e.g. [INSTRUMENT:PEARL]")
-        unknown = set(parser.options(section)) - set(_INSTRUMENT_KEYS)
+        if not _INSTRUMENT_NAME_RE.fullmatch(name):
+            raise ConfigError(
+                f"[{section}] instrument name may only contain letters, digits, '_' and '-'"
+            )
+        # options() also lists any [DEFAULT] keys, which aren't this section's fault.
+        unknown = set(parser.options(section)) - set(_INSTRUMENT_KEYS) - set(parser.defaults())
         if unknown:
             logger.warning(f"[{section}] ignoring unknown key(s): {', '.join(sorted(unknown))}")
         counts_pv = parser.get(section, "counts_pv", fallback="").strip()
@@ -156,7 +167,7 @@ def _read_instruments(
         except ValueError as exc:
             raise ConfigError(f"[{section}] notify_counts: {exc}") from exc
         beam_target = parser.get(section, "beam_target", fallback="").strip() or config.instrument_target
-        instruments.append(InstrumentConfig(name, counts_pv, notify_counts, beam_target))
+        instruments.append(InstrumentConfig(name, counts_pv, notify_counts, beam_target, section=section))
     return instruments
 
 
@@ -168,7 +179,7 @@ def _validate_instruments(config: AppConfig) -> None:
         config.muon_beam_current_pv: "the Muon beam",
     }
     for inst in config.instruments:
-        section = f"{INSTRUMENT_SECTION_PREFIX}{inst.name}"
+        section = inst.section or f"{INSTRUMENT_SECTION_PREFIX}{inst.name}"
         if inst.name in names:
             raise ConfigError(f"Instrument {inst.name} is defined more than once")
         names.add(inst.name)
@@ -177,8 +188,9 @@ def _validate_instruments(config: AppConfig) -> None:
                 f"[{section}] beam_target must be one of {', '.join(_INSTRUMENT_TARGETS)}, "
                 f"got '{inst.beam_target}'"
             )
-        if inst.notify_counts <= 0:
-            raise ConfigError(f"[{section}] notify_counts must be positive")
+        # Also rejects nan and inf, which would never be reached.
+        if not (math.isfinite(inst.notify_counts) and inst.notify_counts > 0):
+            raise ConfigError(f"[{section}] notify_counts must be a positive number")
         # Each PV update is routed to exactly one owner, so PVs can't be shared.
         for pv in (inst.counts_pv, inst.run_name_pv):
             if pv in pv_owners:
@@ -219,7 +231,10 @@ def load_config(config_path: Path) -> AppConfig:
         raise ConfigError(f"Config file not found: {config_path}")
 
     parser = configparser.ConfigParser(interpolation=None)
-    parser.read(config_path)
+    try:
+        parser.read(config_path)
+    except configparser.Error as exc:  # e.g. the same section written twice
+        raise ConfigError(f"Could not parse {config_path}: {exc}") from exc
     return parse_config(parser, config_path)
 
 

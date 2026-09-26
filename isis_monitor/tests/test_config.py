@@ -478,17 +478,47 @@ notify_counts = 75
     assert config.instruments[1].run_name_pv == "IN:WISH:DAE:WDTITLE"
 
 
+def test_instrument_section_prefix_is_case_insensitive(tmp_path):
+    config = load_config(_write(tmp_path, "[instrument:wish]\ncounts_pv = X\nnotify_counts = 5\n"))
+    assert [i.name for i in config.instruments] == ["WISH"]
+
+
 def test_instrument_unknown_key_warns(tmp_path, caplog):
     load_config(_write(tmp_path, "[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 5\nteams_url = http://x\n"))
     assert "ignoring unknown key(s): teams_url" in caplog.text
 
 
+def test_instrument_default_section_keys_not_reported_as_unknown(tmp_path, caplog):
+    load_config(_write(tmp_path, "[DEFAULT]\nfoo = 1\n[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 5\n"))
+    assert "unknown key" not in caplog.text
+
+
+def test_duplicate_section_raises_config_error(tmp_path):
+    with pytest.raises(ConfigError, match="Could not parse"):
+        load_config(_write(tmp_path, "[INSTRUMENT:WISH]\ncounts_pv = X\n[INSTRUMENT:WISH]\ncounts_pv = Y\n"))
+
+
+@pytest.mark.parametrize("extra, match", [
+    ("[PVS]\nnotify_counts = 0\n", r"^\[PVS\] notify_counts must be"),
+    ("[PVS]\ncounts_pv = X\nrun_name_pv = X\n", r"^\[PVS\] PV X is already used"),
+])
+def test_legacy_instrument_errors_name_pvs_section(tmp_path, extra, match):
+    with pytest.raises(ConfigError, match=match):
+        load_config(_write(tmp_path, extra))
+
+
 @pytest.mark.parametrize("extra, match", [
     ("[INSTRUMENT:]\ncounts_pv = X\n", "needs an instrument name"),
+    ("[INSTRUMENT:PE ARL]\ncounts_pv = X\nnotify_counts = 5\n", "may only contain"),
+    ("[INSTRUMENT:A:B]\ncounts_pv = X\nnotify_counts = 5\n", "may only contain"),
+    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = nan\n", "must be a positive number"),
+    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = inf\n", "must be a positive number"),
+    ("[INSTRUMENT:PEARL]\ncounts_pv = IN:WISH:DAE:WDTITLE\nnotify_counts = 5\n[INSTRUMENT:WISH]\n"
+     "counts_pv = Y\nnotify_counts = 5\n", "already used by instrument PEARL"),
     ("[INSTRUMENT:PEARL]\ncounts_pv = X\n", "notify_counts is required"),
     ("[INSTRUMENT:PEARL]\nnotify_counts = 5\n", "counts_pv is required"),
     ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = lots\n", r"\[INSTRUMENT:PEARL\] notify_counts"),
-    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 0\n", "notify_counts must be positive"),
+    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 0\n", "notify_counts must be a positive number"),
     ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 5\nbeam_target = Muons\n", "beam_target must be one of"),
     ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 5\n[INSTRUMENT:pearl]\ncounts_pv = Y\nnotify_counts = 5\n",
      "defined more than once"),
