@@ -176,6 +176,7 @@ def startup_status(
 
 
 def run_started(
+    instrument: str,
     new_run_name: str,
     prev_run_name: str,
     prev_duration: timedelta,
@@ -185,7 +186,7 @@ def run_started(
 ) -> Notification:
     """Build a card for a new run starting — reports on the run that just ended."""
     return Notification(
-        title="New run started",
+        title=f"{instrument}: New run started",
         text=new_run_name,
         emoji=NEW_RUN_EMOJI,
         facts=[
@@ -195,10 +196,12 @@ def run_started(
         ],
         flavour=flavour.pick(("*", "new_run"), rng) if rng else "",
         timestamp=time_now,
+        channel=instrument,
     )
 
 
 def run_finishing(
+    instrument: str,
     run_name: str,
     counts_collected: float,
     counts_target: float,
@@ -215,22 +218,26 @@ def run_finishing(
     facts.append(("Instrument beam", instrument_state))
 
     return Notification(
-        title="Run about to finish",
+        title=f"{instrument}: Run about to finish",
         text=run_name,
         emoji=FINISHING_EMOJI,
         facts=facts,
         flavour=flavour.pick(("*", "finishing"), rng) if rng else "",
         timestamp=time_now,
+        channel=instrument,
     )
 
 
-def collection_stalled(instrument_target: str, stalled_for: timedelta, time_now: datetime) -> Notification:
+def collection_stalled(
+    instrument: str, beam_target: str, stalled_for: timedelta, time_now: datetime
+) -> Notification:
     return Notification(
-        title="Data collection stalled",
-        text=f"No new counts collected for {fmt_duration(stalled_for)} while {instrument_target} beam is on.",
+        title=f"{instrument}: Data collection stalled",
+        text=f"No new counts collected for {fmt_duration(stalled_for)} while {beam_target} beam is on.",
         severity=Severity.WARNING,
         emoji="⚠️",
         timestamp=time_now,
+        channel=instrument,
     )
 
 
@@ -306,13 +313,14 @@ def daily_summary(
 
 
 def run_milestone(
-    run_count: int, time_now: datetime, rng: Optional[random.Random] = None
+    instrument: str, run_count: int, time_now: datetime, rng: Optional[random.Random] = None
 ) -> Notification:
     return Notification(
-        title=f"{run_count} runs completed",
+        title=f"{instrument}: {run_count} runs completed",
         text=f"That's {run_count} runs since records began.",
         severity=Severity.GOOD,
         emoji="🏆",
         flavour=flavour.pick(("*", "milestone"), rng) if rng else "",
         timestamp=time_now,
+        channel=instrument,
     )

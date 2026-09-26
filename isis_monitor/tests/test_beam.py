@@ -511,7 +511,7 @@ async def test_check_collection_progress_detects_stall_when_instrument_beam_on(m
     await m._check_collection_progress(now + timedelta(seconds=1))  # past stall_minutes
     exp_channel.broadcast.assert_called_once()
     notification = exp_channel.broadcast.call_args[0][0]
-    assert notification.title == "Data collection stalled"
+    assert notification.title == "PEARL: Data collection stalled"
 
 
 @pytest.mark.asyncio
@@ -850,7 +850,7 @@ async def test_updates_are_routed_to_their_own_instrument(mock_config, mock_chan
     assert (pearl.state.run_name, pearl.state.current_counts) == ("", -1.0)
     # 60 is past WISH's own notify count (50) though not PEARL's (100).
     exp_channel.broadcast.assert_called_once()
-    assert exp_channel.broadcast.call_args[0][0].title == "Run about to finish"
+    assert exp_channel.broadcast.call_args[0][0].title == "WISH: Run about to finish"
 
 
 @pytest.mark.asyncio

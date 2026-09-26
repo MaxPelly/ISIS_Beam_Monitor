@@ -97,6 +97,7 @@ class InstrumentTracker:
 
         if self.state.run_name and self.state.run_name != name:
             notification = run_started(
+                self.instrument.name,
                 name,
                 self.state.run_name,
                 time_now - self.state.run_started_at,
@@ -115,7 +116,7 @@ class InstrumentTracker:
             if self.sink:
                 total_runs = self.sink.record_run_completed(time_now)
                 if self.fun_mode and total_runs % RUN_MILESTONE_INTERVAL == 0:
-                    milestone = run_milestone(total_runs, time_now, rng=self._rng)
+                    milestone = run_milestone(self.instrument.name, total_runs, time_now, rng=self._rng)
                     logger.info(f"Milestone: {milestone.to_plain_text()}")
                     await self.experiment_channel.broadcast(milestone)
 
@@ -151,6 +152,7 @@ class InstrumentTracker:
         if total_collected > counts_target and not self.state.end_notified:
             rate = _fit_rate(list(self.state.collected_samples))
             notification = run_finishing(
+                self.instrument.name,
                 self.state.run_name,
                 total_collected,
                 counts_target,
@@ -211,7 +213,9 @@ class InstrumentTracker:
                 and not self.state.stall_warned
             ):
                 self.state.stall_warned = True
-                notification = collection_stalled(self.instrument.beam_target, stalled_for, time_now)
+                notification = collection_stalled(
+                    self.instrument.name, self.instrument.beam_target, stalled_for, time_now
+                )
                 logger.info(f"Stall Warning: {notification.to_plain_text()}")
                 await self.experiment_channel.broadcast(notification)
         else:

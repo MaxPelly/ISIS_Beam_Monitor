@@ -240,8 +240,9 @@ def test_startup_status_builder_picks_flavour_when_rng_given():
 
 def test_run_started_builder():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = run_started("Run 12346", "Run 12345", timedelta(hours=2), 1000.0, dt)
-    assert n.title == "New run started"
+    n = run_started("PEARL", "Run 12346", "Run 12345", timedelta(hours=2), 1000.0, dt)
+    assert n.title == "PEARL: New run started"
+    assert n.channel == "PEARL"
     assert n.text == "Run 12346"
     assert n.emoji == "🚀"
     assert n.flavour == ""
@@ -254,8 +255,9 @@ def test_run_started_builder():
 
 def test_run_finishing_builder():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = run_finishing("Run 12345", 150.0, 130.0, 0.5, "high", dt)
-    assert n.title == "Run about to finish"
+    n = run_finishing("PEARL", "Run 12345", 150.0, 130.0, 0.5, "high", dt)
+    assert n.title == "PEARL: Run about to finish"
+    assert n.channel == "PEARL"
     assert n.text == "Run 12345"
     assert n.emoji == "🏁"
     assert n.flavour == ""
@@ -269,7 +271,7 @@ def test_run_finishing_builder():
 
 def test_run_finishing_builder_omits_eta_when_rate_not_positive():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = run_finishing("Run 12345", 50.0, 130.0, 0.0, "high", dt)
+    n = run_finishing("PEARL", "Run 12345", 50.0, 130.0, 0.0, "high", dt)
     fact_keys = [key for key, _ in n.facts]
     assert "ETA" not in fact_keys
 
@@ -324,8 +326,8 @@ def test_mcr_news_builder_includes_url_and_label():
 def test_run_and_mcr_builders_default_to_info_severity():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     for n in (
-        run_started("Run 2", "Run 1", timedelta(hours=1), 1000.0, dt),
-        run_finishing("Run 1", 150.0, 130.0, 0.5, "high", dt),
+        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, dt),
+        run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", dt),
         mcr_news("News", dt),
     ):
         assert n.severity == Severity.INFO
@@ -335,8 +337,8 @@ def test_run_and_mcr_builders_pick_flavour_when_rng_given():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     rng = random.Random(1)
     for n in (
-        run_started("Run 2", "Run 1", timedelta(hours=1), 1000.0, dt, rng=rng),
-        run_finishing("Run 1", 150.0, 130.0, 0.5, "high", dt, rng=rng),
+        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, dt, rng=rng),
+        run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", dt, rng=rng),
         mcr_news("News", dt, rng=rng),
     ):
         assert n.flavour != ""
@@ -344,8 +346,9 @@ def test_run_and_mcr_builders_pick_flavour_when_rng_given():
 
 def test_collection_stalled_builder():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = collection_stalled("TS1", timedelta(minutes=17), dt)
-    assert n.title == "Data collection stalled"
+    n = collection_stalled("PEARL", "TS1", timedelta(minutes=17), dt)
+    assert n.title == "PEARL: Data collection stalled"
+    assert n.channel == "PEARL"
     assert n.severity == Severity.WARNING
     assert n.emoji == "⚠️"
     assert "17m" in n.text
@@ -389,8 +392,9 @@ def test_daily_summary_builder_carries_fact_of_the_day_as_flavour():
 
 def test_run_milestone_builder():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = run_milestone(25, dt)
-    assert "25" in n.title
+    n = run_milestone("PEARL", 25, dt)
+    assert n.title == "PEARL: 25 runs completed"
+    assert n.channel == "PEARL"
     assert n.severity == Severity.GOOD
     assert n.emoji == "🏆"
     assert n.flavour == ""
@@ -402,7 +406,7 @@ def test_run_milestone_builder():
 
 def test_run_milestone_builder_picks_flavour_when_rng_given():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = run_milestone(25, dt, rng=random.Random(1))
+    n = run_milestone("PEARL", 25, dt, rng=random.Random(1))
     assert n.flavour != ""
 
 
@@ -414,12 +418,12 @@ def test_no_builder_bakes_its_own_emoji_into_the_title():
     notifications = [
         beam_change("TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), dt),
         startup_status("TS1", "high", 150.0, dt),
-        run_started("Run 2", "Run 1", timedelta(hours=1), 1000.0, dt),
-        run_finishing("Run 1", 150.0, 130.0, 0.5, "high", dt),
-        collection_stalled("TS1", timedelta(minutes=17), dt),
+        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, dt),
+        run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", dt),
+        collection_stalled("PEARL", "TS1", timedelta(minutes=17), dt),
         mcr_news("Machine update.", dt),
         daily_summary("TS1", 95.0, 0, timedelta(hours=10), "▇", 3, dt, is_new_record=True),
-        run_milestone(25, dt),
+        run_milestone("PEARL", 25, dt),
     ]
     for n in notifications:
         if n.emoji:
