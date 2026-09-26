@@ -5,8 +5,9 @@ import logging
 import random
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Deque, Dict, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
 
+from isis_monitor.beam import BEAM_TARGETS
 from isis_monitor.config import AppConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.flavour import fact_of_the_day
@@ -76,6 +77,16 @@ def compute_summary(
     return summaries
 
 
+def _instruments_by_channel(state: DaemonState) -> Dict[str, List[str]]:
+    """Instrument names grouped by the channel label (e.g. "Muons") of their
+    beam target (e.g. "Muon")."""
+    label_of = {bt.state_key: bt.channel_label for bt in BEAM_TARGETS}
+    grouped: Dict[str, List[str]] = {}
+    for name, info in state.instruments.items():
+        grouped.setdefault(label_of.get(str(info["beam_target"]), ""), []).append(name)
+    return grouped
+
+
 def _load_records(store: SQLiteStateStore) -> Dict[str, float]:
     raw = store.load_snapshot("records")
     if not raw:
@@ -136,7 +147,7 @@ async def daily_summary_loop(
         last_sent_date = now_local.date()
         since = now_utc - SUMMARY_WINDOW
         summaries = compute_summary(state.history, since)
-        run_count = state.count_runs_completed_since(since)
+        instruments_by_channel = _instruments_by_channel(state)
         todays_fact = fact_of_the_day(rng) if (config.fun_mode and rng) else ""
 
         for beam, target_summary in summaries.items():
@@ -152,7 +163,7 @@ async def daily_summary_loop(
                 target_summary.trips,
                 target_summary.longest_on_streak,
                 target_summary.sparkline,
-                run_count,
+                state.count_runs_completed_since(since, instruments_by_channel.get(beam, [])),
                 now_utc,
                 is_new_record=is_new_record,
                 fact_of_the_day=todays_fact,

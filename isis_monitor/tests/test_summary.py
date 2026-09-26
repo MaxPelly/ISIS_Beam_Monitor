@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from isis_monitor.config import AppConfig
+from isis_monitor.config import AppConfig, InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.messages import get_timezone
 from isis_monitor.notifiers import NotificationChannel
@@ -281,4 +281,30 @@ async def test_daily_summary_tolerates_corrupt_persisted_values(tmp_path, caplog
     assert "Corrupt records snapshot" in caplog.text
     assert channel.broadcast.call_count == 3
     assert store.load_snapshot(LAST_SENT_KEY) == datetime.now(get_timezone()).date().isoformat()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_daily_summary_counts_runs_only_on_instruments_using_that_target(tmp_path):
+    config = make_config(summary_time=datetime.now(get_timezone()).strftime("%H:%M"))
+    state = DaemonState(instruments=[
+        InstrumentConfig("PEARL", "IN:PEARL:COUNTS", 130.0, "TS1"),
+        InstrumentConfig("EMU", "IN:EMU:COUNTS", 10.0, "Muon"),
+    ])
+    now = datetime.now(timezone.utc)
+    state.record_run_completed("PEARL", now)
+    state.record_run_completed("PEARL", now)
+    state.record_run_completed("EMU", now)
+    state.record_run_completed("EMU", now - timedelta(hours=30))  # outside the window
+
+    store = SQLiteStateStore(tmp_path / "summary_runs.db")
+    channel = NotificationChannel("Beam")
+    channel.broadcast = AsyncMock()
+    await _run_summary_loop_briefly(config, state, store, channel)
+
+    runs = {
+        call.args[0].channel: dict(call.args[0].facts)["Runs in last 24h"]
+        for call in channel.broadcast.call_args_list
+    }
+    assert runs == {"TS1": "2", "TS2": "0", "Muons": "1"}
     store.close()
