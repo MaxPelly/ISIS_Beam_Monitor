@@ -390,6 +390,12 @@ def _write_atomically(parser: configparser.ConfigParser, config_path: Path) -> N
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp)
         raise
+    # Make the rename itself durable across a power cut.
+    dir_fd = os.open(target.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def config_revision(config_path: Path) -> str:
