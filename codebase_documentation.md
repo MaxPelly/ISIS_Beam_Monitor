@@ -92,7 +92,7 @@ Configuration is managed via `config.ini` files, loaded through `isis_monitor/co
 -   **`[DATA]`**: WebSocket and HTTP URLs for data sources, plus the optional `mcr_page_url` link button.
 -   **`[WEBHOOKS]`**: URLs for Teams integration (should be kept secure). A blank URL disables that channel's Teams notifier.
 -   **`[INSTRUMENT:<NAME>]`**: one per instrument — `counts_pv` and `notify_counts` (required) and `beam_target` (optional); parsed into `AppConfig.instruments` (`InstrumentConfig`, with `run_name_pv` derived as `IN:<NAME>:DAE:WDTITLE`).
--   **`[PVS]`**: `instrument_target` (default `beam_target`), the beam-current PVs, and the legacy single-instrument keys (`counts_pv`, `run_name_pv`, `notify_counts`) used only when there are no instrument sections.
+-   **`[PVS]`**: `instrument_target` (the default `beam_target` for instrument sections that don't set one; TS1), the beam-current PVs, and the legacy single-instrument keys (`counts_pv`, `run_name_pv`, `notify_counts`) used only when there are no instrument sections.
 -   **`[DAEMON]`** / **`[TUI_CLIENT]`**: Paths for UNIX sockets, SQLite database, and retention settings.
 -   **`[BEAM_BOUNDARIES]`**: Thresholds for power level classification.
 -   **`[TUI]`**: Display settings like history length and refresh rates.

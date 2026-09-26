@@ -84,7 +84,7 @@ from the PV (e.g. PEARL).
 # Adds optional personality lines to notification cards (default = false).
 # Emoji and severity colours always show, regardless of this setting.
 # fun_mode = false
-# Timezone used for the timestamps shown on notification cards (default = Europe/London).
+# Timezone for card timestamps and for summary_time (default = Europe/London).
 # timezone = Europe/London
 # How long a beam state change must persist, in seconds (0-3600), before a
 # card is sent — filters out brief flickers (default = 20).
@@ -92,7 +92,7 @@ from the PV (e.g. PEARL).
 # How many minutes counts collected can stay flat, while the instrument's
 # beam is on, before a stall warning is sent (at most 7 days; default = 15).
 # stall_minutes = 15
-# UK-local time (HH:MM) the daily beam-uptime summary is sent at (default = 08:00).
+# Time (HH:MM, in the timezone above) the daily beam-uptime summary is sent at (default = 08:00).
 # summary_time = 08:00
 ```
 
@@ -151,10 +151,16 @@ Things to know:
 - A legacy `[PVS]`-only config becomes explicit `[INSTRUMENT:*]` sections on the first
   save; a non-standard `[PVS] run_name_pv` is not kept (the derived
   `IN:<NAME>:DAE:WDTITLE` is used).
+- Saving writes an explicit `beam_target` for every instrument, so `[PVS] instrument_target`
+  then only applies to sections added by hand without one.
+- Renaming an instrument starts its run count (for milestones) from zero.
+- The daemon's user needs write access to `config.ini` and its directory (for the temporary
+  file and `config.ini.bak`); otherwise saving fails with a write error.
 - Each restart re-sends the beam "Monitor online" cards, as any daemon start does.
   `-n/--notify_current` is not re-applied on these restarts.
 - Other settings (webhooks, paths, boundaries, …) are still edited by hand; restart the
-  daemon afterwards (or save from the TUI, which restarts it).
+  daemon afterwards (e.g. `systemctl restart isis-beam-monitor`, or `python main.py stop`
+  and start it again). A later TUI save also applies them, since it re-reads the file first.
 
 ### Daemon options
 
