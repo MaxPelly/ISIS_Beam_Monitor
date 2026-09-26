@@ -439,6 +439,13 @@ class TestInstrumentsPanel:
         assert "EMU" in text and "—/10" in text
         assert tui.layout["instruments"].size == 6
 
+    def test_many_instruments_are_capped_with_a_more_row(self):
+        tui = make_tui()
+        tui.set_instruments({f"I{n}": dict(INSTRUMENTS["PEARL"]) for n in range(11)})
+        text = _panel_text(tui, "instruments")
+        assert "I7" in text and "I8" not in text and "+3 more" in text
+        assert tui.layout["instruments"].size == 4 + 8 + 1
+
     def test_set_instruments_copies_input(self):
         tui = make_tui()
         source = {"PEARL": dict(INSTRUMENTS["PEARL"])}

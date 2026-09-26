@@ -27,6 +27,8 @@ def _get_state_colour(state):
 # Instruments name their beam target by state_key ("Muon"), beam_states by label ("Muons").
 _TARGET_LABELS = {bt.state_key: bt.channel_label for bt in BEAM_TARGETS}
 _PROGRESS_WIDTH = 8
+# Beyond this the panel shows "+N more", so the MCR news panel keeps its space.
+_MAX_INSTRUMENT_ROWS = 8
 
 
 def _progress_bar(counts: float, target: float) -> Text:
@@ -302,8 +304,12 @@ class RichTUI:
         )
 
     def _instruments_panel_height(self) -> int:
-        # panel borders (2) + table header and its rule (2) + one line per instrument
-        return 4 + max(len(self.instruments), 1)
+        # panel borders (2) + table header and its rule (2) + one line per
+        # shown instrument, plus one for "+N more"
+        n = len(self.instruments)
+        if n > _MAX_INSTRUMENT_ROWS:
+            return 4 + _MAX_INSTRUMENT_ROWS + 1
+        return 4 + max(n, 1)
 
     def _update_instruments_panel(self):
         # SIMPLE_HEAD (no outer border) leaves the run name as much room as possible.
@@ -314,7 +320,8 @@ class RichTUI:
         table.add_column("Run", overflow="ellipsis", no_wrap=True, ratio=1)
         table.add_column("Counts", no_wrap=True)
 
-        for name, info in self.instruments.items():
+        shown = list(self.instruments.items())[:_MAX_INSTRUMENT_ROWS]
+        for name, info in shown:
             target = str(info.get("beam_target", ""))
             beam = self.beam_states.get(_TARGET_LABELS.get(target, target), {})
             table.add_row(
@@ -323,6 +330,9 @@ class RichTUI:
                 str(info.get("run_name", "")) or "—",
                 _progress_bar(float(info.get("counts", -1.0)), float(info.get("notify_counts", 0.0))),
             )
+        hidden = len(self.instruments) - len(shown)
+        if hidden:
+            table.add_row(Text(f"+{hidden} more", style="dim"), "", "", "")
 
         self.layout["instruments"].update(
             Panel(table, title="Instruments", border_style="cyan")
