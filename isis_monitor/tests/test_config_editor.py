@@ -204,3 +204,30 @@ async def test_run_config_editor_keeps_edits_when_connection_is_lost_on_save():
     assert "Save failed: daemon went away. Your changes are kept" in term.text
     retry = request.await_args_list[2].args[0]
     assert (retry["revision"], retry["settings"]["notifications"]["fun_mode"]) == ("r", "true")
+
+
+@pytest.mark.asyncio
+async def test_beam_target_is_case_insensitive_and_stored_canonically():
+    result, _ = await edit("7", "", "", "", "muon", "s", "y")
+    assert result["instruments"][1]["beam_target"] == "Muon"
+
+
+@pytest.mark.asyncio
+async def test_blank_name_cancels_adding_an_instrument():
+    result, term = await edit("a", "", "q")
+    assert result is None
+    assert "Adding an instrument (leave the name blank to cancel)." in term.text
+    assert term.prompts.count("Name []: ") == 1
+
+
+@pytest.mark.asyncio
+async def test_superscript_digit_is_an_unknown_command_not_a_crash():
+    result, term = await edit("²", "d ²", "q")
+    assert "Unknown command: ²" in term.text and "Unknown command: d ²" in term.text
+
+
+@pytest.mark.asyncio
+async def test_closed_input_with_changes_says_they_were_discarded():
+    result, term = await edit("1", "true")
+    assert result is None
+    assert "Input closed; your changes were discarded." in term.text

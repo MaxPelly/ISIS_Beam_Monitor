@@ -81,17 +81,23 @@ def describe_changes(original: dict, edited: dict) -> List[str]:
     return changes
 
 
-async def _edit_instrument(inst: dict, beam_targets: List[str], read_line: ReadLine, write: Write) -> dict:
+async def _edit_instrument(
+    inst: dict, beam_targets: List[str], read_line: ReadLine, write: Write
+) -> Optional[dict]:
+    """Prompt for each field; returns None if a new instrument's name is left blank."""
     edited = dict(inst)
     edited["name"] = (await _ask_default(read_line, "Name", inst.get("name", ""))).upper()
+    if not edited["name"]:
+        return None
     edited["counts_pv"] = await _ask_default(read_line, "Counts PV", inst.get("counts_pv", ""))
     edited["notify_counts"] = await _ask_default(read_line, "Notify at counts", inst.get("notify_counts", ""))
     while True:
         target = await _ask_default(
             read_line, f"Beam target ({'/'.join(beam_targets)})", inst.get("beam_target", "")
         )
-        if not beam_targets or target in beam_targets:
-            edited["beam_target"] = target
+        canonical = {t.lower(): t for t in beam_targets}
+        if not beam_targets or target.lower() in canonical:
+            edited["beam_target"] = canonical.get(target.lower(), target)
             return edited
         write(f"Beam target must be one of {', '.join(beam_targets)}.")
 
@@ -113,16 +119,20 @@ async def edit_settings(
             write(render_menu(current))
             command = await _ask(read_line, "> ")
             instruments = current["instruments"]
-            if command.isdigit() and 1 <= int(command) <= len(keys):
+            # isdecimal, not isdigit: int() rejects digits like "²".
+            if command.isdecimal() and 1 <= int(command) <= len(keys):
                 key = keys[int(command) - 1]
                 current["notifications"][key] = await _ask_default(read_line, key, current["notifications"][key])
-            elif command.isdigit() and 0 <= int(command) - len(keys) - 1 < len(instruments):
+            elif command.isdecimal() and 0 <= int(command) - len(keys) - 1 < len(instruments):
                 index = int(command) - len(keys) - 1
                 instruments[index] = await _edit_instrument(instruments[index], beam_targets, read_line, write)
             elif command.lower() == "a":
+                write("Adding an instrument (leave the name blank to cancel).")
                 blank = {"name": "", "counts_pv": "", "notify_counts": "", "beam_target": ""}
-                instruments.append(await _edit_instrument(blank, beam_targets, read_line, write))
-            elif command.lower().startswith("d") and command[1:].strip().isdigit():
+                added = await _edit_instrument(blank, beam_targets, read_line, write)
+                if added is not None:
+                    instruments.append(added)
+            elif command.lower().startswith("d") and command[1:].strip().isdecimal():
                 index = int(command[1:].strip()) - len(keys) - 1
                 if not 0 <= index < len(instruments):
                     write("No instrument with that number.")
@@ -144,6 +154,8 @@ async def edit_settings(
             elif command:
                 write(f"Unknown command: {command}")
     except _InputClosed:
+        if describe_changes(original, current):
+            write("Input closed; your changes were discarded.")
         return None
 
 
