@@ -14,9 +14,10 @@ import tty
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Awaitable, Callable, Optional
 
 from isis_monitor.beam import BeamMonitor, CHANNEL_LABELS
+from isis_monitor.config_editor import run_config_editor
 from isis_monitor.config import (
     BEAM_TARGET_KEYS,
     ConfigChangedError,
@@ -409,19 +410,29 @@ async def _send_reconnect(client: IPCClient, tui: RichTUI) -> None:
         tui.update_log(f"Reconnect request failed: {e}")
 
 
+def _track(task: asyncio.Task, tasks: set) -> None:
+    tasks.add(task)  # keep a reference so the task isn't garbage-collected
+    task.add_done_callback(tasks.discard)
+
+
 def handle_tui_key(
-    ch: str, client: Optional[IPCClient], stop_event: asyncio.Event, tui: RichTUI, tasks: set
+    ch: str,
+    client: Optional[IPCClient],
+    stop_event: asyncio.Event,
+    tui: RichTUI,
+    tasks: set,
+    edit_config: Optional[Callable[[IPCClient], Awaitable[None]]] = None,
 ) -> None:
     ch = ch.lower()
     if ch == "q":
         stop_event.set()
-    elif ch == "r":
+    elif ch in ("r", "c"):
         if client is None:
             tui.update_log("Not connected to the daemon.")
-            return
-        task = asyncio.create_task(_send_reconnect(client, tui))
-        tasks.add(task)  # keep a reference so the task isn't garbage-collected
-        task.add_done_callback(tasks.discard)
+        elif ch == "r":
+            _track(asyncio.create_task(_send_reconnect(client, tui)), tasks)
+        elif edit_config is not None:
+            _track(asyncio.create_task(edit_config(client)), tasks)
 
 
 async def run_tui(config, stop_event: asyncio.Event):
@@ -448,10 +459,47 @@ async def run_tui(config, stop_event: asyncio.Event):
         client = c
 
     loop = asyncio.get_running_loop()
-    loop.add_reader(fd, lambda: handle_tui_key(sys.stdin.read(1), client, stop_event, tui, key_tasks))
+
+    def on_key() -> None:
+        handle_tui_key(sys.stdin.read(1), client, stop_event, tui, key_tasks, edit_config)
+
+    async def read_line(prompt: str) -> Optional[str]:
+        """Read one line without blocking the event loop (so the daemon
+        connection stays alive and quitting can cancel it); None on EOF."""
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+        line: asyncio.Future = loop.create_future()
+
+        def ready() -> None:
+            if not line.done():
+                text = sys.stdin.readline()
+                line.set_result(text.rstrip("\n") if text else None)
+
+        loop.add_reader(fd, ready)
+        try:
+            return await line
+        finally:
+            loop.remove_reader(fd)
+
+    async def edit_config(c: IPCClient) -> None:
+        # Hand the terminal over to the line-based editor, then take it back.
+        loop.remove_reader(fd)
+        tui.stop()
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        try:
+            await run_config_editor(c.request, read_line, print)
+        finally:
+            tty.setcbreak(fd)
+            tui.start()
+            loop.add_reader(fd, on_key)
+
+    loop.add_reader(fd, on_key)
     try:
         await run_until_stopped(tui_connection_loop(config, tui, set_client), stop_event)
     finally:
+        for task in list(key_tasks):  # e.g. an open config editor
+            task.cancel()
+        await asyncio.gather(*key_tasks, return_exceptions=True)
         loop.remove_reader(fd)
         tui.stop()
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)

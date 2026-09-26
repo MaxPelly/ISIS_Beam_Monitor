@@ -460,6 +460,14 @@ async def test_handle_tui_key():
     await asyncio.gather(*tasks)
     tui.update_log.assert_called_with("Reconnect request failed: gone")
 
+    main.handle_tui_key("c", None, stop, tui, tasks, AsyncMock())
+    assert not tasks
+
+    edit_config = AsyncMock()
+    main.handle_tui_key("C", client, stop, tui, tasks, edit_config)
+    await asyncio.gather(*tasks)
+    edit_config.assert_awaited_once_with(client)
+
     main.handle_tui_key("x", client, stop, tui, tasks)
     assert not stop.is_set()
     main.handle_tui_key("Q", client, stop, tui, tasks)

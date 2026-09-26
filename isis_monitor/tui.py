@@ -221,10 +221,10 @@ class RichTUI:
         """Force-refresh every panel."""
         self.layout["header"].update(
             Panel(
-                Text(
-                    f"ISIS Facility Monitor  [{self.connection_state}]",
+                Text.assemble(
+                    (f"ISIS Facility Monitor  [{self.connection_state}]", "bold cyan"),
+                    ("   r reconnect · c config · q quit", "dim"),
                     justify="center",
-                    style="bold cyan",
                 ),
                 style="blue",
             )
