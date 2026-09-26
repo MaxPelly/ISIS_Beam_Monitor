@@ -625,19 +625,78 @@ async def daemon_with_file(tmp_path):
             await asyncio.wait_for(task, 5)
 
 
+async def _revision(client) -> str:
+    return (await client.request({"method": "get_config"}))["revision"]
+
+
 @pytest.mark.asyncio
 async def test_daemon_get_config_reads_the_file(tmp_path):
     async with daemon_with_file(tmp_path) as (task, client, ini):
         reply = await client.request({"method": "get_config"})
     assert reply["config"]["instruments"][0]["name"] == "PEARL"
+    assert reply["beam_targets"] == ["TS1", "TS2", "Muon"]
+    assert len(reply["revision"]) == 64
     assert task.result() is False  # plain stop, no restart
+
+
+@pytest.mark.asyncio
+async def test_daemon_update_config_requires_revision(tmp_path):
+    async with daemon_with_file(tmp_path) as (task, client, ini):
+        reply = await client.request({"method": "update_config", "settings": {}})
+        assert (reply["ok"], reply["error"]) == (False, "invalid_request")
+        assert not task.done()
+
+
+@pytest.mark.asyncio
+async def test_daemon_rejects_update_based_on_stale_read(tmp_path):
+    """A hand edit (or another TUI's save) since get_config must not be overwritten."""
+    async with daemon_with_file(tmp_path) as (task, client, ini):
+        revision = await _revision(client)
+        ini.write_text(ini.read_text() + "[INSTRUMENT:WISH]\ncounts_pv = W\nnotify_counts = 5\n")
+        reply = await client.request({
+            "method": "update_config", "revision": revision, "settings": {"notifications": {"fun_mode": "true"}},
+        })
+        assert (reply["ok"], reply["error"]) == (False, "config_changed")
+        assert "[INSTRUMENT:WISH]" in ini.read_text() and "fun_mode" not in ini.read_text()
+        assert not task.done()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_updates_only_one_is_applied(tmp_path):
+    """Two TUIs saving at once from the same read: the edits are serialised,
+    and the loser gets restart_pending (or the connection closes as the
+    daemon restarts) rather than overwriting the winner's change."""
+    async with daemon_with_file(tmp_path) as (task, client, ini):
+        revision = await _revision(client)
+        other = IPCClient(tmp_path / "d.sock")
+        await other.connect()
+        try:
+            results = await asyncio.gather(
+                client.request({"method": "update_config", "revision": revision,
+                                "settings": {"notifications": {"fun_mode": "true"}}}),
+                other.request({"method": "update_config", "revision": revision,
+                               "settings": {"notifications": {"summary_time": "09:30"}}}),
+                return_exceptions=True,
+            )
+        finally:
+            await other.close()
+        assert await asyncio.wait_for(task, 5) is True
+
+    winners = [r for r in results if isinstance(r, dict) and r.get("restarting")]
+    losers = [r for r in results if r not in winners]
+    assert len(winners) == 1
+    assert isinstance(losers[0], ConnectionError) or losers[0]["error"] == "restart_pending"
+    text = ini.read_text()
+    assert ("fun_mode = true" in text) != ("summary_time = 09:30" in text)
 
 
 @pytest.mark.asyncio
 async def test_daemon_rejects_invalid_config_and_keeps_running(tmp_path):
     async with daemon_with_file(tmp_path) as (task, client, ini):
         before = ini.read_text()
-        reply = await client.request({"method": "update_config", "settings": {"instruments": []}})
+        reply = await client.request({
+            "method": "update_config", "revision": await _revision(client), "settings": {"instruments": []},
+        })
         assert (reply["ok"], reply["error"]) == (False, "invalid_config")
         assert "non-empty" in reply["detail"]
         assert ini.read_text() == before
@@ -648,7 +707,7 @@ async def test_daemon_rejects_invalid_config_and_keeps_running(tmp_path):
 async def test_daemon_reports_config_write_failure(tmp_path):
     async with daemon_with_file(tmp_path) as (task, client, ini):
         with patch("main.update_config_file", side_effect=PermissionError("read-only")):
-            reply = await client.request({"method": "update_config", "settings": {}})
+            reply = await client.request({"method": "update_config", "revision": "r", "settings": {}})
         assert (reply["ok"], reply["error"], reply["detail"]) == (False, "config_write_failed", "read-only")
         assert not task.done()
 
@@ -658,6 +717,7 @@ async def test_daemon_update_config_writes_file_and_requests_restart(tmp_path):
     async with daemon_with_file(tmp_path) as (task, client, ini):
         reply = await client.request({
             "method": "update_config",
+            "revision": await _revision(client),
             "settings": {"notifications": {"fun_mode": "true"}},
         })
         assert reply == {"ok": True, "restarting": True, "version": 1}

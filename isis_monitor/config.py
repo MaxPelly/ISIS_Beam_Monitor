@@ -1,5 +1,6 @@
 import configparser
 import contextlib
+import hashlib
 import logging
 import math
 import os
@@ -9,14 +10,14 @@ import stat
 import tempfile
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Optional
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("isis_monitor.config")
 
 # Must match the state_key values of isis_monitor.beam.BEAM_TARGETS — not
 # imported directly to avoid a circular import (beam.py imports config.py).
-_INSTRUMENT_TARGETS = ("TS1", "TS2", "Muon")
+BEAM_TARGET_KEYS = ("TS1", "TS2", "Muon")
 
 INSTRUMENT_SECTION_PREFIX = "INSTRUMENT:"
 _INSTRUMENT_KEYS = ("counts_pv", "notify_counts", "beam_target")
@@ -37,6 +38,10 @@ _INSTRUMENT_NAME_RE = re.compile(r"[A-Z0-9_-]+")
 
 class ConfigError(Exception):
     """Raised when the configuration file is missing or contains invalid values."""
+
+
+class ConfigChangedError(ConfigError):
+    """Raised when the config file changed since the revision an edit was based on."""
 
 
 def _ini(section: str, default, key: str = ""):
@@ -200,9 +205,9 @@ def _validate_instruments(config: AppConfig) -> None:
         if inst.name in names:
             raise ConfigError(f"Instrument {inst.name} is defined more than once")
         names.add(inst.name)
-        if inst.beam_target not in _INSTRUMENT_TARGETS:
+        if inst.beam_target not in BEAM_TARGET_KEYS:
             raise ConfigError(
-                f"[{section}] beam_target must be one of {', '.join(_INSTRUMENT_TARGETS)}, "
+                f"[{section}] beam_target must be one of {', '.join(BEAM_TARGET_KEYS)}, "
                 f"got '{inst.beam_target}'"
             )
         # Also rejects nan and inf, which would never be reached.
@@ -223,9 +228,9 @@ def _validate(config: AppConfig, config_path: Path) -> None:
             "isis_websocket_url is empty — BeamMonitor will not run. "
             "Please set [DATA] isis_websocket_url in your config file."
         )
-    if config.instrument_target not in _INSTRUMENT_TARGETS:
+    if config.instrument_target not in BEAM_TARGET_KEYS:
         raise ConfigError(
-            f"[PVS] instrument_target must be one of {', '.join(_INSTRUMENT_TARGETS)}, "
+            f"[PVS] instrument_target must be one of {', '.join(BEAM_TARGET_KEYS)}, "
             f"got '{config.instrument_target}'"
         )
     try:
@@ -387,9 +392,16 @@ def _write_atomically(parser: configparser.ConfigParser, config_path: Path) -> N
         raise
 
 
-def update_config_file(config_path: Path, settings: Any) -> AppConfig:
+def config_revision(config_path: Path) -> str:
+    """An identifier that changes whenever the config file's contents do."""
+    return hashlib.sha256(config_path.read_bytes()).hexdigest()
+
+
+def update_config_file(config_path: Path, settings: Any, revision: Optional[str] = None) -> AppConfig:
     """Apply `settings` (see editable_settings) to the config file and return
-    the new config. Nothing is written unless the result is valid.
+    the new config. Nothing is written unless the result is valid and, if
+    `revision` is given, the file still matches that config_revision() — so
+    an edit based on a stale read can't overwrite someone else's changes.
 
     configparser can't round-trip comments, so the rewritten file has none;
     config.ini.example documents every setting.
@@ -399,5 +411,7 @@ def update_config_file(config_path: Path, settings: Any) -> AppConfig:
     parser = _read_parser(config_path)
     _apply_settings(parser, settings)
     config = parse_config(parser, config_path)
+    if revision is not None and config_revision(config_path) != revision:
+        raise ConfigChangedError(f"{config_path} has changed since it was read; reload and try again")
     _write_atomically(parser, config_path)
     return config

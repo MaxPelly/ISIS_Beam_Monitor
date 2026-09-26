@@ -5,7 +5,8 @@ from dataclasses import replace
 from unittest.mock import patch
 
 from isis_monitor.config import (
-    load_config, ConfigError, AppConfig, InstrumentConfig, editable_settings, update_config_file,
+    load_config, ConfigError, ConfigChangedError, AppConfig, InstrumentConfig, config_revision,
+    editable_settings, update_config_file,
 )
 
 
@@ -683,3 +684,14 @@ def test_update_config_file_cleans_up_temp_file_on_write_failure(tmp_path):
             update_config_file(path, {"notifications": {"fun_mode": "true"}})
     assert path.read_text() == EDITABLE_BASE
     assert [p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")] == []
+
+
+def test_update_config_file_checks_revision(tmp_path):
+    path = _editable_file(tmp_path)
+    revision = config_revision(path)
+    update_config_file(path, {"notifications": {"fun_mode": "true"}}, revision)
+    assert config_revision(path) != revision
+
+    with pytest.raises(ConfigChangedError, match="has changed since it was read"):
+        update_config_file(path, {"notifications": {"fun_mode": "false"}}, revision)
+    assert load_config(path).fun_mode is True

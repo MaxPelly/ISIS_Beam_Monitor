@@ -17,7 +17,15 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from isis_monitor.beam import BeamMonitor, CHANNEL_LABELS
-from isis_monitor.config import ConfigError, editable_settings, load_config, update_config_file
+from isis_monitor.config import (
+    BEAM_TARGET_KEYS,
+    ConfigChangedError,
+    ConfigError,
+    config_revision,
+    editable_settings,
+    load_config,
+    update_config_file,
+)
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.ipc import IPCClient, IPCServer
 from isis_monitor.mcr import MCRNewsMonitor
@@ -236,19 +244,35 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             return {"restart": "ok"}
         return {"error": "unknown_command", "name": name}
 
-    async def config_handler(method: str, req: dict) -> dict:
+    def read_config() -> dict:
         # Read from the file rather than the running config, so edits build
         # on anything changed by hand since the daemon started.
-        try:
-            if method == "get_config":
-                return {"config": editable_settings(await asyncio.to_thread(load_config, args.config))}
-            await asyncio.to_thread(update_config_file, args.config, req.get("settings"))
-        except ConfigError as exc:
-            return {"ok": False, "error": "invalid_config", "detail": str(exc)}
-        except OSError as exc:
-            return {"ok": False, "error": "config_write_failed", "detail": str(exc)}
-        request_restart(f"Config file {args.config} updated over IPC")
-        return {"restarting": True}
+        return {
+            "config": editable_settings(load_config(args.config)),
+            "revision": config_revision(args.config),
+            "beam_targets": list(BEAM_TARGET_KEYS),
+        }
+
+    config_lock = asyncio.Lock()  # one read or edit of the file at a time
+
+    async def config_handler(method: str, req: dict) -> dict:
+        async with config_lock:
+            try:
+                if method == "get_config":
+                    return await asyncio.to_thread(read_config)
+                if restart_requested:
+                    return {"ok": False, "error": "restart_pending", "detail": "The daemon is already restarting"}
+                if not isinstance(req.get("revision"), str):
+                    return {"ok": False, "error": "invalid_request", "detail": "revision from get_config is required"}
+                await asyncio.to_thread(update_config_file, args.config, req.get("settings"), req["revision"])
+            except ConfigChangedError as exc:
+                return {"ok": False, "error": "config_changed", "detail": str(exc)}
+            except ConfigError as exc:
+                return {"ok": False, "error": "invalid_config", "detail": str(exc)}
+            except OSError as exc:
+                return {"ok": False, "error": "config_write_failed", "detail": str(exc)}
+            request_restart(f"Config file {args.config} updated over IPC")
+            return {"restarting": True}
 
     ipc_server = IPCServer(Path(config.daemon_socket_path), state, command_handler, config_handler)
     try:
