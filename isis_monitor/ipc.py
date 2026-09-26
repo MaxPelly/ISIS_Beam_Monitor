@@ -48,9 +48,15 @@ class IPCServer:
     async def start(self) -> None:
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
         self.socket_path.unlink(missing_ok=True)
-        self.server = await asyncio.start_unix_server(
-            self._handle_client, path=str(self.socket_path), limit=SERVER_LINE_LIMIT
-        )
+        # Created owner-only from the start (it can rewrite the config), not
+        # left open to others until the chmod below.
+        old_umask = os.umask(0o177)
+        try:
+            self.server = await asyncio.start_unix_server(
+                self._handle_client, path=str(self.socket_path), limit=SERVER_LINE_LIMIT
+            )
+        finally:
+            os.umask(old_umask)
         os.chmod(self.socket_path, 0o600)
 
     async def stop(self) -> None:

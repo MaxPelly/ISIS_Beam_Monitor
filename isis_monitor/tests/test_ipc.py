@@ -1,8 +1,9 @@
 import asyncio
 import contextlib
 import json
+import os
 import stat
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -335,3 +336,25 @@ async def test_config_methods_unknown_without_config_handler(tmp_path):
     async with serving(tmp_path) as server, connected(server) as client:
         reply = await client.request({"method": "get_config"})
     assert (reply["ok"], reply["error"]) == (False, "unknown_method")
+
+
+
+@pytest.mark.asyncio
+async def test_socket_is_created_owner_only(tmp_path):
+    modes = []
+    real_start = asyncio.start_unix_server
+
+    async def spy(*args, path, **kwargs):
+        server = await real_start(*args, path=path, **kwargs)
+        modes.append(os.stat(path).st_mode & 0o777)  # before start() chmods it
+        return server
+
+    old_umask = os.umask(0o022)
+    try:
+        with patch("isis_monitor.ipc.asyncio.start_unix_server", side_effect=spy):
+            async with serving(tmp_path):
+                pass
+        assert os.umask(0o022) == 0o022  # restored
+    finally:
+        os.umask(old_umask)
+    assert modes == [0o600]
