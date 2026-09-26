@@ -421,7 +421,7 @@ def handle_tui_key(
     stop_event: asyncio.Event,
     tui: RichTUI,
     tasks: set,
-    edit_config: Optional[Callable[[IPCClient], Awaitable[None]]] = None,
+    edit_config: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> None:
     ch = ch.lower()
     if ch == "q":
@@ -432,7 +432,7 @@ def handle_tui_key(
         elif ch == "r":
             _track(asyncio.create_task(_send_reconnect(client, tui)), tasks)
         elif edit_config is not None:
-            _track(asyncio.create_task(edit_config(client)), tasks)
+            _track(asyncio.create_task(edit_config()), tasks)
 
 
 async def run_tui(config, stop_event: asyncio.Event):
@@ -490,13 +490,20 @@ async def run_tui(config, stop_event: asyncio.Event):
         finally:
             loop.remove_reader(fd)
 
-    async def edit_config(c: IPCClient) -> None:
+    async def request(payload: dict) -> dict:
+        # Whichever client is live now: the connection may have been
+        # replaced (e.g. by a daemon restart) while the editor was open.
+        if client is None:
+            raise RuntimeError("Not connected to the daemon")
+        return await client.request(payload)
+
+    async def edit_config() -> None:
         # Hand the terminal over to the line-based editor, then take it back.
         loop.remove_reader(fd)
         tui.stop()
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         try:
-            await run_config_editor(c.request, read_line, print)
+            await run_config_editor(request, read_line, print)
         finally:
             tty.setcbreak(fd)
             tui.start()

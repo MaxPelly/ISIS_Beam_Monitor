@@ -192,11 +192,15 @@ async def test_run_config_editor_reports_load_failures(request_mock, message):
 
 
 @pytest.mark.asyncio
-async def test_run_config_editor_reports_connection_lost_on_save():
+async def test_run_config_editor_keeps_edits_when_connection_is_lost_on_save():
     request = AsyncMock(side_effect=[
         {"ok": True, "config": copy.deepcopy(SETTINGS), "revision": "r", "beam_targets": TARGETS},
         ConnectionError("daemon went away"),
+        {"ok": True, "restarting": True},
     ])
-    term = Terminal("1", "true", "s", "y", "")
+    term = Terminal("1", "true", "s", "y",  # fails: connection lost
+                    "s", "y", "")           # saved again after reconnecting
     await run_config_editor(request, term.read_line, term.write)
-    assert "Save failed: daemon went away" in term.text
+    assert "Save failed: daemon went away. Your changes are kept" in term.text
+    retry = request.await_args_list[2].args[0]
+    assert (retry["revision"], retry["settings"]["notifications"]["fun_mode"]) == ("r", "true")

@@ -173,9 +173,11 @@ async def run_config_editor(request: Request, read_line: ReadLine, write: Write)
         try:
             result = await request({"method": "update_config", "revision": reply.get("revision"), "settings": edited})
         except (OSError, ValueError, RuntimeError) as exc:
-            write(f"Save failed: {exc}")
-            await pause()
-            return
+            # e.g. the daemon restarted under us; the revision check makes a
+            # retry over the reconnected client safe.
+            write(f"Save failed: {exc}. Your changes are kept; save again once the monitor has reconnected.")
+            settings = edited
+            continue
         if result.get("ok"):
             write("Saved. The daemon is restarting; the monitor will reconnect.")
             await pause()

@@ -466,7 +466,7 @@ async def test_handle_tui_key():
     edit_config = AsyncMock()
     main.handle_tui_key("C", client, stop, tui, tasks, edit_config)
     await asyncio.gather(*tasks)
-    edit_config.assert_awaited_once_with(client)
+    edit_config.assert_awaited_once_with()
 
     main.handle_tui_key("x", client, stop, tui, tasks)
     assert not stop.is_set()
@@ -860,3 +860,36 @@ async def test_run_tui_handles_several_keys_in_one_read_and_quits_on_eof(tmp_pat
         os.close(null)
         await asyncio.wait_for(task, 2)
     assert stop.is_set()
+
+
+@pytest.mark.asyncio
+async def test_config_editor_saves_over_the_new_connection_after_reconnecting(tmp_path, capsys):
+    config = _config(tmp_path, tui_reconnect_initial=0.05, tui_reconnect_max=0.05)
+    clients = []
+
+    def recording_client(path):
+        clients.append(IPCClient(path))
+        return clients[-1]
+
+    async with daemon_with_file(tmp_path) as (_task, _client, ini):
+        with tui_terminal() as (tui, keys, _termios, _tty), patch("main.IPCClient", side_effect=recording_client):
+            task = asyncio.create_task(main.run_tui(config, asyncio.Event()))
+            subscribed = call("Subscribed to daemon updates.")
+            await wait_until(lambda: subscribed in tui.update_log.call_args_list)
+            os.write(keys, b"c")
+            await wait_until(lambda: "> " in capsys.readouterr().out)
+
+            # The connection the editor started on drops; the TUI reconnects.
+            tui.update_log.reset_mock()
+            clients[-1].writer.transport.abort()
+            await wait_until(lambda: subscribed in tui.update_log.call_args_list)
+            assert len(clients) == 2
+
+            for line in (b"1\n", b"true\n", b"s\n", b"y\n"):
+                os.write(keys, line)
+                await asyncio.sleep(0.05)
+            await wait_until(lambda: "fun_mode = true" in ini.read_text())
+            os.write(keys, b"\n")  # "Press Enter to return"
+            await wait_until(lambda: tui.start.call_count == 2)
+            os.write(keys, b"q")
+            await asyncio.wait_for(task, 2)
