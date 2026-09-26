@@ -290,6 +290,15 @@ def test_legacy_snapshot_without_run_fields_or_instruments_is_a_noop():
 
 def test_malformed_instrument_entries_in_snapshot_are_skipped():
     state = DaemonState(instruments=INSTRUMENTS)
-    state.restore_from_snapshot_json(json.dumps({"instruments": {"PEARL": "junk", "WISH": {"total_runs": 4}}}))
+    state.restore_from_snapshot_json(json.dumps({"instruments": {
+        "PEARL": "junk",
+        "WISH": {"total_runs": 4},
+        "MERLIN": {},
+    }}))
     assert state.instruments["PEARL"]["total_runs"] == 0
+    assert state.instruments["WISH"]["total_runs"] == 4
+
+    # A bad value skips that instrument without partially applying it.
+    state.restore_from_snapshot_json(json.dumps({"instruments": {"WISH": {"run_name": "R", "counts": None}}}))
+    assert state.instruments["WISH"]["run_name"] == ""
     assert state.instruments["WISH"]["total_runs"] == 4

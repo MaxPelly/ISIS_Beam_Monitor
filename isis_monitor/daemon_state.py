@@ -257,6 +257,13 @@ class DaemonState(MonitorSinkProtocol):
             if name not in self.instruments or not isinstance(info, dict):
                 continue
             current = self.instruments[name]
-            current["run_name"] = str(info.get("run_name", current["run_name"]))
-            current["counts"] = float(info.get("counts", current["counts"]))
-            current["total_runs"] = int(info.get("total_runs", current["total_runs"]))
+            try:
+                restored = {
+                    "run_name": str(info.get("run_name", current["run_name"])),
+                    "counts": float(info.get("counts", current["counts"])),
+                    "total_runs": int(info.get("total_runs", current["total_runs"])),
+                }
+            except (TypeError, ValueError):
+                logger.warning(f"Skipping malformed snapshot state for instrument {name}")
+                continue
+            current.update(restored)
