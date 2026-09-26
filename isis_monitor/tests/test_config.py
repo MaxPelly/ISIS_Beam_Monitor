@@ -2,7 +2,11 @@ import pytest
 from pathlib import Path
 from dataclasses import replace
 
-from isis_monitor.config import load_config, ConfigError, AppConfig, InstrumentConfig
+from unittest.mock import patch
+
+from isis_monitor.config import (
+    load_config, ConfigError, AppConfig, InstrumentConfig, editable_settings, update_config_file,
+)
 
 
 def test_load_config_success(tmp_path):
@@ -542,3 +546,136 @@ def test_invalid_notification_settings(tmp_path, line, match):
     """Caught at load time, so a bad edit can't leave the daemon failing on restart."""
     with pytest.raises(ConfigError, match=match):
         load_config(_write(tmp_path, f"[NOTIFICATIONS]\n{line}\n"))
+
+
+# ---------------------------------------------------------------------------
+# editable_settings / update_config_file
+# ---------------------------------------------------------------------------
+
+EDITABLE_BASE = """\
+[DATA]
+mcr_news_url = http://test.com/news
+# a comment that won't survive a rewrite
+[WEBHOOKS]
+beam_teams_url = http://secret
+[NOTIFICATIONS]
+stall_minutes = 10
+[INSTRUMENT:PEARL]
+counts_pv = IN:PEARL:COUNTS
+notify_counts = 130
+"""
+
+
+def _editable_file(tmp_path, text=EDITABLE_BASE) -> Path:
+    path = tmp_path / "config.ini"
+    path.write_text(text)
+    path.chmod(0o600)
+    return path
+
+
+def test_editable_settings_are_ini_strings(tmp_path):
+    config = load_config(_editable_file(tmp_path))
+    assert editable_settings(config) == {
+        "notifications": {
+            "fun_mode": "false", "timezone": "Europe/London", "debounce_seconds": "20",
+            "stall_minutes": "10", "summary_time": "08:00",
+        },
+        "instruments": [{"name": "PEARL", "counts_pv": "IN:PEARL:COUNTS", "notify_counts": "130", "beam_target": "TS1"}],
+    }
+
+
+def test_editable_settings_keep_full_precision():
+    config = AppConfig(debounce_seconds=2.5, instruments=[InstrumentConfig("X", "C", 1234567.0, "TS1")])
+    settings = editable_settings(config)
+    assert settings["notifications"]["debounce_seconds"] == "2.5"
+    assert settings["instruments"][0]["notify_counts"] == "1234567"
+
+
+def test_update_config_file_round_trips_and_keeps_other_settings(tmp_path):
+    path = _editable_file(tmp_path)
+    settings = editable_settings(load_config(path))
+    settings["notifications"]["fun_mode"] = "true"
+    settings["instruments"][0]["notify_counts"] = "200"
+    settings["instruments"].append({"name": "wish", "counts_pv": "IN:WISH:COUNTS", "notify_counts": "50", "beam_target": "TS2"})
+
+    returned = update_config_file(path, settings)
+
+    reloaded = load_config(path)
+    assert reloaded == returned
+    assert reloaded.fun_mode is True and reloaded.stall_minutes == 10.0
+    assert reloaded.beam_teams_url == "http://secret"
+    assert [(i.name, i.notify_counts, i.beam_target) for i in reloaded.instruments] == [
+        ("PEARL", 200.0, "TS1"), ("WISH", 50.0, "TS2"),
+    ]
+    assert "a comment" not in path.read_text()  # documented limitation
+    assert (tmp_path / "config.ini.bak").read_text() == EDITABLE_BASE
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert [p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")] == []
+
+
+def test_update_config_file_removes_dropped_instruments(tmp_path):
+    path = _editable_file(tmp_path, EDITABLE_BASE + "[Instrument:WISH]\ncounts_pv = W\nnotify_counts = 5\n")
+    update_config_file(path, {"instruments": [{"name": "WISH", "counts_pv": "W", "notify_counts": "5"}]})
+    assert [i.name for i in load_config(path).instruments] == ["WISH"]
+
+
+def test_update_config_file_migrates_legacy_pvs_config(tmp_path):
+    path = _editable_file(tmp_path, "[DATA]\nmcr_news_url = http://x\n[PVS]\ncounts_pv = IN:WISH:C\nnotify_counts = 40\n")
+    update_config_file(path, editable_settings(load_config(path)))
+    assert "[INSTRUMENT:WISH]" in path.read_text()
+    assert load_config(path).instruments == [InstrumentConfig("WISH", "IN:WISH:C", 40.0, "TS1")]
+
+
+def test_update_config_file_only_notifications_leaves_instruments(tmp_path):
+    path = _editable_file(tmp_path)
+    update_config_file(path, {"notifications": {"summary_time": "09:30"}})
+    config = load_config(path)
+    assert config.summary_time == "09:30"
+    assert [i.name for i in config.instruments] == ["PEARL"]
+
+
+def test_update_config_file_writes_through_symlink(tmp_path):
+    real = _editable_file(tmp_path)
+    link = tmp_path / "link.ini"
+    link.symlink_to(real)
+    update_config_file(link, {"notifications": {"fun_mode": "true"}})
+    assert link.is_symlink()
+    assert load_config(real).fun_mode is True
+
+
+@pytest.mark.parametrize("settings, match", [
+    ([], "settings must be an object"),
+    ({"notifications": []}, "notifications must be an object"),
+    ({"notifications": {"log_level": "DEBUG"}}, "'log_level' can't be edited"),
+    ({"notifications": {"fun_mode": True}}, "must be a single-line string"),
+    ({"notifications": {"summary_time": "08:00\n[DATA]"}}, "must be a single-line string"),
+    ({"notifications": {"timezone": "Mars/Base"}}, "not a known timezone"),
+    ({"instruments": []}, "non-empty list"),
+    ({"instruments": ["PEARL"]}, "instrument must be an object"),
+    ({"instruments": [{"name": "PEARL", "teams_url": "x"}]}, "'teams_url' can't be edited"),
+    ({"instruments": [{"counts_pv": "C", "notify_counts": "5"}]}, "needs an instrument name"),
+    ({"instruments": [{"name": "A B", "counts_pv": "C", "notify_counts": "5"}]}, "may only contain"),
+    ({"instruments": [{"name": "PEARL", "counts_pv": "C", "notify_counts": "0"}]}, "must be a positive number"),
+    ({"instruments": [{"name": "X", "counts_pv": "C", "notify_counts": "5"},
+                      {"name": "x", "counts_pv": "D", "notify_counts": "5"}]}, "defined more than once"),
+])
+def test_update_config_file_rejects_invalid_settings_without_writing(tmp_path, settings, match):
+    path = _editable_file(tmp_path)
+    with pytest.raises(ConfigError, match=match):
+        update_config_file(path, settings)
+    assert path.read_text() == EDITABLE_BASE
+    assert not (tmp_path / "config.ini.bak").exists()
+
+
+def test_update_config_file_missing_file(tmp_path):
+    with pytest.raises(ConfigError, match="not found"):
+        update_config_file(tmp_path / "nope.ini", {})
+
+
+def test_update_config_file_cleans_up_temp_file_on_write_failure(tmp_path):
+    path = _editable_file(tmp_path)
+    with patch("isis_monitor.config.os.replace", side_effect=OSError("disk full")):
+        with pytest.raises(OSError, match="disk full"):
+            update_config_file(path, {"notifications": {"fun_mode": "true"}})
+    assert path.read_text() == EDITABLE_BASE
+    assert [p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")] == []

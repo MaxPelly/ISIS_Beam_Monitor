@@ -1,10 +1,15 @@
 import configparser
+import contextlib
 import logging
 import math
+import os
 import re
+import shutil
+import stat
+import tempfile
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import List
+from typing import Any, List
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("isis_monitor.config")
@@ -15,6 +20,15 @@ _INSTRUMENT_TARGETS = ("TS1", "TS2", "Muon")
 
 INSTRUMENT_SECTION_PREFIX = "INSTRUMENT:"
 _INSTRUMENT_KEYS = ("counts_pv", "notify_counts", "beam_target")
+# [NOTIFICATIONS] keys the TUI may edit, mapped to their AppConfig field.
+EDITABLE_NOTIFICATION_KEYS = {
+    "fun_mode": "fun_mode",
+    "timezone": "notifications_timezone",
+    "debounce_seconds": "debounce_seconds",
+    "stall_minutes": "stall_minutes",
+    "summary_time": "summary_time",
+}
+_EDITABLE_INSTRUMENT_KEYS = ("name", *_INSTRUMENT_KEYS)
 # The name becomes part of the derived run-name PV, so it must be one PV segment.
 _INSTRUMENT_NAME_RE = re.compile(r"[A-Z0-9_-]+")
 
@@ -240,12 +254,16 @@ def load_config(config_path: Path) -> AppConfig:
     if not config_path.exists():
         raise ConfigError(f"Config file not found: {config_path}")
 
+    return parse_config(_read_parser(config_path), config_path)
+
+
+def _read_parser(config_path: Path) -> configparser.ConfigParser:
     parser = configparser.ConfigParser(interpolation=None)
     try:
         parser.read(config_path)
     except configparser.Error as exc:  # e.g. the same section written twice
         raise ConfigError(f"Could not parse {config_path}: {exc}") from exc
-    return parse_config(parser, config_path)
+    return parser
 
 
 def parse_config(parser: configparser.ConfigParser, config_path: Path) -> AppConfig:
@@ -269,4 +287,114 @@ def parse_config(parser: configparser.ConfigParser, config_path: Path) -> AppCon
     config = AppConfig(**values)
     config.instruments = _read_instruments(parser, config)
     _validate(config, config_path)
+    return config
+
+
+def _format_value(value: Any) -> str:
+    """Render a setting as it would be written in the INI file."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def editable_settings(config: AppConfig) -> dict:
+    """The settings the TUI may edit, as INI strings:
+    {"notifications": {key: value}, "instruments": [{name, counts_pv, notify_counts, beam_target}]}."""
+    return {
+        "notifications": {
+            key: _format_value(getattr(config, attr)) for key, attr in EDITABLE_NOTIFICATION_KEYS.items()
+        },
+        "instruments": [
+            {
+                "name": inst.name,
+                "counts_pv": inst.counts_pv,
+                "notify_counts": _format_value(inst.notify_counts),
+                "beam_target": inst.beam_target,
+            }
+            for inst in config.instruments
+        ],
+    }
+
+
+def _check_string_map(value: Any, allowed: tuple, what: str) -> dict:
+    if not isinstance(value, dict):
+        raise ConfigError(f"{what} must be an object")
+    for key, item in value.items():
+        if key not in allowed:
+            raise ConfigError(f"{what}: '{key}' can't be edited")
+        if not isinstance(item, str) or "\n" in item or "\r" in item:
+            raise ConfigError(f"{what}: '{key}' must be a single-line string")
+    return value
+
+
+def _apply_settings(parser: configparser.ConfigParser, settings: Any) -> None:
+    """Apply editable_settings()-shaped `settings` to `parser`. Either part may
+    be left out; "instruments", when given, replaces every instrument section."""
+    if not isinstance(settings, dict):
+        raise ConfigError("settings must be an object")
+    notifications = _check_string_map(
+        settings.get("notifications", {}), tuple(EDITABLE_NOTIFICATION_KEYS), "notifications"
+    )
+    instruments = settings.get("instruments")
+    if instruments is not None:
+        if not isinstance(instruments, list) or not instruments:
+            raise ConfigError("instruments must be a non-empty list")
+        for inst in instruments:
+            _check_string_map(inst, _EDITABLE_INSTRUMENT_KEYS, "instrument")
+
+    if notifications and not parser.has_section("NOTIFICATIONS"):
+        parser.add_section("NOTIFICATIONS")
+    for key, value in notifications.items():
+        parser.set("NOTIFICATIONS", key, value)
+
+    if instruments is None:
+        return
+    for section in parser.sections():
+        if section.upper().startswith(INSTRUMENT_SECTION_PREFIX):
+            parser.remove_section(section)
+    for inst in instruments:
+        # The name is checked by parse_config, along with everything else.
+        section = f"{INSTRUMENT_SECTION_PREFIX}{inst.get('name', '').strip().upper()}"
+        if parser.has_section(section):
+            raise ConfigError(f"Instrument {inst['name'].strip().upper()} is defined more than once")
+        parser.add_section(section)
+        for key in _INSTRUMENT_KEYS:
+            if inst.get(key, "").strip():
+                parser.set(section, key, inst[key].strip())
+
+
+def _write_atomically(parser: configparser.ConfigParser, config_path: Path) -> None:
+    """Replace `config_path` with `parser`'s contents, keeping its permissions
+    and a copy of the old file as <name>.bak. Readers never see a partial file."""
+    target = config_path.resolve()  # write through a symlink, not over it
+    shutil.copy2(target, target.with_name(target.name + ".bak"))
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            parser.write(fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, stat.S_IMODE(target.stat().st_mode))
+        os.replace(tmp, target)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+
+
+def update_config_file(config_path: Path, settings: Any) -> AppConfig:
+    """Apply `settings` (see editable_settings) to the config file and return
+    the new config. Nothing is written unless the result is valid.
+
+    configparser can't round-trip comments, so the rewritten file has none;
+    config.ini.example documents every setting.
+    """
+    if not config_path.exists():
+        raise ConfigError(f"Config file not found: {config_path}")
+    parser = _read_parser(config_path)
+    _apply_settings(parser, settings)
+    config = parse_config(parser, config_path)
+    _write_atomically(parser, config_path)
     return config
