@@ -10,7 +10,7 @@ import threading
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -783,3 +783,62 @@ def test_restarted_daemon_does_not_replay_notify_current(tmp_path, monkeypatch, 
         main.main()
     assert run_daemon.await_args.args[1].notify_current is expected
     assert main.RESTARTED_ENV not in os.environ
+
+
+@contextlib.contextmanager
+def tui_terminal():
+    """A pipe standing in for the TTY, with termios/tty/RichTUI mocked."""
+    read_fd, write_fd = os.pipe()
+    stdin = os.fdopen(read_fd, "r")
+    tui = MagicMock()
+    try:
+        with patch.object(main.sys, "stdin", stdin), \
+             patch("main.termios") as termios_mock, \
+             patch("main.tty") as tty_mock, \
+             patch("main.RichTUI", return_value=tui), \
+             patch("main.install_signal_handlers"):
+            termios_mock.tcgetattr.return_value = "saved"
+            yield tui, write_fd, termios_mock, tty_mock
+    finally:
+        os.close(write_fd)
+        stdin.close()
+
+
+@pytest.mark.asyncio
+async def test_run_tui_c_hands_the_terminal_to_the_config_editor_and_back(tmp_path, capsys):
+    async with daemon_with_file(tmp_path) as (_task, _client, _ini):
+        with tui_terminal() as (tui, keys, termios_mock, tty_mock):
+            stop = asyncio.Event()
+            task = asyncio.create_task(main.run_tui(_config(tmp_path), stop))
+            await wait_until(lambda: call("Subscribed to daemon updates.") in tui.update_log.call_args_list)
+
+            os.write(keys, b"c")
+            await wait_until(lambda: tui.stop.called)
+            await wait_until(lambda: "=== Configuration ===" in capsys.readouterr().out)
+            assert termios_mock.tcsetattr.call_count == 1  # line mode for the editor
+
+            os.write(keys, b"q\n")  # quit the editor without changes
+            await wait_until(lambda: tui.start.call_count == 2)
+            assert tty_mock.setcbreak.call_count == 2  # back to key-at-a-time
+
+            os.write(keys, b"q")
+            await asyncio.wait_for(task, 2)
+    assert tui.stop.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_quitting_the_tui_cancels_an_open_config_editor(tmp_path, capsys):
+    async with daemon_with_file(tmp_path) as (_task, _client, _ini):
+        with tui_terminal() as (tui, keys, termios_mock, tty_mock):
+            stop = asyncio.Event()
+            task = asyncio.create_task(main.run_tui(_config(tmp_path), stop))
+            await wait_until(lambda: call("Subscribed to daemon updates.") in tui.update_log.call_args_list)
+            os.write(keys, b"c")
+            await wait_until(lambda: "> " in capsys.readouterr().out)
+
+            stop.set()  # e.g. Ctrl-C
+            await asyncio.wait_for(task, 2)
+
+    # The editor restored the live display, then run_tui shut it all down.
+    assert tui.start.call_count == 2 and tui.stop.call_count == 2
+    assert termios_mock.tcsetattr.call_args_list[-1] == call(ANY, termios_mock.TCSADRAIN, "saved")
