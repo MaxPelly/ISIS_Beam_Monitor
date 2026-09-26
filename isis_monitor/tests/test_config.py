@@ -529,3 +529,16 @@ def test_legacy_instrument_errors_name_pvs_section(tmp_path, extra, match):
 def test_invalid_instrument_sections(tmp_path, extra, match):
     with pytest.raises(ConfigError, match=match):
         load_config(_write(tmp_path, extra))
+
+
+@pytest.mark.parametrize("line, match", [
+    ("timezone = Nowhere/City", "not a known timezone"),
+    ("timezone = ../etc", "not a known timezone"),
+    ("debounce_seconds = -1", "debounce_seconds must not be negative"),
+    ("debounce_seconds = nan", "debounce_seconds must not be negative"),
+    ("stall_minutes = 0", "stall_minutes must be positive"),
+])
+def test_invalid_notification_settings(tmp_path, line, match):
+    """Caught at load time, so a bad edit can't leave the daemon failing on restart."""
+    with pytest.raises(ConfigError, match=match):
+        load_config(_write(tmp_path, f"[NOTIFICATIONS]\n{line}\n"))

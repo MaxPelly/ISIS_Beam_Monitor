@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import List
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("isis_monitor.config")
 
@@ -217,6 +218,15 @@ def _validate(config: AppConfig, config_path: Path) -> None:
             raise ValueError
     except ValueError:
         raise ConfigError(f"[NOTIFICATIONS] summary_time must be 'HH:MM', got '{config.summary_time}'")
+    try:
+        ZoneInfo(config.notifications_timezone)
+    except (KeyError, ValueError, OSError):  # ZoneInfoNotFoundError is a KeyError
+        raise ConfigError(f"[NOTIFICATIONS] timezone '{config.notifications_timezone}' is not a known timezone")
+    # Also rejects nan, which would silently disable debouncing/stall warnings.
+    if not config.debounce_seconds >= 0:
+        raise ConfigError("[NOTIFICATIONS] debounce_seconds must not be negative")
+    if not config.stall_minutes > 0:
+        raise ConfigError("[NOTIFICATIONS] stall_minutes must be positive")
     if config.retention_days <= 0:
         raise ConfigError("[DAEMON] retention_days must be a positive integer")
     if config.tui_reconnect_initial <= 0 or config.tui_reconnect_max <= 0:
