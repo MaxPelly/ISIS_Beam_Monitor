@@ -114,8 +114,8 @@ class InstrumentTracker:
             self.state.stall_warned = False
 
             if self.sink:
-                total_runs = self.sink.record_run_completed(time_now)
-                if self.fun_mode and total_runs % RUN_MILESTONE_INTERVAL == 0:
+                total_runs = self.sink.record_run_completed(self.instrument.name, time_now)
+                if self.fun_mode and total_runs and total_runs % RUN_MILESTONE_INTERVAL == 0:
                     milestone = run_milestone(self.instrument.name, total_runs, time_now, rng=self._rng)
                     logger.info(f"Milestone: {milestone.to_plain_text()}")
                     await self.experiment_channel.broadcast(milestone)
@@ -123,7 +123,7 @@ class InstrumentTracker:
         self.state.run_name = name
         self.state.run_started_at = time_now
         if self.sink:
-            self.sink.update_run_name(name)
+            self.sink.update_run_name(self.instrument.name, name)
 
     async def handle_counts(self, text_val: Any, time_now: datetime) -> None:
         if _is_blank(text_val):
@@ -143,7 +143,7 @@ class InstrumentTracker:
         self._prune_collected_samples(time_now)
 
         if self.sink:
-            self.sink.update_counts(total_collected)
+            self.sink.update_counts(self.instrument.name, total_collected)
 
         counts_target = self.instrument.notify_counts
         if self.state.end_notified and total_collected < (counts_target - 25):

@@ -176,7 +176,10 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
     install_signal_handlers(stop_event)
 
     samples_for_retention = int(86400 * config.retention_days / max(config.sample_interval, 1.0))
-    state = DaemonState(history_maxlen=max(config.history_maxlen, samples_for_retention))
+    state = DaemonState(
+        history_maxlen=max(config.history_maxlen, samples_for_retention),
+        instruments=config.instruments,
+    )
     state.update_health("daemon", "starting")
 
     def _init_db():

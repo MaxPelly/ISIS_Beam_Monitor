@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 
 import main
-from isis_monitor.config import AppConfig
+from isis_monitor.config import AppConfig, InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.ipc import IPCClient, IPCServer
 from isis_monitor.notifiers import DummyNotifier, TeamsNotifier
@@ -347,7 +347,7 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
     store.commit()
     store.close()
 
-    config = _config(tmp_path)
+    config = _config(tmp_path, instruments=[InstrumentConfig("PEARL", "IN:PEARL:COUNTS", 130.0, "TS1")])
     async with daemon(config):
         client = IPCClient(config.daemon_socket_path)
         await client.connect()
@@ -358,7 +358,7 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
         await client.close()
 
     assert snap["mcr_news"] == "old news"
-    assert snap["total_runs_completed"] == 30
+    assert snap["instruments"]["PEARL"]["total_runs"] == 30  # legacy total moves to the first instrument
     assert history["TS2"][0]["current"] == 7.0
     assert set(beam_only) == {"beam"}
     assert set(both) == {"beam", "mcr"}

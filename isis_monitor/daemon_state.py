@@ -6,9 +6,10 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from isis_monitor.beam import CHANNEL_LABELS
+from isis_monitor.config import InstrumentConfig
 from isis_monitor.protocols import MonitorSinkProtocol
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,12 @@ class DaemonState(MonitorSinkProtocol):
     other threads must hop onto the loop (see main.StateLogHandler).
     """
 
-    def __init__(self, history_maxlen: int = 10_080, logs_maxlen: int = 200):
+    def __init__(
+        self,
+        history_maxlen: int = 10_080,
+        logs_maxlen: int = 200,
+        instruments: Sequence[InstrumentConfig] = (),
+    ):
         self.beam_states: Dict[str, Dict[str, object]] = {
             beam: {"current": 0.0, "power": "unknown"} for beam in CHANNEL_LABELS
         }
@@ -39,10 +45,19 @@ class DaemonState(MonitorSinkProtocol):
         }
         self.mcr_news = "Waiting for initial MCR news..."
         self.logs: Deque[str] = deque(maxlen=logs_maxlen)
-        self.run_name = ""
-        self.current_counts = -1.0
-        self.run_completions: Deque[datetime] = deque(maxlen=2000)
-        self.total_runs_completed = 0
+        # notify_counts and beam_target come from the config and are only
+        # carried here so clients can display them.
+        self.instruments: Dict[str, Dict[str, object]] = {
+            inst.name: {
+                "run_name": "",
+                "counts": -1.0,
+                "total_runs": 0,
+                "notify_counts": inst.notify_counts,
+                "beam_target": inst.beam_target,
+            }
+            for inst in instruments
+        }
+        self.run_completions: Deque[Tuple[datetime, str]] = deque(maxlen=2000)  # (time, instrument)
         self.last_update = datetime.now(timezone.utc)
         self.health: Dict[str, str] = {
             "daemon": "starting",
@@ -134,15 +149,19 @@ class DaemonState(MonitorSinkProtocol):
         self._touch()
         self._publish("mcr", {"news": news})
 
-    def update_run_name(self, run_name: str) -> None:
-        self.run_name = run_name
+    def update_run_name(self, instrument: str, run_name: str) -> None:
+        if instrument not in self.instruments:
+            return
+        self.instruments[instrument]["run_name"] = run_name
         self._touch()
-        self._publish("run", {"run_name": run_name})
+        self._publish("run", {"instrument": instrument, "run_name": run_name})
 
-    def update_counts(self, counts: float) -> None:
-        self.current_counts = float(counts)
+    def update_counts(self, instrument: str, counts: float) -> None:
+        if instrument not in self.instruments:
+            return
+        self.instruments[instrument]["counts"] = float(counts)
         self._touch()
-        self._publish("counts", {"counts": counts})
+        self._publish("counts", {"instrument": instrument, "counts": counts})
 
     def update_health(self, component: str, status: str) -> None:
         # Monitors re-report the same status on every successful poll; only
@@ -153,24 +172,30 @@ class DaemonState(MonitorSinkProtocol):
         self._touch()
         self._publish("health", {"component": component, "status": status})
 
-    def record_run_completed(self, ts: datetime) -> int:
-        """Record a completed run and return the new all-time total."""
-        self.run_completions.append(ts)
-        self.total_runs_completed += 1
+    def record_run_completed(self, instrument: str, ts: datetime) -> int:
+        """Record a completed run and return the instrument's new all-time
+        total, or 0 for an unknown instrument."""
+        if instrument not in self.instruments:
+            return 0
+        self.run_completions.append((ts, instrument))
+        self.instruments[instrument]["total_runs"] += 1
         self._touch(ts)
-        return self.total_runs_completed
+        return self.instruments[instrument]["total_runs"]
 
-    def count_runs_completed_since(self, since: datetime) -> int:
-        return sum(1 for ts in self.run_completions if ts >= since)
+    def count_runs_completed_since(self, since: datetime, instruments: Optional[Iterable[str]] = None) -> int:
+        """Runs completed at or after `since`, optionally only on `instruments`."""
+        wanted = None if instruments is None else set(instruments)
+        return sum(
+            1 for ts, name in self.run_completions
+            if ts >= since and (wanted is None or name in wanted)
+        )
 
     def snapshot(self) -> dict:
         return {
             "last_update": self.last_update.isoformat(),
             "beam_states": {beam: dict(state) for beam, state in self.beam_states.items()},
             "mcr_news": self.mcr_news,
-            "run_name": self.run_name,
-            "current_counts": self.current_counts,
-            "total_runs_completed": self.total_runs_completed,
+            "instruments": {name: dict(info) for name, info in self.instruments.items()},
             "health": dict(self.health),
         }
 
@@ -206,10 +231,32 @@ class DaemonState(MonitorSinkProtocol):
                     "power": str(beam_states[beam].get("power", "unknown")),
                 }
         self.mcr_news = str(snap.get("mcr_news", self.mcr_news))
-        self.run_name = str(snap.get("run_name", self.run_name))
-        self.current_counts = float(snap.get("current_counts", self.current_counts))
-        self.total_runs_completed = int(snap.get("total_runs_completed", self.total_runs_completed))
+        self._restore_instruments(snap)
         health = snap.get("health", {})
         if isinstance(health, dict):
             for k, v in health.items():
                 self.health[str(k)] = str(v)
+
+    def _restore_instruments(self, snap: dict) -> None:
+        """Restore run state for instruments still in the config; instruments
+        that have since been removed are dropped."""
+        saved = snap.get("instruments")
+        if not isinstance(saved, dict):
+            # Snapshot from before multi-instrument support: its single run
+            # belongs to the first instrument.
+            if not self.instruments or not any(
+                k in snap for k in ("run_name", "current_counts", "total_runs_completed")
+            ):
+                return
+            saved = {next(iter(self.instruments)): {
+                "run_name": snap.get("run_name", ""),
+                "counts": snap.get("current_counts", -1.0),
+                "total_runs": snap.get("total_runs_completed", 0),
+            }}
+        for name, info in saved.items():
+            if name not in self.instruments or not isinstance(info, dict):
+                continue
+            current = self.instruments[name]
+            current["run_name"] = str(info.get("run_name", current["run_name"]))
+            current["counts"] = float(info.get("counts", current["counts"]))
+            current["total_runs"] = int(info.get("total_runs", current["total_runs"]))

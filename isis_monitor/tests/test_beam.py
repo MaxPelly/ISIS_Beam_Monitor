@@ -4,7 +4,7 @@ import base64
 import random
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 from isis_monitor.config import AppConfig, InstrumentConfig
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.beam import (
@@ -357,6 +357,24 @@ async def test_handle_update_run_name_change_milestone_every_25_runs(mock_config
     assert exp_channel.broadcast.call_count == 2  # "new run" card + milestone card
     milestone = exp_channel.broadcast.call_args_list[1].args[0]
     assert "25" in milestone.title
+    sink.record_run_completed.assert_called_once_with("PEARL", ANY)
+
+
+@pytest.mark.asyncio
+async def test_handle_update_run_name_change_no_milestone_for_zero_total(mock_config, mock_channels):
+    """The sink returns 0 for an instrument it doesn't know; 0 % 25 == 0
+    must not be mistaken for a milestone."""
+    fun_config = replace(mock_config, fun_mode=True)
+    _, exp_channel = mock_channels
+    sink = MagicMock()
+    sink.record_run_completed.return_value = 0
+    m = make_monitor(fun_config, mock_channels, sink=sink)
+    tracker(m).state.run_name = "Run 1"
+    tracker(m).state.run_started_at = datetime.now(timezone.utc)
+
+    await m._handle_update({"pv": fun_config.run_name_pv, "b64byt": base64.b64encode(b"Run 2").decode()})
+
+    assert exp_channel.broadcast.call_count == 1  # just the "new run" card
 
 
 @pytest.mark.asyncio
@@ -793,7 +811,7 @@ async def test_handle_update_counts_nan_ignored_and_sink_updated(mock_config, mo
     await m._handle_update({"pv": mock_config.counts_pv, "text": "nan"})
     sink.update_counts.assert_not_called()
     await m._handle_update({"pv": mock_config.counts_pv, "text": "1.5/42"})
-    sink.update_counts.assert_called_once_with(42.0)
+    sink.update_counts.assert_called_once_with("PEARL", 42.0)
 
 
 def test_prune_collected_samples_drops_samples_outside_window(mock_config, mock_channels):

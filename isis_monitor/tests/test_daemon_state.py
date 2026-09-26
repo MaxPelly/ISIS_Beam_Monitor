@@ -3,8 +3,14 @@ import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
+from isis_monitor.config import InstrumentConfig
 from isis_monitor.daemon_state import SUBSCRIBER_QUEUE_SIZE, DaemonState
 from main import StateLogHandler
+
+INSTRUMENTS = [
+    InstrumentConfig("PEARL", "IN:PEARL:COUNTS", 130.0, "TS1"),
+    InstrumentConfig("WISH", "IN:WISH:COUNTS", 50.0, "TS2"),
+]
 
 def test_daemon_state_snapshot():
     state = DaemonState()
@@ -157,17 +163,29 @@ def test_get_history_snapshot_limit_returns_newest():
 
 
 def test_run_name_and_counts_events():
-    state = DaemonState()
+    state = DaemonState(instruments=INSTRUMENTS)
     q = state.subscribe()
-    state.update_run_name("Run 42")
-    state.update_counts(12.5)
+    state.update_run_name("WISH", "Run 42")
+    state.update_counts("WISH", 12.5)
     assert [(e.event, e.payload) for e in _drain(q)] == [
-        ("run", {"run_name": "Run 42"}),
-        ("counts", {"counts": 12.5}),
+        ("run", {"instrument": "WISH", "run_name": "Run 42"}),
+        ("counts", {"instrument": "WISH", "counts": 12.5}),
     ]
     snap = state.snapshot()
-    assert snap["run_name"] == "Run 42"
-    assert snap["current_counts"] == 12.5
+    assert snap["instruments"]["WISH"] == {
+        "run_name": "Run 42", "counts": 12.5, "total_runs": 0, "notify_counts": 50.0, "beam_target": "TS2",
+    }
+    assert snap["instruments"]["PEARL"]["run_name"] == ""
+
+
+def test_updates_for_unknown_instrument_are_ignored():
+    state = DaemonState(instruments=INSTRUMENTS)
+    q = state.subscribe()
+    state.update_run_name("MERLIN", "Run 1")
+    state.update_counts("MERLIN", 1.0)
+    assert state.record_run_completed("MERLIN", datetime.now(timezone.utc)) == 0
+    assert _drain(q) == []
+    assert set(state.snapshot()["instruments"]) == {"PEARL", "WISH"}
 
 
 def test_snapshot_is_a_copy():
@@ -184,9 +202,8 @@ def test_restore_from_snapshot_restores_health_and_ignores_empty():
     state.restore_from_snapshot_json(None)
     state.restore_from_snapshot_json("")
     assert state.health["beam"] == "unknown"
-    state.restore_from_snapshot_json(json.dumps({"health": {"beam": "connected"}, "run_name": "R1"}))
+    state.restore_from_snapshot_json(json.dumps({"health": {"beam": "connected"}}))
     assert state.health["beam"] == "connected"
-    assert state.run_name == "R1"
 
 
 def test_restore_from_snapshot():
@@ -206,31 +223,73 @@ def test_restore_from_snapshot():
     assert state.mcr_news == "Restored News"
 
 
-def test_record_run_completed_returns_running_total():
-    state = DaemonState()
+def test_record_run_completed_returns_per_instrument_total():
+    state = DaemonState(instruments=INSTRUMENTS)
     now = datetime.now(timezone.utc)
-    assert state.record_run_completed(now) == 1
-    assert state.record_run_completed(now) == 2
-    assert state.total_runs_completed == 2
+    assert state.record_run_completed("PEARL", now) == 1
+    assert state.record_run_completed("PEARL", now) == 2
+    assert state.record_run_completed("WISH", now) == 1
+    assert state.instruments["PEARL"]["total_runs"] == 2
 
 
-def test_count_runs_completed_since_filters_by_window():
-    state = DaemonState()
+def test_count_runs_completed_since_filters_by_window_and_instrument():
+    state = DaemonState(instruments=INSTRUMENTS)
     now = datetime.now(timezone.utc)
-    state.record_run_completed(now - timedelta(hours=30))  # outside 24h window
-    state.record_run_completed(now - timedelta(hours=1))
-    state.record_run_completed(now)
+    state.record_run_completed("PEARL", now - timedelta(hours=30))  # outside 24h window
+    state.record_run_completed("PEARL", now - timedelta(hours=1))
+    state.record_run_completed("WISH", now)
 
-    assert state.count_runs_completed_since(now - timedelta(hours=24)) == 2
+    since = now - timedelta(hours=24)
+    assert state.count_runs_completed_since(since) == 2
+    assert state.count_runs_completed_since(since, ["PEARL"]) == 1
+    assert state.count_runs_completed_since(since, []) == 0
 
 
-def test_total_runs_completed_persists_through_snapshot():
-    state = DaemonState()
-    state.record_run_completed(datetime.now(timezone.utc))
-    state.record_run_completed(datetime.now(timezone.utc))
+def test_instrument_state_persists_through_snapshot():
+    state = DaemonState(instruments=INSTRUMENTS)
+    state.record_run_completed("WISH", datetime.now(timezone.utc))
+    state.update_run_name("WISH", "Run 7")
+    state.update_counts("WISH", 3.0)
 
     snap_json = json.dumps(state.snapshot())
 
-    restored = DaemonState()
+    # MERLIN is new and PEARL was removed from the config since the snapshot;
+    # notify_counts comes from the new config, not the snapshot.
+    restored = DaemonState(instruments=[
+        InstrumentConfig("WISH", "IN:WISH:COUNTS", 75.0, "TS2"),
+        InstrumentConfig("MERLIN", "IN:MERLIN:COUNTS", 10.0, "TS1"),
+    ])
     restored.restore_from_snapshot_json(snap_json)
-    assert restored.total_runs_completed == 2
+    assert restored.instruments["WISH"] == {
+        "run_name": "Run 7", "counts": 3.0, "total_runs": 1, "notify_counts": 75.0, "beam_target": "TS2",
+    }
+    assert restored.instruments["MERLIN"]["total_runs"] == 0
+    assert "PEARL" not in restored.instruments
+
+
+def test_legacy_snapshot_restores_into_first_instrument():
+    """Snapshots from before multi-instrument support had one global run."""
+    legacy = json.dumps({"run_name": "Old run", "current_counts": 42.0, "total_runs_completed": 30})
+    state = DaemonState(instruments=INSTRUMENTS)
+    state.restore_from_snapshot_json(legacy)
+    assert state.instruments["PEARL"]["run_name"] == "Old run"
+    assert state.instruments["PEARL"]["counts"] == 42.0
+    assert state.instruments["PEARL"]["total_runs"] == 30
+    assert state.instruments["WISH"]["total_runs"] == 0
+
+
+def test_legacy_snapshot_without_run_fields_or_instruments_is_a_noop():
+    state = DaemonState(instruments=INSTRUMENTS)
+    state.restore_from_snapshot_json(json.dumps({"mcr_news": "x"}))
+    assert state.instruments["PEARL"]["total_runs"] == 0
+
+    empty = DaemonState()
+    empty.restore_from_snapshot_json(json.dumps({"total_runs_completed": 3}))
+    assert empty.instruments == {}
+
+
+def test_malformed_instrument_entries_in_snapshot_are_skipped():
+    state = DaemonState(instruments=INSTRUMENTS)
+    state.restore_from_snapshot_json(json.dumps({"instruments": {"PEARL": "junk", "WISH": {"total_runs": 4}}}))
+    assert state.instruments["PEARL"]["total_runs"] == 0
+    assert state.instruments["WISH"]["total_runs"] == 4
