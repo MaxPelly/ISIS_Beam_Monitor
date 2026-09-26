@@ -492,6 +492,7 @@ async def run_tui(config, stop_event: asyncio.Event):
             text, typed_ahead = typed_ahead.split("\n", 1)
             print(text)
             return text
+        typed_ahead = ""  # a partial line can't be shown or edited, so drop it
         sys.stdout.flush()
         line: asyncio.Future = loop.create_future()
 
@@ -500,11 +501,13 @@ async def run_tui(config, stop_event: asyncio.Event):
                 # In canonical mode one read returns at most one line.
                 nonlocal typed_ahead
                 data = os.read(fd, 4096)
-                if data:
-                    line.set_result(typed_ahead + data.decode(errors="replace").rstrip("\n"))
-                else:
+                if not data:
                     line.set_result(None)
-                typed_ahead = ""
+                    return
+                # Usually one line, but keys queued while switching terminal
+                # modes arrive together; keep the rest for the next prompts.
+                text, _, typed_ahead = data.decode(errors="replace").partition("\n")
+                line.set_result(text)
 
         loop.add_reader(fd, ready)
         try:
@@ -521,12 +524,14 @@ async def run_tui(config, stop_event: asyncio.Event):
 
     async def edit_config() -> None:
         # Hand the terminal over to the line-based editor, then take it back.
+        nonlocal typed_ahead
         loop.remove_reader(fd)
         tui.stop()
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         try:
             await run_config_editor(request, read_line, print)
         finally:
+            typed_ahead = ""  # not owed to the next editor session
             tty.setcbreak(fd)
             if not stop_event.is_set():  # otherwise run_tui is tearing down anyway
                 tui.start()

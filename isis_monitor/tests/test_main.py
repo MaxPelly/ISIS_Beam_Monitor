@@ -912,10 +912,12 @@ async def test_keys_typed_ahead_of_the_editor_are_passed_to_it(tmp_path, capsys)
         with tui_terminal() as (tui, keys, _termios, _tty):
             task = asyncio.create_task(main.run_tui(_config(tmp_path), asyncio.Event()))
             await wait_until(lambda: call("Subscribed to daemon updates.") in tui.update_log.call_args_list)
-            os.write(keys, b"c1\ntr")  # one read: open editor, choose 1, start typing
+            os.write(keys, b"c1\nx")  # one read: open editor, choose 1, then a partial line
             await wait_until(lambda: "fun_mode [false]: " in capsys.readouterr().out)
-            os.write(keys, b"ue\n")
+            os.write(keys, b"true\n")  # the hidden partial "x" was dropped
             await wait_until(lambda: "  1) fun_mode          true" in capsys.readouterr().out)
+            os.write(keys, b"2\nUTC\n")  # several lines in one read are split up
+            await wait_until(lambda: "  2) timezone          UTC" in capsys.readouterr().out)
             os.write(keys, b"q\n")
             await wait_until(lambda: "Discard your changes?" in capsys.readouterr().out)
             os.write(keys, b"y\n")
