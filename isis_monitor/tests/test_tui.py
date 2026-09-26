@@ -2,7 +2,7 @@ from collections import deque
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
-from isis_monitor.tui import RichTUI, _render_sparkline, sparkline_chars
+from isis_monitor.tui import RichTUI, _progress_bar, _render_sparkline, sparkline_chars
 
 
 # ---------------------------------------------------------------------------
@@ -411,3 +411,64 @@ class TestUpdateLogsPanel:
         panel: Panel = mock_update.call_args[0][0]
         # Text block should contain the joined strings
         assert "Log 1\nLog 2" in panel.renderable.plain
+
+
+# ---------------------------------------------------------------------------
+# Instruments panel
+# ---------------------------------------------------------------------------
+
+def _panel_text(tui, name) -> str:
+    from rich.console import Console
+    console = Console(width=120, record=True)
+    console.print(tui.layout[name].renderable)
+    return console.export_text()
+
+
+INSTRUMENTS = {
+    "PEARL": {"run_name": "Pearl run", "counts": 65.0, "total_runs": 3, "notify_counts": 130.0, "beam_target": "TS1"},
+    "EMU": {"run_name": "", "counts": -1.0, "total_runs": 0, "notify_counts": 10.0, "beam_target": "Muon"},
+}
+
+
+class TestInstrumentsPanel:
+    def test_set_instruments_renders_a_row_each_and_resizes(self):
+        tui = make_tui()
+        tui.set_instruments(INSTRUMENTS)
+        text = _panel_text(tui, "instruments")
+        assert "Pearl run" in text and "████░░░░ 65/130" in text
+        assert "EMU" in text and "—/10" in text
+        assert tui.layout["instruments"].size == 6
+
+    def test_set_instruments_copies_input(self):
+        tui = make_tui()
+        source = {"PEARL": dict(INSTRUMENTS["PEARL"])}
+        tui.set_instruments(source)
+        source["PEARL"]["counts"] = 0.0
+        assert tui.instruments["PEARL"]["counts"] == 65.0
+
+    def test_update_instrument_changes_known_and_ignores_unknown(self):
+        tui = make_tui()
+        tui.set_instruments(INSTRUMENTS)
+        tui.update_instrument("PEARL", run_name="Next run", counts=0.0)
+        tui.update_instrument("MERLIN", counts=5.0)
+        assert tui.instruments["PEARL"]["run_name"] == "Next run"
+        assert "MERLIN" not in tui.instruments
+        assert "Next run" in _panel_text(tui, "instruments")
+
+    def test_beam_column_uses_the_targets_power_colour(self):
+        tui = make_tui()
+        tui.set_instruments(INSTRUMENTS)
+        tui.update_beam_state("Muons", 1.0, "off")
+        table = tui.layout["instruments"].renderable.renderable
+        emu_beam = table.columns[1]._cells[1]
+        assert (emu_beam.plain, emu_beam.style) == ("Muon", "red")
+
+
+class TestProgressBar:
+    def test_no_counts_yet_is_a_dash(self):
+        assert _progress_bar(-1.0, 100.0).plain == "········ —/100"
+        assert _progress_bar(5.0, 0.0).plain == "········ —/0"
+
+    def test_partial_and_capped_at_full(self):
+        assert _progress_bar(25.0, 100.0).plain == "██░░░░░░ 25/100"
+        assert _progress_bar(150.0, 100.0).plain == "████████ 150/100"

@@ -3,13 +3,14 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Deque, Tuple
 
+from rich import box
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 from rich.table import Table
 
-from isis_monitor.beam import CHANNEL_LABELS
+from isis_monitor.beam import BEAM_TARGETS, CHANNEL_LABELS
 
 
 _STATE_COLOURS = {
@@ -22,6 +23,24 @@ _STATE_COLOURS = {
 
 def _get_state_colour(state):
     return _STATE_COLOURS.get(state, "purple")
+
+# Instruments name their beam target by state_key ("Muon"), beam_states by label ("Muons").
+_TARGET_LABELS = {bt.state_key: bt.channel_label for bt in BEAM_TARGETS}
+_PROGRESS_WIDTH = 8
+
+
+def _progress_bar(counts: float, target: float) -> Text:
+    """A fixed-width bar of counts collected towards the notify count, then
+    e.g. "65/130"."""
+    if counts < 0 or target <= 0:
+        return Text(f"{'·' * _PROGRESS_WIDTH} —/{target:.0f}", style="dim")
+    fraction = min(counts / target, 1.0)
+    filled = round(fraction * _PROGRESS_WIDTH)
+    bar = Text("█" * filled, style="green" if fraction >= 1.0 else "cyan")
+    bar.append("░" * (_PROGRESS_WIDTH - filled), style="dim")
+    bar.append(f" {counts:.0f}/{target:.0f}")
+    return bar
+
 
 # Eight Unicode block heights, index 0 = shortest
 _BLOCKS = " ▁▂▃▄▅▆▇█"
@@ -104,6 +123,9 @@ class RichTUI:
             for beam in self.beam_states
         }
 
+        # name -> {"run_name", "counts", "notify_counts", "beam_target", ...}
+        self.instruments: dict[str, dict] = {}
+
         self.mcr_news = "Waiting for initial MCR news..."
         self._logs: Deque[str] = deque(maxlen=self.logs_maxlen)
         self.last_update = datetime.now(timezone.utc)
@@ -125,7 +147,11 @@ class RichTUI:
         )
         layout["main"].split_row(
             Layout(name="left", ratio=1),
-            Layout(name="mcr", ratio=1),
+            Layout(name="right", ratio=1),
+        )
+        layout["right"].split_column(
+            Layout(name="instruments", size=self._instruments_panel_height()),
+            Layout(name="mcr"),
         )
         layout["left"].split_column(
             Layout(name="beam_table", size=10),
@@ -157,6 +183,21 @@ class RichTUI:
             self.beam_states[beam] = {"current": current, "power": power}
         self.last_update = datetime.now(timezone.utc)
         self._update_beam_panel()
+        self._update_instruments_panel()  # the Beam column is coloured by power
+
+    def set_instruments(self, instruments: dict[str, dict]) -> None:
+        """Replace every instrument's state, e.g. from a daemon snapshot."""
+        self.instruments = {name: dict(info) for name, info in instruments.items()}
+        self.layout["instruments"].size = self._instruments_panel_height()
+        self._update_instruments_panel()
+
+    def update_instrument(self, name: str, **fields) -> None:
+        """Update some of one instrument's state, e.g. run_name or counts."""
+        if name not in self.instruments:
+            return
+        self.instruments[name].update(fields)
+        self.last_update = datetime.now(timezone.utc)
+        self._update_instruments_panel()
 
     def update_mcr_news(self, news: str):
         """Update the MCR news panel."""
@@ -188,6 +229,7 @@ class RichTUI:
         )
         self._update_beam_panel()
         self._update_beam_graph()
+        self._update_instruments_panel()
         self._update_mcr_panel()
         self._update_logs_panel()
 
@@ -257,6 +299,33 @@ class RichTUI:
                 subtitle=subtitle,
                 border_style="cyan",
             )
+        )
+
+    def _instruments_panel_height(self) -> int:
+        # panel borders (2) + table header and its rule (2) + one line per instrument
+        return 4 + max(len(self.instruments), 1)
+
+    def _update_instruments_panel(self):
+        # SIMPLE_HEAD (no outer border) leaves the run name as much room as possible.
+        table = Table(show_header=True, header_style="bold magenta", expand=True, box=box.SIMPLE_HEAD,
+                      pad_edge=False, show_edge=False, collapse_padding=True)
+        table.add_column("Name", no_wrap=True)
+        table.add_column("Beam", no_wrap=True)
+        table.add_column("Run", overflow="ellipsis", no_wrap=True, ratio=1)
+        table.add_column("Counts", no_wrap=True)
+
+        for name, info in self.instruments.items():
+            target = str(info.get("beam_target", ""))
+            beam = self.beam_states.get(_TARGET_LABELS.get(target, target), {})
+            table.add_row(
+                name,
+                Text(target, style=_get_state_colour(beam.get("power", "unknown"))),
+                str(info.get("run_name", "")) or "—",
+                _progress_bar(float(info.get("counts", -1.0)), float(info.get("notify_counts", 0.0))),
+            )
+
+        self.layout["instruments"].update(
+            Panel(table, title="Instruments", border_style="cyan")
         )
 
     def _update_mcr_panel(self):

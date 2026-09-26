@@ -91,10 +91,12 @@ def test_apply_snapshot_to_tui():
         "beam_states": {
             "TS1": {"current": 42.0, "power": "high"}
         },
-        "mcr_news": "Test news"
+        "mcr_news": "Test news",
+        "instruments": {"PEARL": {"run_name": "R1", "counts": 5.0, "notify_counts": 130.0, "beam_target": "TS1"}},
     }
     _apply_snapshot_to_tui(tui, snap)
     assert tui.mcr_news == "Test news"
+    assert tui.instruments["PEARL"]["run_name"] == "R1"
     assert "TS1" in tui.beam_states
     assert tui.beam_states["TS1"]["current"] == 42.0
 
@@ -378,9 +380,12 @@ def test_apply_event_to_tui_dispatches_each_event_type():
         {"event": "sample", "payload": {"beam": "TS2", "timestamp": ts.isoformat(), "current": 1, "power": "off"}},
         {"event": "sample", "payload": {"beam": "TS2"}},  # no timestamp: ignored
         {"event": "health", "payload": {"component": "beam", "status": "connected"}},
-        {"event": "counts", "payload": {"counts": 1}},  # not displayed
+        {"event": "run", "payload": {"instrument": "WISH", "run_name": "Run 9"}},
+        {"event": "counts", "payload": {"instrument": "WISH", "counts": 12}},
     ]:
         main._apply_event_to_tui(tui, message)
+
+    assert tui.update_instrument.call_args_list == [call("WISH", run_name="Run 9"), call("WISH", counts=12.0)]
 
     tui.update_beam_state.assert_called_once_with("TS1", 5.0, "low")
     tui.update_mcr_news.assert_called_once_with("hi")

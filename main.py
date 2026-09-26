@@ -259,6 +259,8 @@ def _apply_snapshot_to_tui(tui: RichTUI, snapshot: dict) -> None:
             tui.update_beam_state(beam, float(state.get("current", 0.0)), str(state.get("power", "unknown")))
     if snapshot.get("mcr_news"):
         tui.update_mcr_news(str(snapshot["mcr_news"]))
+    if isinstance(snapshot.get("instruments"), dict):
+        tui.set_instruments(snapshot["instruments"])
 
 
 def _apply_event_to_tui(tui: RichTUI, message: dict) -> None:
@@ -280,6 +282,10 @@ def _apply_event_to_tui(tui: RichTUI, message: dict) -> None:
             float(payload.get("current", 0.0)),
             str(payload.get("power", "unknown")),
         )
+    elif ev == "run":
+        tui.update_instrument(str(payload.get("instrument", "")), run_name=str(payload.get("run_name", "")))
+    elif ev == "counts":
+        tui.update_instrument(str(payload.get("instrument", "")), counts=float(payload.get("counts", -1.0)))
     elif ev == "health":
         tui.update_log(f"Health: {payload.get('component', '')} -> {payload.get('status', '')}")
 
