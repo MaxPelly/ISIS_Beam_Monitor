@@ -465,30 +465,46 @@ async def run_tui(config, stop_event: asyncio.Event):
         client = c
 
     loop = asyncio.get_running_loop()
+    typed_ahead = ""  # keys read in the same chunk as "c", owed to the editor
 
     # stdin is read with os.read rather than through sys.stdin, whose buffer
     # could swallow typed-ahead keys (so the reader never fires for them) or
     # block the event loop waiting for a newline.
     def on_key() -> None:
+        nonlocal typed_ahead
         data = os.read(fd, 64)
         if not data:  # stdin closed
             stop_event.set()
             return
-        for ch in data.decode(errors="ignore"):
+        text = data.decode(errors="ignore")
+        for i, ch in enumerate(text):
             handle_tui_key(ch, client, stop_event, tui, key_tasks, edit_config)
+            if ch.lower() == "c" and client is not None:
+                typed_ahead = text[i + 1:]  # the editor now owns the terminal
+                return
 
     async def read_line(prompt: str) -> Optional[str]:
         """Read one line without blocking the event loop (so the daemon
         connection stays alive and quitting can cancel it); None on EOF."""
+        nonlocal typed_ahead
         sys.stdout.write(prompt)
+        if "\n" in typed_ahead:
+            text, typed_ahead = typed_ahead.split("\n", 1)
+            print(text)
+            return text
         sys.stdout.flush()
         line: asyncio.Future = loop.create_future()
 
         def ready() -> None:
             if not line.done():
                 # In canonical mode one read returns at most one line.
+                nonlocal typed_ahead
                 data = os.read(fd, 4096)
-                line.set_result(data.decode(errors="replace").rstrip("\n") if data else None)
+                if data:
+                    line.set_result(typed_ahead + data.decode(errors="replace").rstrip("\n"))
+                else:
+                    line.set_result(None)
+                typed_ahead = ""
 
         loop.add_reader(fd, ready)
         try:

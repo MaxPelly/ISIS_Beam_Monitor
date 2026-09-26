@@ -904,3 +904,21 @@ async def test_failed_tui_action_is_logged(caplog):
     await asyncio.sleep(0.01)
     assert "TUI action failed" in caplog.text and "ValueError: bad" in caplog.text
     assert not tasks
+
+
+@pytest.mark.asyncio
+async def test_keys_typed_ahead_of_the_editor_are_passed_to_it(tmp_path, capsys):
+    async with daemon_with_file(tmp_path) as (_task, _client, _ini):
+        with tui_terminal() as (tui, keys, _termios, _tty):
+            task = asyncio.create_task(main.run_tui(_config(tmp_path), asyncio.Event()))
+            await wait_until(lambda: call("Subscribed to daemon updates.") in tui.update_log.call_args_list)
+            os.write(keys, b"c1\ntr")  # one read: open editor, choose 1, start typing
+            await wait_until(lambda: "fun_mode [false]: " in capsys.readouterr().out)
+            os.write(keys, b"ue\n")
+            await wait_until(lambda: "  1) fun_mode          true" in capsys.readouterr().out)
+            os.write(keys, b"q\n")
+            await wait_until(lambda: "Discard your changes?" in capsys.readouterr().out)
+            os.write(keys, b"y\n")
+            await wait_until(lambda: tui.start.call_count == 2)
+            os.write(keys, b"q")
+            await asyncio.wait_for(task, 2)
