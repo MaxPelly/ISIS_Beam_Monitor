@@ -11,12 +11,32 @@ news_teams_url =
 beam_teams_url =
 experiment_teams_url =
 
+# One section per monitored instrument; run notifications for all of them go
+# to experiment_teams_url, with the instrument name in the card title.
+#   counts_pv      (required) dashboard PV whose text is "live_current/total_collected"
+#   notify_counts  (required) total collected at which "run about to finish" is sent
+#   beam_target    (optional) TS1, TS2 or Muon: the beam reported on run cards and
+#                  checked before stall warnings (default: [PVS] instrument_target)
+# The run-name PV is derived from the name as IN:<NAME>:DAE:WDTITLE.
+# Instruments and [NOTIFICATIONS] can also be edited from the TUI (press c); saving
+# there rewrites this file without its comments (the old file is kept as .bak).
+[INSTRUMENT:PEARL]
+counts_pv = IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE
+notify_counts = 130
+
+# [INSTRUMENT:WISH]
+# counts_pv = IN:WISH:CS:DASHBOARD:TAB:<row>:<col>:VALUE   (check the instrument dashboard)
+# notify_counts = 200
+# beam_target = TS2
+
 [PVS]
-# Uncomment and edit the lines below when monitoring an instrument other than PEARL.
+# Default beam_target for instrument sections that don't set one (TS1, TS2 or Muon).
+# instrument_target = TS1
+# Legacy single-instrument settings, used only when there are no [INSTRUMENT:*]
+# sections (the instrument is then named from the PV, e.g. PEARL).
 # counts_pv = IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE
 # run_name_pv = IN:PEARL:DAE:WDTITLE
-# Which beam target's state is reported as "the instrument's beam" on run cards.
-# instrument_target = TS1
+# notify_counts = 130
 
 [TUI]
 # Number of 1-minute samples the TUI shows per beam target (default = 60 → 1-hour rolling window).
@@ -69,10 +89,10 @@ experiment_teams_url =
 # Timezone used for the timestamps shown on notification cards.
 # timezone = Europe/London
 # How long a beam state change must persist before a card is sent, in
-# seconds. Filters out brief flickers rather than reporting every one.
+# seconds (0-3600). Filters out brief flickers rather than reporting every one.
 # debounce_seconds = 20
-# How many minutes counts collected can stay flat, while the instrument
-# beam is on, before a stall warning is sent.
+# How many minutes counts collected can stay flat, while the instrument's
+# beam is on, before a stall warning is sent (at most 10080, i.e. 7 days).
 # stall_minutes = 15
 # UK-local time (HH:MM) the daily beam-uptime summary is sent at.
 # summary_time = 08:00
