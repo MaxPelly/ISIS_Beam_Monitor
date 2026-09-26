@@ -242,7 +242,7 @@ def test_run_started_builder():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = run_started("PEARL", "Run 12346", "Run 12345", timedelta(hours=2), 1000.0, dt)
     assert n.title == "PEARL: New run started"
-    assert n.channel == "PEARL"
+    assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
     assert n.text == "Run 12346"
     assert n.emoji == "🚀"
     assert n.flavour == ""
@@ -257,7 +257,7 @@ def test_run_finishing_builder():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = run_finishing("PEARL", "Run 12345", 150.0, 130.0, 0.5, "high", dt)
     assert n.title == "PEARL: Run about to finish"
-    assert n.channel == "PEARL"
+    assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
     assert n.text == "Run 12345"
     assert n.emoji == "🏁"
     assert n.flavour == ""
@@ -348,7 +348,7 @@ def test_collection_stalled_builder():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = collection_stalled("PEARL", "TS1", timedelta(minutes=17), dt)
     assert n.title == "PEARL: Data collection stalled"
-    assert n.channel == "PEARL"
+    assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
     assert n.severity == Severity.WARNING
     assert n.emoji == "⚠️"
     assert "17m" in n.text
@@ -394,7 +394,7 @@ def test_run_milestone_builder():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = run_milestone("PEARL", 25, dt)
     assert n.title == "PEARL: 25 runs completed"
-    assert n.channel == "PEARL"
+    assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
     assert n.severity == Severity.GOOD
     assert n.emoji == "🏆"
     assert n.flavour == ""

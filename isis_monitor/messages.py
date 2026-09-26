@@ -196,7 +196,6 @@ def run_started(
         ],
         flavour=flavour.pick(("*", "new_run"), rng) if rng else "",
         timestamp=time_now,
-        channel=instrument,
     )
 
 
@@ -224,7 +223,6 @@ def run_finishing(
         facts=facts,
         flavour=flavour.pick(("*", "finishing"), rng) if rng else "",
         timestamp=time_now,
-        channel=instrument,
     )
 
 
@@ -237,7 +235,6 @@ def collection_stalled(
         severity=Severity.WARNING,
         emoji="⚠️",
         timestamp=time_now,
-        channel=instrument,
     )
 
 
@@ -322,5 +319,4 @@ def run_milestone(
         emoji="🏆",
         flavour=flavour.pick(("*", "milestone"), rng) if rng else "",
         timestamp=time_now,
-        channel=instrument,
     )
