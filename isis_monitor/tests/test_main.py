@@ -26,9 +26,9 @@ from main import SingleInstanceLock, StateLogHandler
 
 @pytest.fixture(autouse=True)
 def no_exec():
-    """A real os.execv would replace the pytest process itself."""
-    with patch("main.os.execv", side_effect=AssertionError("os.execv called in a test")) as execv:
-        yield execv
+    """A real exec would replace the pytest process itself."""
+    with patch("main.os.execve", side_effect=AssertionError("os.execve called in a test")) as execve:
+        yield execve
 
 
 class TestStateLogHandler:
@@ -748,5 +748,30 @@ def test_main_restarts_after_lock_is_released(tmp_path, no_exec):
          patch("main.run_daemon", new_callable=AsyncMock, return_value=True):
         main.main()
 
-    no_exec.assert_called_once_with(main.sys.executable, [main.sys.executable, "-u", "main.py", "daemon", ini])
+    exe, argv, env = no_exec.call_args.args
+    assert (exe, argv) == (main.sys.executable, [main.sys.executable, "-u", "main.py", "daemon", ini])
+    assert env[main.RESTARTED_ENV] == "1"
     assert lock_free == [True]
+
+
+def test_main_reports_failed_restart(tmp_path, no_exec, capsys):
+    no_exec.side_effect = FileNotFoundError("no such interpreter")
+    with patch.object(main.sys, "argv", ["main.py", "daemon", _ini(tmp_path)]), \
+         patch("main.configure_logging"), \
+         patch("main.run_daemon", new_callable=AsyncMock, return_value=True):
+        with pytest.raises(SystemExit) as exc_info:
+            main.main()
+    assert exc_info.value.code == 1
+    assert "Failed to restart daemon: no such interpreter" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("restarted, expected", [(False, True), (True, False)])
+def test_restarted_daemon_does_not_replay_notify_current(tmp_path, monkeypatch, restarted, expected):
+    if restarted:
+        monkeypatch.setenv(main.RESTARTED_ENV, "1")
+    with patch.object(main.sys, "argv", ["main.py", "daemon", _ini(tmp_path), "-n"]), \
+         patch("main.configure_logging"), \
+         patch("main.run_daemon", new_callable=AsyncMock, return_value=False) as run_daemon:
+        main.main()
+    assert run_daemon.await_args.args[1].notify_current is expected
+    assert main.RESTARTED_ENV not in os.environ

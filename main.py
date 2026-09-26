@@ -38,6 +38,8 @@ from isis_monitor.tui import RichTUI
 logger = logging.getLogger("MAIN")
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+# Set in the environment of a daemon that re-exec'd itself (see restart_process).
+RESTARTED_ENV = "ISIS_MONITOR_RESTARTED"
 
 
 class StateLogHandler(logging.Handler):
@@ -305,7 +307,13 @@ def restart_process() -> None:
     """Replace this process with a fresh copy of itself (same PID, same
     arguments), e.g. to pick up an edited config file."""
     logging.shutdown()
-    os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
+    sys.stdout.flush()  # exec discards anything still buffered
+    sys.stderr.flush()
+    try:
+        os.execve(sys.executable, [sys.executable, *sys.orig_argv[1:]], {**os.environ, RESTARTED_ENV: "1"})
+    except OSError as exc:  # e.g. the interpreter was removed by a venv rebuild
+        print(f"Failed to restart daemon: {exc}", file=sys.stderr)
+        raise SystemExit(1)
 
 
 def _apply_snapshot_to_tui(tui: RichTUI, snapshot: dict) -> None:
@@ -503,6 +511,9 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def main():
     args = parse_args()
+    if os.environ.pop(RESTARTED_ENV, None) and args.mode == "daemon":
+        # -n means "post the current news now", not on every config apply.
+        args.notify_current = False
 
     try:
         config = load_config(args.config)
