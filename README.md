@@ -7,7 +7,7 @@ This is a Python application that monitors the status of the ISIS beam, experime
 ## Features
 
 - **Beam Updates**: Monitors the ISIS beam status and sends debounced state-change cards (with severity colour, emoji, current/previous readings and time-in-state) based on configurable thresholds. Correlated multi-target trips are called out in the same card.
-- **Experiment Updates**: Tracks run starts/finishes, including previous-run stats, counts collected, a collection-rate ETA, and a warning if data collection stalls while the instrument beam is on.
+- **Experiment Updates**: Tracks run starts/finishes on any number of instruments, each with its own notify count, including previous-run stats, counts collected, a collection-rate ETA, and a warning if data collection stalls while that instrument's beam is on.
 - **MCR News**: Fetches the latest Main Control Room (MCR) news and classifies each update's severity (good/attention/warning) by keyword, with an optional "Open MCR news" link.
 - **Daily Summary**: Sends a per-target uptime/trip/sparkline summary card once a day at a configurable time.
 - **`fun_mode`**: Optional personality lines, longest-uptime records, run-count milestones and a daily fact, on top of the always-on severity/emoji information.
@@ -15,6 +15,7 @@ This is a Python application that monitors the status of the ISIS beam, experime
 - **Dummy Notifier**: Includes a logging-based dummy notifier for testing and development without sending actual webhooks.
 - **Concurrent Execution**: Uses `asyncio` to run beam and news monitors concurrently for real-time responsiveness.
 - **Live TUI Graph View**: Displays a rolling 1-hour sparkline graph of beam current (μA) for TS1, TS2, and Muons directly in the terminal. The graph is sampled on its own fixed 1-minute timer, fully decoupled from the beam WebSocket update rate — a silent beam produces a flat line at the last-known value.
+- **TUI Instruments Panel and Config Editor**: Shows each instrument's run and progress towards its notify count, and lets you edit instruments and notification settings from the TUI; the daemon validates, saves and restarts itself to apply them.
 
 ## Requirements
 
@@ -40,6 +41,31 @@ The application requires an INI configuration file to set up the Teams webhook U
    cp config.ini.example config.ini
    ```
 2. Edit `config.ini` and add your specific Teams webhook URLs for beam, experiment, and news updates.
+3. Add an `[INSTRUMENT:<NAME>]` section for each instrument to monitor (see below).
+
+### Instruments
+
+Each instrument gets its own section. Run notifications for every instrument go to
+`experiment_teams_url`, with the instrument name in the card title (e.g. "PEARL: New run started");
+the payload's `channel` field stays "Experiment Updates" for downstream routing.
+
+```ini
+[INSTRUMENT:PEARL]
+# Required: dashboard PV whose text is "live_current/total_collected".
+counts_pv = IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE
+# Required: total collected at which "run about to finish" is sent.
+notify_counts = 130
+# Optional: TS1, TS2 or Muon — the beam reported on run cards and checked
+# before stall warnings (default = [PVS] instrument_target, itself TS1 by default).
+# beam_target = TS1
+```
+
+The run-name PV is derived from the name as `IN:<NAME>:DAE:WDTITLE`. Names may contain
+letters, digits, `_` and `-`, and are upper-cased.
+
+A config with no `[INSTRUMENT:*]` sections still works: one instrument is built from the
+legacy `[PVS]` keys (`counts_pv`, `run_name_pv`, and `notify_counts`, default 130), named
+from the PV (e.g. PEARL).
 
 ### Optional `[TUI]` section
 
@@ -60,11 +86,11 @@ The application requires an INI configuration file to set up the Teams webhook U
 # fun_mode = false
 # Timezone used for the timestamps shown on notification cards (default = Europe/London).
 # timezone = Europe/London
-# How long a beam state change must persist, in seconds, before a card
-# is sent — filters out brief flickers (default = 20).
+# How long a beam state change must persist, in seconds (0-3600), before a
+# card is sent — filters out brief flickers (default = 20).
 # debounce_seconds = 20
-# How many minutes counts collected can stay flat, while the instrument
-# beam is on, before a stall warning is sent (default = 15).
+# How many minutes counts collected can stay flat, while the instrument's
+# beam is on, before a stall warning is sent (at most 7 days; default = 15).
 # stall_minutes = 15
 # UK-local time (HH:MM) the daily beam-uptime summary is sent at (default = 08:00).
 # summary_time = 08:00
@@ -78,12 +104,11 @@ The application requires an INI configuration file to set up the Teams webhook U
 # mcr_page_url = https://www.isis.stfc.ac.uk/gallery/beam-status/
 ```
 
-### Optional instrument setting in `[PVS]`
+### Optional `[PVS]` default beam target
 
 ```ini
 [PVS]
-# Which beam target's state is reported as "the instrument's beam" on run
-# cards (default = TS1).
+# The beam_target for instrument sections that don't set one (default = TS1).
 # instrument_target = TS1
 ```
 
@@ -101,14 +126,40 @@ Run the TUI client (attach/detach as needed, same host via SSH):
 python main.py tui path/to/config.ini
 ```
 
-In TUI mode, operator commands are available from stdin:
-- `r` + Enter: force reconnect (beam + MCR) on daemon
-- `q` + Enter: quit TUI client
+In TUI mode, single keys (no Enter needed) control the client:
+- `r`: force reconnect (beam + MCR) on daemon
+- `c`: edit the configuration (see below)
+- `q`: quit TUI client
+
+### Editing the configuration from the TUI
+
+Press `c` to pause the display and open a numbered menu of the notification settings
+(`fun_mode`, `timezone`, `debounce_seconds`, `stall_minutes`, `summary_time`) and the
+instruments. Type a number to edit that entry (Enter keeps the current value), `a` to add
+an instrument, `d <number>` to delete one, `s` to review the changes and save, or `q` to
+leave without saving.
+
+On save the daemon validates the new settings (nothing is written if they're invalid, and
+you return to the menu to fix them), writes `config.ini`, and restarts itself in place (same
+PID, so it works under systemd or when run by hand); the TUI reconnects automatically.
+Things to know:
+
+- The file is rewritten by Python's `configparser`, so **comments are lost**. The previous
+  version is kept as `config.ini.bak`, and `config.ini.example` documents every setting.
+- If the file changed since the editor opened it (a hand edit, or another TUI saving
+  first), the save is refused rather than overwriting those changes; reopen the editor.
+- A legacy `[PVS]`-only config becomes explicit `[INSTRUMENT:*]` sections on the first
+  save; a non-standard `[PVS] run_name_pv` is not kept (the derived
+  `IN:<NAME>:DAE:WDTITLE` is used).
+- Each restart re-sends the beam "Monitor online" cards, as any daemon start does.
+  `-n/--notify_current` is not re-applied on these restarts.
+- Other settings (webhooks, paths, boundaries, …) are still edited by hand; restart the
+  daemon afterwards (or save from the TUI, which restarts it).
 
 ### Daemon options
 
 - `config`: (Required) Path to the `.ini` configuration file.
-- `-n`, `--notify_current`: Send a notification for the current news immediately on startup. Use `--no-notify_current` to disable (default behaviour: wait for new news before notifying).
+- `-n`, `--notify_current`: Send a notification for the current news immediately on startup (not on restarts triggered from the TUI). Use `--no-notify_current` to disable (default behaviour: wait for new news before notifying).
 - `-d`, `--dummy`, `--no-dummy`: Use a dummy notifier for testing purposes that logs to the console instead of sending actual webhooks.
 
 ### Example
@@ -152,6 +203,15 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now isis-beam-monitor.service
 sudo systemctl status isis-beam-monitor.service
 ```
+
+### Upgrading from a single-instrument version
+
+- The `-nc/--notify_counts` option has been removed; remove it from any launch script or
+  systemd unit (the daemon won't start with it). Set `notify_counts` in each
+  `[INSTRUMENT:*]` section, or in `[PVS]` for a legacy config.
+- Existing configs keep working unchanged as a single instrument.
+- The saved run count from before the upgrade is attributed to the first configured
+  instrument.
 
 ### Troubleshooting
 
