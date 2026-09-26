@@ -1,52 +1,25 @@
 import asyncio
-import base64
 import contextlib
 import json
 import logging
 import math
 import random
-from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 import websockets
 
 from isis_monitor.config import AppConfig
-from isis_monitor.messages import (
-    beam_change,
-    collection_stalled,
-    run_milestone,
-    run_started,
-    run_finishing,
-    startup_status,
-)
+from isis_monitor.instrument import InstrumentTracker
+from isis_monitor.messages import beam_change, startup_status
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.protocols import MonitorSinkProtocol
 
 logger = logging.getLogger(__name__)
 
-COUNTS_SAMPLE_WINDOW = timedelta(minutes=15)
 COLLECTION_CHECK_INTERVAL = 60.0
-STALL_CHECK_WINDOW = timedelta(minutes=5)
-RUN_MILESTONE_INTERVAL = 25
 
-
-def _fit_rate(samples: List[Tuple[datetime, float]]) -> float:
-    """Least-squares slope (value per second) through (time, value) samples."""
-    if len(samples) < 2:
-        return 0.0
-    t0 = samples[0][0]
-    xs = [(t - t0).total_seconds() for t, _ in samples]
-    ys = [v for _, v in samples]
-    n = len(xs)
-    mean_x = sum(xs) / n
-    mean_y = sum(ys) / n
-    denom = sum((x - mean_x) ** 2 for x in xs)
-    if denom == 0:
-        return 0.0
-    numer = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
-    return numer / denom
 
 @dataclass
 class BeamTarget:
@@ -199,15 +172,6 @@ class MonitorState:
         self.beams: Dict[str, BeamState] = {
             bt.state_key: BeamState() for bt in BEAM_TARGETS
         }
-        self.run_name: str = ""
-        self.run_started_at: Optional[datetime] = None
-        self.current_counts: float = -1.0  # total current collected so far this experiment
-        self.collected_samples: Deque[Tuple[datetime, float]] = deque()  # (time, current_counts)
-        self.end_notified: bool = False
-
-        # Periodic collection-progress check (BeamMonitor._check_collection_progress)
-        self.collection_stalled_since: Optional[datetime] = None
-        self.stall_warned: bool = False
 
 
 class BeamMonitor:
@@ -216,18 +180,14 @@ class BeamMonitor:
         config: AppConfig,
         beam_channel: NotificationChannel,
         experiment_channel: NotificationChannel,
-        counts_target: float,
         sink: Optional[MonitorSinkProtocol] = None,
         debounce_seconds: float = 20.0,
         rng: Optional[random.Random] = None,
     ):
         self.config = config
         self.data_url = config.isis_websocket_url
-        self.counts_pv = config.counts_pv
-        self.run_name_pv = config.run_name_pv
         self.beam_channel = beam_channel
         self.experiment_channel = experiment_channel
-        self.counts_target = counts_target
         self.sink = sink
         self.state = MonitorState()
         self._rng = rng or random.Random()
@@ -249,6 +209,20 @@ class BeamMonitor:
             "TS1": config.ts1_boundaries,
             "TS2": config.ts2_boundaries,
             "Muon": config.muon_boundaries,
+        }
+
+        self.instruments: Dict[str, InstrumentTracker] = {
+            inst.name: InstrumentTracker(
+                inst, experiment_channel, self._beam_power, config.stall_minutes,
+                fun_mode=config.fun_mode, rng=self._rng, sink=sink,
+            )
+            for inst in config.instruments
+        }
+        self.pv_to_run_name: Dict[str, InstrumentTracker] = {
+            t.instrument.run_name_pv: t for t in self.instruments.values()
+        }
+        self.pv_to_counts: Dict[str, InstrumentTracker] = {
+            t.instrument.counts_pv: t for t in self.instruments.values()
         }
 
     @staticmethod
@@ -312,144 +286,23 @@ class BeamMonitor:
             case {"pv": pv, "value": raw_val} if pv in self.pv_to_beam:
                 await self._handle_beam_current(self.pv_to_beam[pv], raw_val, time_now)
 
-            case {"pv": pv, "b64byt": b64_data} if pv == self.run_name_pv:
-                if not b64_data or (
-                    isinstance(b64_data, str) and b64_data.lower() == "nan"
-                ):
-                    return
-                try:
-                    name = base64.b64decode(b64_data).decode().strip("\x00")
-                except Exception as e:
-                    logger.warning(f"Failed to decode run name b64: {e}")
-                    return
+            case {"pv": pv, "b64byt": b64_data} if pv in self.pv_to_run_name:
+                await self.pv_to_run_name[pv].handle_run_name(b64_data, time_now)
 
-                if self.state.run_name and self.state.run_name != name:
-                    notification = run_started(
-                        name,
-                        self.state.run_name,
-                        time_now - self.state.run_started_at,
-                        self.state.current_counts,
-                        time_now,
-                        rng=self._rng if self.config.fun_mode else None,
-                    )
-                    logger.info(f"New Run: {notification.to_plain_text()}")
-                    await self.experiment_channel.broadcast(notification)
-                    self.state.current_counts = 0
-                    self.state.end_notified = False
-                    self.state.collected_samples.clear()
-                    self.state.collection_stalled_since = None
-                    self.state.stall_warned = False
+            case {"pv": pv, "text": text_val} if pv in self.pv_to_counts:
+                await self.pv_to_counts[pv].handle_counts(text_val, time_now)
 
-                    if self.sink:
-                        total_runs = self.sink.record_run_completed(time_now)
-                        if self.config.fun_mode and total_runs % RUN_MILESTONE_INTERVAL == 0:
-                            milestone = run_milestone(total_runs, time_now, rng=self._rng)
-                            logger.info(f"Milestone: {milestone.to_plain_text()}")
-                            await self.experiment_channel.broadcast(milestone)
-
-                self.state.run_name = name
-                self.state.run_started_at = time_now
-                if self.sink:
-                    self.sink.update_run_name(name)
-
-            case {"pv": pv, "text": text_val} if pv == self.counts_pv:
-                if not text_val or (
-                    isinstance(text_val, str) and text_val.lower() == "nan"
-                ):
-                    return
-                try:
-                    # "live_current/total_collected"; live current is already
-                    # tracked via the beam-current PVs, so only the total is used.
-                    parts = str(text_val).split("/")
-                    float(parts[0])  # validates the format; value unused
-                    total_collected = float(parts[1])
-                except (IndexError, ValueError) as e:
-                    logger.warning(f"Failed to parse counts from '{text_val}': {e}")
-                    return
-
-                self.state.current_counts = total_collected
-                self.state.collected_samples.append((time_now, total_collected))
-                self._prune_collected_samples(time_now)
-
-                if self.sink:
-                    self.sink.update_counts(total_collected)
-
-                if self.state.end_notified and total_collected < (self.counts_target - 25):
-                    self.state.end_notified = False
-
-                if total_collected > self.counts_target and not self.state.end_notified:
-                    rate = _fit_rate(list(self.state.collected_samples))
-                    notification = run_finishing(
-                        self.state.run_name,
-                        total_collected,
-                        self.counts_target,
-                        rate,
-                        self._instrument_beam_state(),
-                        time_now,
-                        rng=self._rng if self.config.fun_mode else None,
-                    )
-                    logger.info(f"Target Reached: {notification.to_plain_text()}")
-                    await self.experiment_channel.broadcast(notification)
-                    self.state.end_notified = True
-
-    def _prune_collected_samples(self, now: datetime) -> None:
-        cutoff = now - COUNTS_SAMPLE_WINDOW
-        samples = self.state.collected_samples
-        while samples and samples[0][0] < cutoff:
-            samples.popleft()
-
-    def _instrument_beam_state(self) -> str:
-        beam_state = self.state.beams.get(self.config.instrument_target)
+    def _beam_power(self, target: str) -> str:
+        beam_state = self.state.beams.get(target)
         return beam_state.power if beam_state else "unknown"
 
-    def _collected_baseline_before(self, cutoff: datetime) -> Optional[float]:
-        """Most recent counts-collected sample at or before `cutoff`, or None
-        if there isn't `STALL_CHECK_WINDOW` worth of history yet."""
-        baseline = None
-        for t, value in self.state.collected_samples:
-            if t > cutoff:
-                break
-            baseline = value
-        return baseline
-
     async def _check_collection_progress(self, time_now: datetime) -> None:
-        """Detect stalled data collection (called roughly every 60s).
-
-        Only meaningful while a run is active — between runs, the collected
-        count is naturally static, which would otherwise look identical to a
-        stall.
-
-        Movement is judged over STALL_CHECK_WINDOW rather than since the last
-        tick: the counts PV can plausibly update in batches, so comparing
-        only the last ~60s could make a perfectly healthy, just-batchy source
-        look stalled every time a batch hadn't landed yet in that particular
-        minute.
-        """
-        if not self.state.run_name:
-            return
-
-        baseline = self._collected_baseline_before(time_now - STALL_CHECK_WINDOW)
-        if baseline is None:
-            return  # not enough history yet to judge movement over the window
-
-        moved = self.state.current_counts > baseline
-
-        if not moved:
-            if self.state.collection_stalled_since is None:
-                self.state.collection_stalled_since = time_now
-            stalled_for = time_now - self.state.collection_stalled_since
-            if (
-                stalled_for >= timedelta(minutes=self.config.stall_minutes)
-                and self._instrument_beam_state() != "off"
-                and not self.state.stall_warned
-            ):
-                self.state.stall_warned = True
-                notification = collection_stalled(self.config.instrument_target, stalled_for, time_now)
-                logger.info(f"Stall Warning: {notification.to_plain_text()}")
-                await self.experiment_channel.broadcast(notification)
-        else:
-            self.state.collection_stalled_since = None
-            self.state.stall_warned = False
+        for tracker in self.instruments.values():
+            # One instrument's failure mustn't stop the others being checked.
+            try:
+                await tracker.check_collection_progress(time_now)
+            except Exception:
+                logger.exception(f"Collection check failed for {tracker.instrument.name}")
 
     async def _collection_check_loop(self) -> None:
         while True:
@@ -503,7 +356,7 @@ class BeamMonitor:
     async def _run_loop(self) -> None:
         subscribe_msg = json.dumps({
             "type": "subscribe",
-            "pvs": list(self.pv_to_beam.keys()) + [self.counts_pv, self.run_name_pv],
+            "pvs": [*self.pv_to_beam, *self.pv_to_counts, *self.pv_to_run_name],
         })
         logger.info(f"Beam Monitor started. Connecting to {self.data_url}...")
         interval = self.config.beam_reconnect_interval

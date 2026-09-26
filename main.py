@@ -205,7 +205,6 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
         config,
         beam_channel,
         exp_channel,
-        config.instruments[0].notify_counts if config.instruments else config.notify_counts,
         sink=state,
         debounce_seconds=config.debounce_seconds,
     )

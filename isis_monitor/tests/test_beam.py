@@ -5,20 +5,25 @@ import random
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, call, patch
-from isis_monitor.config import AppConfig
+from isis_monitor.config import AppConfig, InstrumentConfig
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.beam import (
     BeamMonitor,
     BEAM_TARGETS,
-    STALL_CHECK_WINDOW,
-    _fit_rate,
 )
+from isis_monitor.instrument import STALL_CHECK_WINDOW, _fit_rate
+
+
+def tracker(m):
+    """The monitor's only instrument tracker."""
+    (only,) = m.instruments.values()
+    return only
 
 
 def _seed_collected_baseline(m, now, value):
     """Insert a counts-collected sample older than STALL_CHECK_WINDOW so
     _check_collection_progress has something to compare the current reading to."""
-    m.state.collected_samples.append((now - STALL_CHECK_WINDOW - timedelta(seconds=30), value))
+    tracker(m).state.collected_samples.append((now - STALL_CHECK_WINDOW - timedelta(seconds=30), value))
 
 DEBOUNCE_SECONDS = 0.05
 SETTLE = DEBOUNCE_SECONDS * 3  # wait comfortably past the debounce window in tests
@@ -32,6 +37,9 @@ def mock_config():
         news_teams_url="",
         beam_teams_url="",
         experiment_teams_url="",
+        instruments=[InstrumentConfig(
+            "PEARL", AppConfig.counts_pv, 100.0, "TS1", run_name_pv=AppConfig.run_name_pv,
+        )],
     )
 
 
@@ -46,8 +54,9 @@ def mock_channels():
 
 def make_monitor(mock_config, mock_channels, counts_target=100, rng=None, sink=None):
     beam_channel, exp_channel = mock_channels
+    instruments = [replace(i, notify_counts=counts_target) for i in mock_config.instruments]
     return BeamMonitor(
-        mock_config, beam_channel, exp_channel, counts_target=counts_target,
+        replace(mock_config, instruments=instruments), beam_channel, exp_channel,
         debounce_seconds=DEBOUNCE_SECONDS, rng=rng, sink=sink,
     )
 
@@ -240,7 +249,7 @@ async def test_handle_update_run_name_first_set(mock_config, mock_channels):
     b64 = base64.b64encode(run_name.encode()).decode()
     await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": b64})
 
-    assert m.state.run_name == run_name
+    assert tracker(m).state.run_name == run_name
     exp_channel.broadcast.assert_not_called()  # No previous run → no notification
 
 
@@ -250,15 +259,15 @@ async def test_handle_update_run_name_change(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels)
 
     # Seed first run
-    m.state.run_name = "Run 12345"
-    m.state.run_started_at = datetime.now(timezone.utc) - timedelta(hours=2)
-    m.state.current_counts = 1000.0
+    tracker(m).state.run_name = "Run 12345"
+    tracker(m).state.run_started_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    tracker(m).state.current_counts = 1000.0
 
     new_run = "Run 12346"
     b64 = base64.b64encode(new_run.encode()).decode()
     await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": b64})
 
-    assert m.state.run_name == new_run
+    assert tracker(m).state.run_name == new_run
     exp_channel.broadcast.assert_called_once()
     notification = exp_channel.broadcast.call_args[0][0]
     assert "new run" in notification.title.lower()
@@ -268,7 +277,7 @@ async def test_handle_update_run_name_change(mock_config, mock_channels):
         ("Duration", "2h 0m"),
         ("Final counts collected", "1000"),
     ]
-    assert m.state.current_counts == 0
+    assert tracker(m).state.current_counts == 0
 
 
 @pytest.mark.asyncio
@@ -277,13 +286,13 @@ async def test_handle_update_run_name_change_resets_end_notified(mock_config, mo
     even if the previous run ended with end_notified already set."""
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels, counts_target=10)
-    m.state.run_name = "Run 1"
-    m.state.run_started_at = datetime.now(timezone.utc)
-    m.state.end_notified = True
+    tracker(m).state.run_name = "Run 1"
+    tracker(m).state.run_started_at = datetime.now(timezone.utc)
+    tracker(m).state.end_notified = True
 
     b64 = base64.b64encode(b"Run 2").decode()
     await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": b64})
-    assert m.state.end_notified is False
+    assert tracker(m).state.end_notified is False
 
     exp_channel.broadcast.reset_mock()
     # counts_target=10 is small enough that the old "< target - 25" reset
@@ -299,7 +308,7 @@ async def test_handle_update_run_name_nan_ignored(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels)
 
     await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": "nan"})
-    assert m.state.run_name == ""
+    assert tracker(m).state.run_name == ""
     exp_channel.broadcast.assert_not_called()
 
 
@@ -309,8 +318,8 @@ async def test_handle_update_run_name_change_records_completion_on_sink(mock_con
     sink = MagicMock()
     sink.record_run_completed.return_value = 5  # not a multiple of 25
     m = make_monitor(mock_config, mock_channels, sink=sink)
-    m.state.run_name = "Run 1"
-    m.state.run_started_at = datetime.now(timezone.utc)
+    tracker(m).state.run_name = "Run 1"
+    tracker(m).state.run_started_at = datetime.now(timezone.utc)
 
     b64 = base64.b64encode(b"Run 2").decode()
     await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": b64})
@@ -339,8 +348,8 @@ async def test_handle_update_run_name_change_milestone_every_25_runs(mock_config
     sink = MagicMock()
     sink.record_run_completed.return_value = 25
     m = make_monitor(fun_config, mock_channels, sink=sink)
-    m.state.run_name = "Run 24"
-    m.state.run_started_at = datetime.now(timezone.utc)
+    tracker(m).state.run_name = "Run 24"
+    tracker(m).state.run_started_at = datetime.now(timezone.utc)
 
     b64 = base64.b64encode(b"Run 25").decode()
     await m._handle_update({"pv": fun_config.run_name_pv, "b64byt": b64})
@@ -356,8 +365,8 @@ async def test_handle_update_run_name_change_no_milestone_without_fun_mode(mock_
     sink = MagicMock()
     sink.record_run_completed.return_value = 25
     m = make_monitor(mock_config, mock_channels, sink=sink)  # fun_mode defaults to False
-    m.state.run_name = "Run 24"
-    m.state.run_started_at = datetime.now(timezone.utc)
+    tracker(m).state.run_name = "Run 24"
+    tracker(m).state.run_started_at = datetime.now(timezone.utc)
 
     b64 = base64.b64encode(b"Run 25").decode()
     await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": b64})
@@ -375,10 +384,10 @@ async def test_handle_update_counts_below_threshold(mock_config, mock_channels):
     (parts[1]) is tracked; live current is discarded."""
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels, counts_target=100)
-    m.state.run_name = "Run 1"
+    tracker(m).state.run_name = "Run 1"
 
     await m._handle_update({"pv": mock_config.counts_pv, "text": "50/90"})
-    assert m.state.current_counts == 90.0
+    assert tracker(m).state.current_counts == 90.0
     exp_channel.broadcast.assert_not_called()
 
 
@@ -386,11 +395,11 @@ async def test_handle_update_counts_below_threshold(mock_config, mock_channels):
 async def test_handle_update_counts_triggers_notification(mock_config, mock_channels):
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels, counts_target=100)
-    m.state.run_name = "Run 1"
+    tracker(m).state.run_name = "Run 1"
 
     await m._handle_update({"pv": mock_config.counts_pv, "text": "50/110"})
-    assert m.state.current_counts == 110.0
-    assert m.state.end_notified is True
+    assert tracker(m).state.current_counts == 110.0
+    assert tracker(m).state.end_notified is True
     exp_channel.broadcast.assert_called_once()
     notification = exp_channel.broadcast.call_args[0][0]
     assert "about to finish" in notification.title
@@ -405,12 +414,12 @@ async def test_handle_update_counts_triggers_notification(mock_config, mock_chan
 async def test_handle_update_counts_resets_end_notified(mock_config, mock_channels):
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels, counts_target=100)
-    m.state.run_name = "Run 1"
-    m.state.end_notified = True
+    tracker(m).state.run_name = "Run 1"
+    tracker(m).state.end_notified = True
 
     # Drops below target - 25 = 75 → resets flag
     await m._handle_update({"pv": mock_config.counts_pv, "text": "50/50"})
-    assert m.state.end_notified is False
+    assert tracker(m).state.end_notified is False
 
 
 @pytest.mark.asyncio
@@ -419,7 +428,7 @@ async def test_handle_update_counts_malformed(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels, counts_target=100)
 
     await m._handle_update({"pv": mock_config.counts_pv, "text": "bad_format"})
-    assert m.state.current_counts == -1.0  # unchanged, no crash
+    assert tracker(m).state.current_counts == -1.0  # unchanged, no crash
 
 
 # ---------------------------------------------------------------------------
@@ -447,11 +456,11 @@ async def test_check_collection_progress_no_check_without_enough_history(mock_co
     to compare against yet — must not warn."""
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
-    m.state.run_name = "Run 1"
+    tracker(m).state.run_name = "Run 1"
     now = datetime.now(timezone.utc)
 
-    m.state.collected_samples.append((now - timedelta(minutes=1), 100.0))
-    m.state.current_counts = 100.0
+    tracker(m).state.collected_samples.append((now - timedelta(minutes=1), 100.0))
+    tracker(m).state.current_counts = 100.0
 
     await m._check_collection_progress(now)
 
@@ -467,16 +476,16 @@ async def test_check_collection_progress_no_false_stall_when_counts_update_in_ba
     beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
-    m.state.run_name = "Run 1"
+    tracker(m).state.run_name = "Run 1"
     m.state.beams["TS1"].power = "high"
     now = datetime.now(timezone.utc)
 
     # A counts batch landed 4 minutes ago (inside the 5-minute window), so
     # the total genuinely moved over the window even though it hasn't ticked
     # in the last minute.
-    m.state.collected_samples.append((now - timedelta(minutes=6), 50.0))
-    m.state.collected_samples.append((now - timedelta(minutes=4), 100.0))
-    m.state.current_counts = 100.0
+    tracker(m).state.collected_samples.append((now - timedelta(minutes=6), 50.0))
+    tracker(m).state.collected_samples.append((now - timedelta(minutes=4), 100.0))
+    tracker(m).state.current_counts = 100.0
 
     await m._check_collection_progress(now)
     await m._check_collection_progress(now + timedelta(seconds=1))
@@ -489,12 +498,12 @@ async def test_check_collection_progress_detects_stall_when_instrument_beam_on(m
     beam_config = replace(mock_config, stall_minutes=0.01)  # ~0.6s, fast for tests
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
-    m.state.run_name = "Run 1"
+    tracker(m).state.run_name = "Run 1"
     m.state.beams["TS1"].power = "high"  # instrument beam is on
 
     now = datetime.now(timezone.utc)
     _seed_collected_baseline(m, now, 100.0)
-    m.state.current_counts = 100.0  # unmoved over the window
+    tracker(m).state.current_counts = 100.0  # unmoved over the window
 
     await m._check_collection_progress(now)  # starts the stall clock
     exp_channel.broadcast.assert_not_called()
@@ -510,12 +519,12 @@ async def test_check_collection_progress_no_stall_warning_when_instrument_beam_o
     beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
-    m.state.run_name = "Run 1"
+    tracker(m).state.run_name = "Run 1"
     m.state.beams["TS1"].power = "off"  # instrument beam is off — no warning expected
 
     now = datetime.now(timezone.utc)
     _seed_collected_baseline(m, now, 100.0)
-    m.state.current_counts = 100.0
+    tracker(m).state.current_counts = 100.0
 
     await m._check_collection_progress(now)
     await m._check_collection_progress(now + timedelta(seconds=1))
@@ -527,19 +536,19 @@ async def test_check_collection_progress_movement_resets_stall_clock(mock_config
     beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
-    m.state.run_name = "Run 1"
+    tracker(m).state.run_name = "Run 1"
     m.state.beams["TS1"].power = "high"
 
     now = datetime.now(timezone.utc)
     _seed_collected_baseline(m, now, 100.0)
-    m.state.current_counts = 100.0
+    tracker(m).state.current_counts = 100.0
     await m._check_collection_progress(now)
-    assert m.state.collection_stalled_since is not None
+    assert tracker(m).state.collection_stalled_since is not None
 
     # Counts move again — stall clock resets.
-    m.state.current_counts = 110.0
+    tracker(m).state.current_counts = 110.0
     await m._check_collection_progress(now + timedelta(seconds=0.5))
-    assert m.state.collection_stalled_since is None
+    assert tracker(m).state.collection_stalled_since is None
 
     exp_channel.broadcast.assert_not_called()
 
@@ -551,18 +560,18 @@ async def test_check_collection_progress_no_active_run_never_warns(mock_config, 
     beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
-    assert m.state.run_name == ""  # no run active
+    assert tracker(m).state.run_name == ""  # no run active
     m.state.beams["TS1"].power = "high"
 
     now = datetime.now(timezone.utc)
     _seed_collected_baseline(m, now, 100.0)
-    m.state.current_counts = 100.0
+    tracker(m).state.current_counts = 100.0
 
     await m._check_collection_progress(now)
     await m._check_collection_progress(now + timedelta(seconds=1))
 
     exp_channel.broadcast.assert_not_called()
-    assert m.state.collection_stalled_since is None
+    assert tracker(m).state.collection_stalled_since is None
 
 
 # ---------------------------------------------------------------------------
@@ -773,7 +782,7 @@ async def test_aggregator_flush_without_pending_is_noop(mock_config, mock_channe
 async def test_handle_update_run_name_bad_base64_is_ignored(mock_config, mock_channels, caplog):
     m = make_monitor(mock_config, mock_channels)
     await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": "!!!not base64"})
-    assert m.state.run_name == ""
+    assert tracker(m).state.run_name == ""
     assert "Failed to decode run name" in caplog.text
 
 
@@ -788,15 +797,15 @@ async def test_handle_update_counts_nan_ignored_and_sink_updated(mock_config, mo
 
 
 def test_prune_collected_samples_drops_samples_outside_window(mock_config, mock_channels):
-    from isis_monitor.beam import COUNTS_SAMPLE_WINDOW
+    from isis_monitor.instrument import COUNTS_SAMPLE_WINDOW
     m = make_monitor(mock_config, mock_channels)
     now = datetime.now(timezone.utc)
-    m.state.collected_samples.extend([
+    tracker(m).state.collected_samples.extend([
         (now - COUNTS_SAMPLE_WINDOW - timedelta(seconds=1), 1.0),
         (now, 2.0),
     ])
-    m._prune_collected_samples(now)
-    assert list(m.state.collected_samples) == [(now, 2.0)]
+    tracker(m)._prune_collected_samples(now)
+    assert list(tracker(m).state.collected_samples) == [(now, 2.0)]
 
 
 @pytest.mark.asyncio
@@ -814,3 +823,77 @@ async def test_close_ws_quietly_logs_instead_of_raising(caplog):
     ws.close = AsyncMock(side_effect=RuntimeError("socket gone"))
     await BeamMonitor._close_ws_quietly(ws)
     assert "Error closing WebSocket during reconnect: socket gone" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Multiple instruments
+# ---------------------------------------------------------------------------
+
+def two_instrument_monitor(mock_config, mock_channels):
+    config = replace(mock_config, instruments=[
+        InstrumentConfig("PEARL", "IN:PEARL:COUNTS", 100.0, "TS1"),
+        InstrumentConfig("WISH", "IN:WISH:COUNTS", 50.0, "TS2"),
+    ])
+    return BeamMonitor(config, *mock_channels, debounce_seconds=DEBOUNCE_SECONDS)
+
+
+@pytest.mark.asyncio
+async def test_updates_are_routed_to_their_own_instrument(mock_config, mock_channels):
+    _, exp_channel = mock_channels
+    m = two_instrument_monitor(mock_config, mock_channels)
+    pearl, wish = m.instruments["PEARL"], m.instruments["WISH"]
+
+    await m._handle_update({"pv": "IN:WISH:DAE:WDTITLE", "b64byt": base64.b64encode(b"Wish run").decode()})
+    await m._handle_update({"pv": "IN:WISH:COUNTS", "text": "1/60"})
+
+    assert (wish.state.run_name, wish.state.current_counts) == ("Wish run", 60.0)
+    assert (pearl.state.run_name, pearl.state.current_counts) == ("", -1.0)
+    # 60 is past WISH's own notify count (50) though not PEARL's (100).
+    exp_channel.broadcast.assert_called_once()
+    assert exp_channel.broadcast.call_args[0][0].title == "Run about to finish"
+
+
+@pytest.mark.asyncio
+async def test_run_loop_subscribes_to_every_instruments_pvs(mock_config, mock_channels):
+    async with FakePVWS([]) as server:
+        config = replace(mock_config, isis_websocket_url=server.url)
+        m = two_instrument_monitor(config, mock_channels)
+        async with running(m):
+            await wait_until(lambda: server.subscriptions)
+
+    assert {"IN:PEARL:COUNTS", "IN:PEARL:DAE:WDTITLE", "IN:WISH:COUNTS", "IN:WISH:DAE:WDTITLE"} <= set(
+        server.subscriptions[0]["pvs"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_stall_check_uses_each_instruments_beam_target(mock_config, mock_channels):
+    """WISH is on TS2, which is off, so only PEARL (on TS1, high) warns."""
+    _, exp_channel = mock_channels
+    m = two_instrument_monitor(replace(mock_config, stall_minutes=0.01), mock_channels)
+    m.state.beams["TS1"].power = "high"
+    m.state.beams["TS2"].power = "off"
+    now = datetime.now(timezone.utc)
+    for t in m.instruments.values():
+        t.state.run_name = "Run 1"
+        t.state.collected_samples.append((now - STALL_CHECK_WINDOW - timedelta(seconds=30), 100.0))
+        t.state.current_counts = 100.0
+
+    await m._check_collection_progress(now)
+    await m._check_collection_progress(now + timedelta(seconds=1))
+
+    assert m.instruments["PEARL"].state.stall_warned is True
+    assert m.instruments["WISH"].state.stall_warned is False
+    exp_channel.broadcast.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_one_instruments_failed_stall_check_does_not_skip_others(mock_config, mock_channels, caplog):
+    m = two_instrument_monitor(mock_config, mock_channels)
+    m.instruments["PEARL"].check_collection_progress = AsyncMock(side_effect=RuntimeError("boom"))
+    m.instruments["WISH"].check_collection_progress = AsyncMock()
+
+    await m._check_collection_progress(datetime.now(timezone.utc))
+
+    m.instruments["WISH"].check_collection_progress.assert_awaited_once()
+    assert "Collection check failed for PEARL" in caplog.text
