@@ -460,8 +460,16 @@ async def run_tui(config, stop_event: asyncio.Event):
 
     loop = asyncio.get_running_loop()
 
+    # stdin is read with os.read rather than through sys.stdin, whose buffer
+    # could swallow typed-ahead keys (so the reader never fires for them) or
+    # block the event loop waiting for a newline.
     def on_key() -> None:
-        handle_tui_key(sys.stdin.read(1), client, stop_event, tui, key_tasks, edit_config)
+        data = os.read(fd, 64)
+        if not data:  # stdin closed
+            stop_event.set()
+            return
+        for ch in data.decode(errors="ignore"):
+            handle_tui_key(ch, client, stop_event, tui, key_tasks, edit_config)
 
     async def read_line(prompt: str) -> Optional[str]:
         """Read one line without blocking the event loop (so the daemon
@@ -472,8 +480,9 @@ async def run_tui(config, stop_event: asyncio.Event):
 
         def ready() -> None:
             if not line.done():
-                text = sys.stdin.readline()
-                line.set_result(text.rstrip("\n") if text else None)
+                # In canonical mode one read returns at most one line.
+                data = os.read(fd, 4096)
+                line.set_result(data.decode(errors="replace").rstrip("\n") if data else None)
 
         loop.add_reader(fd, ready)
         try:

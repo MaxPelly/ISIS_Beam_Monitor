@@ -842,3 +842,21 @@ async def test_quitting_the_tui_cancels_an_open_config_editor(tmp_path, capsys):
     # The editor restored the live display, then run_tui shut it all down.
     assert tui.start.call_count == 2 and tui.stop.call_count == 2
     assert termios_mock.tcsetattr.call_args_list[-1] == call(ANY, termios_mock.TCSADRAIN, "saved")
+
+
+@pytest.mark.asyncio
+async def test_run_tui_handles_several_keys_in_one_read_and_quits_on_eof(tmp_path):
+    with tui_terminal() as (tui, keys, _termios, _tty):
+        stop = asyncio.Event()
+        config = _config(tmp_path, tui_reconnect_initial=0.01, tui_reconnect_max=0.01)
+        task = asyncio.create_task(main.run_tui(config, stop))
+        await wait_until(lambda: call("disconnected") in tui.update_connection_state.call_args_list)
+        os.write(keys, b"rc")  # arrive in one read; both handled
+        await wait_until(lambda: tui.update_log.call_args_list.count(call("Not connected to the daemon.")) == 2)
+        assert not task.done()
+
+        null = os.open(os.devnull, os.O_RDONLY)
+        os.dup2(null, keys)  # replaces the pipe's only writer, so stdin sees EOF
+        os.close(null)
+        await asyncio.wait_for(task, 2)
+    assert stop.is_set()
