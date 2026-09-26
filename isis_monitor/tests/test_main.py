@@ -839,8 +839,8 @@ async def test_quitting_the_tui_cancels_an_open_config_editor(tmp_path, capsys):
             stop.set()  # e.g. Ctrl-C
             await asyncio.wait_for(task, 2)
 
-    # The editor restored the live display, then run_tui shut it all down.
-    assert tui.start.call_count == 2 and tui.stop.call_count == 2
+    # Quitting doesn't bring the live display back just to tear it down.
+    assert tui.start.call_count == 1 and tui.stop.call_count == 2
     assert termios_mock.tcsetattr.call_args_list[-1] == call(ANY, termios_mock.TCSADRAIN, "saved")
 
 
@@ -893,3 +893,14 @@ async def test_config_editor_saves_over_the_new_connection_after_reconnecting(tm
             await wait_until(lambda: tui.start.call_count == 2)
             os.write(keys, b"q")
             await asyncio.wait_for(task, 2)
+
+
+@pytest.mark.asyncio
+async def test_failed_tui_action_is_logged(caplog):
+    tasks = set()
+    async def boom():
+        raise ValueError("bad")
+    main._track(asyncio.create_task(boom()), tasks)
+    await asyncio.sleep(0.01)
+    assert "TUI action failed" in caplog.text and "ValueError: bad" in caplog.text
+    assert not tasks

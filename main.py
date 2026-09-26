@@ -413,6 +413,12 @@ async def _send_reconnect(client: IPCClient, tui: RichTUI) -> None:
 def _track(task: asyncio.Task, tasks: set) -> None:
     tasks.add(task)  # keep a reference so the task isn't garbage-collected
     task.add_done_callback(tasks.discard)
+    task.add_done_callback(_log_task_failure)
+
+
+def _log_task_failure(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("TUI action failed", exc_info=task.exception())
 
 
 def handle_tui_key(
@@ -506,8 +512,9 @@ async def run_tui(config, stop_event: asyncio.Event):
             await run_config_editor(request, read_line, print)
         finally:
             tty.setcbreak(fd)
-            tui.start()
-            loop.add_reader(fd, on_key)
+            if not stop_event.is_set():  # otherwise run_tui is tearing down anyway
+                tui.start()
+                loop.add_reader(fd, on_key)
 
     loop.add_reader(fd, on_key)
     try:
