@@ -67,7 +67,7 @@ async def test_teams_notifier_sends_request():
     mock_session.post.assert_called_once()
     args, kwargs = mock_session.post.call_args
     assert args[0] == "http://fake.webhook.url"
-    assert kwargs["json"]["summary"] == "Test title"
+    assert kwargs["json"]["summary"] == "Test title | Test message"
     card = kwargs["json"]["attachments"][0]["content"]
     assert card["type"] == "AdaptiveCard"
     body_texts = [item["text"] for item in card["body"] if "text" in item]

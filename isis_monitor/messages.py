@@ -85,6 +85,20 @@ class Notification:
             lines.append(fmt_time(self.timestamp))
         return "\n".join(line for line in lines if line)
 
+    def to_summary(self) -> str:
+        """Render as a single line for the Teams `summary` field.
+
+        Text-only clients that can't show the Adaptive Card display this
+        instead, so it carries the key details: title, text, facts and time.
+        Flavour is left out to keep it short.
+        """
+        header = f"{self.emoji} {self.title}".strip()
+        parts = [header, self.text]
+        parts.extend(f"{key}: {value}" for key, value in self.facts)
+        if self.timestamp:
+            parts.append(fmt_time(self.timestamp))
+        return " | ".join(" ".join(part.split()) for part in parts if part)
+
 
 # ---------------------------------------------------------------------------
 # Builders — one pure function per notification-worthy event.
@@ -135,7 +149,7 @@ def beam_change(
             ("Current", f"{beam_val:.3f} uA"),
             ("Previous", f"{prev_val:.3f} uA"),
             ("% of high threshold", pct_of_high),
-            (f"Was {prev_state}", f"for {fmt_duration(time_in_prev_state)}"),
+            (f"Was {prev_state} for", fmt_duration(time_in_prev_state)),
         ],
         flavour=flavour.pick((display_name, transition), rng) if rng else "",
         timestamp=time_now,

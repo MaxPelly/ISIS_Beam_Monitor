@@ -97,6 +97,33 @@ def test_to_plain_text_omits_empty_optional_parts():
 
 
 # ---------------------------------------------------------------------------
+# Notification.to_summary
+# ---------------------------------------------------------------------------
+
+def test_to_summary_is_one_line_with_details_but_no_flavour():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    notification = Notification(
+        title="TS1 Beam is now high",
+        text="Current: 150.000 uA\nfacility-wide trip",
+        emoji="🟢",
+        facts=[("Previous", "medium"), ("Was medium for", "3h 12m")],
+        flavour="Off to the races.",
+        timestamp=dt,
+    )
+
+    summary = notification.to_summary()
+
+    assert summary == (
+        "🟢 TS1 Beam is now high | Current: 150.000 uA facility-wide trip"
+        " | Previous: medium | Was medium for: 3h 12m | Wed 23 Sep 14:05"
+    )
+
+
+def test_to_summary_omits_empty_optional_parts():
+    assert Notification(title="Title", text="").to_summary() == "Title"
+
+
+# ---------------------------------------------------------------------------
 # Builders
 # ---------------------------------------------------------------------------
 
@@ -110,7 +137,7 @@ def test_beam_change_builder_going_up_is_good():
         ("Current", "150.000 uA"),
         ("Previous", "20.000 uA"),
         ("% of high threshold", "107%"),
-        ("Was low", "for 3h 12m"),
+        ("Was low for", "3h 12m"),
     ]
     assert n.timestamp == dt
     assert n.channel == ""

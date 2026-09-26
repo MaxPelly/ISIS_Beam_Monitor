@@ -92,8 +92,7 @@ class TeamsNotifier(Notifier):
                 "wrap": True,
             })
 
-        plain_text = notification.to_plain_text()
-        summary = plain_text.splitlines()[0] if plain_text else notification.title
+        summary = notification.to_summary()
 
         card = {
             # Not part of the Adaptive Card schema — kept for downstream (e.g.
