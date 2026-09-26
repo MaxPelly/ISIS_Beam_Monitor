@@ -538,9 +538,13 @@ def test_invalid_instrument_sections(tmp_path, extra, match):
 @pytest.mark.parametrize("line, match", [
     ("timezone = Nowhere/City", "not a known timezone"),
     ("timezone = ../etc", "not a known timezone"),
-    ("debounce_seconds = -1", "debounce_seconds must not be negative"),
-    ("debounce_seconds = nan", "debounce_seconds must not be negative"),
-    ("stall_minutes = 0", "stall_minutes must be positive"),
+    ("debounce_seconds = -1", "debounce_seconds must be between"),
+    ("debounce_seconds = nan", "debounce_seconds must be between"),
+    ("debounce_seconds = inf", "debounce_seconds must be between"),
+    ("stall_minutes = 0", "stall_minutes must be above 0"),
+    ("stall_minutes = inf", "stall_minutes must be above 0"),
+    ("stall_minutes = 1e20", "stall_minutes must be above 0"),
+    ("stall_minutes = nan", "stall_minutes must be above 0"),
 ])
 def test_invalid_notification_settings(tmp_path, line, match):
     """Caught at load time, so a bad edit can't leave the daemon failing on restart."""

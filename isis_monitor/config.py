@@ -29,6 +29,8 @@ EDITABLE_NOTIFICATION_KEYS = {
     "summary_time": "summary_time",
 }
 _EDITABLE_INSTRUMENT_KEYS = ("name", *_INSTRUMENT_KEYS)
+MAX_DEBOUNCE_SECONDS = 3600
+MAX_STALL_MINUTES = 7 * 24 * 60
 # The name becomes part of the derived run-name PV, so it must be one PV segment.
 _INSTRUMENT_NAME_RE = re.compile(r"[A-Z0-9_-]+")
 
@@ -236,11 +238,12 @@ def _validate(config: AppConfig, config_path: Path) -> None:
         ZoneInfo(config.notifications_timezone)
     except (KeyError, ValueError, OSError):  # ZoneInfoNotFoundError is a KeyError
         raise ConfigError(f"[NOTIFICATIONS] timezone '{config.notifications_timezone}' is not a known timezone")
-    # Also rejects nan, which would silently disable debouncing/stall warnings.
-    if not config.debounce_seconds >= 0:
-        raise ConfigError("[NOTIFICATIONS] debounce_seconds must not be negative")
-    if not config.stall_minutes > 0:
-        raise ConfigError("[NOTIFICATIONS] stall_minutes must be positive")
+    # Bounded (which also rejects nan/inf): an infinite debounce silently stops
+    # beam cards, and a huge stall_minutes overflows timedelta at the first stall.
+    if not 0 <= config.debounce_seconds <= MAX_DEBOUNCE_SECONDS:
+        raise ConfigError(f"[NOTIFICATIONS] debounce_seconds must be between 0 and {MAX_DEBOUNCE_SECONDS}")
+    if not 0 < config.stall_minutes <= MAX_STALL_MINUTES:
+        raise ConfigError(f"[NOTIFICATIONS] stall_minutes must be above 0 and at most {MAX_STALL_MINUTES}")
     if config.retention_days <= 0:
         raise ConfigError("[DAEMON] retention_days must be a positive integer")
     if config.tui_reconnect_initial <= 0 or config.tui_reconnect_max <= 0:
