@@ -1,6 +1,8 @@
 import pytest
 from pathlib import Path
-from isis_monitor.config import load_config, ConfigError, AppConfig
+from dataclasses import replace
+
+from isis_monitor.config import load_config, ConfigError, AppConfig, InstrumentConfig
 
 
 def test_load_config_success(tmp_path):
@@ -377,7 +379,7 @@ def _write(tmp_path, extra: str) -> Path:
 def test_load_config_defaults_match_dataclass_defaults(tmp_path):
     """The loader's fallbacks and AppConfig's defaults come from one place."""
     config = load_config(_write(tmp_path, ""))
-    assert config == AppConfig(mcr_news_url="http://test.com/news")
+    assert replace(config, instruments=[]) == AppConfig(mcr_news_url="http://test.com/news")
     assert config.mcr_poll_interval == 60.0
 
 
@@ -433,3 +435,67 @@ def test_load_config_custom_boundaries(tmp_path):
 def test_load_config_summary_time_out_of_range(tmp_path):
     with pytest.raises(ConfigError, match="summary_time"):
         load_config(_write(tmp_path, "[NOTIFICATIONS]\nsummary_time = 25:00\n"))
+
+
+def test_legacy_pvs_become_single_instrument(tmp_path):
+    """With no [INSTRUMENT:*] sections, the [PVS] keys still define one instrument."""
+    config = load_config(_write(
+        tmp_path, "[PVS]\ncounts_pv = IN:WISH:COUNTS\nrun_name_pv = IN:WISH:TITLE\ninstrument_target = TS2\nnotify_counts = 50\n"
+    ))
+    assert config.instruments == [
+        InstrumentConfig("WISH", "IN:WISH:COUNTS", 50.0, "TS2", run_name_pv="IN:WISH:TITLE")
+    ]
+
+
+def test_legacy_instrument_defaults_to_pearl(tmp_path):
+    config = load_config(_write(tmp_path, ""))
+    assert [i.name for i in config.instruments] == ["PEARL"]
+    assert config.instruments[0].notify_counts == 130.0
+
+
+def test_legacy_instrument_name_fallback(tmp_path):
+    config = load_config(_write(tmp_path, "[PVS]\ncounts_pv = COUNTS\nrun_name_pv = TITLE\n"))
+    assert config.instruments[0].name == "INSTRUMENT"
+
+
+def test_instrument_sections(tmp_path):
+    config = load_config(_write(tmp_path, """\
+[PVS]
+instrument_target = TS2
+counts_pv = IGNORED
+[INSTRUMENT:PEARL]
+counts_pv = IN:PEARL:COUNTS
+notify_counts = 200
+beam_target = TS1
+[INSTRUMENT:wish]
+counts_pv = IN:WISH:COUNTS
+notify_counts = 75
+"""))
+    assert config.instruments == [
+        InstrumentConfig("PEARL", "IN:PEARL:COUNTS", 200.0, "TS1"),
+        InstrumentConfig("WISH", "IN:WISH:COUNTS", 75.0, "TS2"),
+    ]
+    assert config.instruments[1].run_name_pv == "IN:WISH:DAE:WDTITLE"
+
+
+def test_instrument_unknown_key_warns(tmp_path, caplog):
+    load_config(_write(tmp_path, "[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 5\nteams_url = http://x\n"))
+    assert "ignoring unknown key(s): teams_url" in caplog.text
+
+
+@pytest.mark.parametrize("extra, match", [
+    ("[INSTRUMENT:]\ncounts_pv = X\n", "needs an instrument name"),
+    ("[INSTRUMENT:PEARL]\ncounts_pv = X\n", "notify_counts is required"),
+    ("[INSTRUMENT:PEARL]\nnotify_counts = 5\n", "counts_pv is required"),
+    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = lots\n", r"\[INSTRUMENT:PEARL\] notify_counts"),
+    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 0\n", "notify_counts must be positive"),
+    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 5\nbeam_target = Muons\n", "beam_target must be one of"),
+    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 5\n[INSTRUMENT:pearl]\ncounts_pv = Y\nnotify_counts = 5\n",
+     "defined more than once"),
+    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 5\n[INSTRUMENT:WISH]\ncounts_pv = X\nnotify_counts = 5\n",
+     "already used by instrument PEARL"),
+    ("[INSTRUMENT:PEARL]\ncounts_pv = AC:TS1:BEAM:CURR\nnotify_counts = 5\n", "already used by the TS1 beam"),
+])
+def test_invalid_instrument_sections(tmp_path, extra, match):
+    with pytest.raises(ConfigError, match=match):
+        load_config(_write(tmp_path, extra))

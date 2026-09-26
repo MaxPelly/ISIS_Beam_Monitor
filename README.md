@@ -108,7 +108,6 @@ In TUI mode, operator commands are available from stdin:
 ### Daemon options
 
 - `config`: (Required) Path to the `.ini` configuration file.
-- `-nc`, `--notify_counts`: Counts threshold at which a "run about to finish" notification is sent (default: 130).
 - `-n`, `--notify_current`: Send a notification for the current news immediately on startup. Use `--no-notify_current` to disable (default behaviour: wait for new news before notifying).
 - `-d`, `--dummy`, `--no-dummy`: Use a dummy notifier for testing purposes that logs to the console instead of sending actual webhooks.
 

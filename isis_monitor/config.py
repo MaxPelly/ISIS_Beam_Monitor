@@ -1,13 +1,18 @@
 import configparser
 import logging
+import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
+from typing import List
 
 logger = logging.getLogger("isis_monitor.config")
 
 # Must match the state_key values of isis_monitor.beam.BEAM_TARGETS — not
 # imported directly to avoid a circular import (beam.py imports config.py).
 _INSTRUMENT_TARGETS = ("TS1", "TS2", "Muon")
+
+INSTRUMENT_SECTION_PREFIX = "INSTRUMENT:"
+_INSTRUMENT_KEYS = ("counts_pv", "notify_counts", "beam_target")
 
 
 class ConfigError(Exception):
@@ -17,6 +22,20 @@ class ConfigError(Exception):
 def _ini(section: str, default, key: str = ""):
     """A config field read from `[section] key` (key defaults to the field name)."""
     return field(default=default, metadata={"section": section, "key": key})
+
+
+@dataclass
+class InstrumentConfig:
+    """One monitored instrument, from an `[INSTRUMENT:<NAME>]` section."""
+    name: str
+    counts_pv: str
+    notify_counts: float
+    beam_target: str  # which beam target's state to report in run cards
+    run_name_pv: str = ""  # derived from the name when blank
+
+    def __post_init__(self):
+        if not self.run_name_pv:
+            self.run_name_pv = f"IN:{self.name}:DAE:WDTITLE"
 
 
 @dataclass
@@ -30,12 +49,15 @@ class AppConfig:
     beam_teams_url: str = _ini("WEBHOOKS", "")
     experiment_teams_url: str = _ini("WEBHOOKS", "")
 
-    # Instrument-specific; override in [PVS] for non-PEARL instruments
+    # Legacy single-instrument settings, used only when there are no
+    # [INSTRUMENT:<NAME>] sections. instrument_target is also the default
+    # beam_target for instrument sections that don't set one.
     counts_pv: str = _ini("PVS", "IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE")
     run_name_pv: str = _ini("PVS", "IN:PEARL:DAE:WDTITLE")
     ts1_beam_current_pv: str = _ini("PVS", "AC:TS1:BEAM:CURR")
     ts2_beam_current_pv: str = _ini("PVS", "AC:TS2:BEAM:CURR")
     muon_beam_current_pv: str = _ini("PVS", "AC:MUON:BEAM:CURR")
+    notify_counts: float = _ini("PVS", 130.0)
     instrument_target: str = _ini("PVS", "TS1")  # which beam target's state to report in run cards
 
     # off / low / medium cutoffs in uA
@@ -73,6 +95,9 @@ class AppConfig:
     stall_minutes: float = _ini("NOTIFICATIONS", 15.0)
     summary_time: str = _ini("NOTIFICATIONS", "08:00")  # local HH:MM the daily summary is sent at
 
+    # Built from the [INSTRUMENT:<NAME>] sections (or the legacy [PVS] keys)
+    instruments: List[InstrumentConfig] = field(default_factory=list)
+
 
 def _parse_boundaries(raw: str) -> tuple:
     result = tuple(float(x.strip()) for x in raw.split(","))
@@ -87,6 +112,78 @@ def _read_value(parser: configparser.ConfigParser, section: str, key: str, kind:
     if kind is tuple:
         return _parse_boundaries(parser.get(section, key))
     return {int: parser.getint, float: parser.getfloat, bool: parser.getboolean}[kind](section, key)
+
+
+def _legacy_instrument_name(config: AppConfig) -> str:
+    for pv in (config.counts_pv, config.run_name_pv):
+        match = re.match(r"IN:([^:]+):", pv)
+        if match:
+            return match.group(1)
+    return "INSTRUMENT"
+
+
+def _read_instruments(
+    parser: configparser.ConfigParser, config: AppConfig
+) -> List[InstrumentConfig]:
+    """Instruments from the [INSTRUMENT:<NAME>] sections, or one built from the
+    legacy [PVS] keys when there are none."""
+    sections = [s for s in parser.sections() if s.startswith(INSTRUMENT_SECTION_PREFIX)]
+    if not sections:
+        return [InstrumentConfig(
+            name=_legacy_instrument_name(config),
+            counts_pv=config.counts_pv,
+            notify_counts=config.notify_counts,
+            beam_target=config.instrument_target,
+            run_name_pv=config.run_name_pv,
+        )]
+
+    instruments = []
+    for section in sections:
+        name = section[len(INSTRUMENT_SECTION_PREFIX):].strip().upper()
+        if not name:
+            raise ConfigError(f"[{section}] needs an instrument name, e.g. [INSTRUMENT:PEARL]")
+        unknown = set(parser.options(section)) - set(_INSTRUMENT_KEYS)
+        if unknown:
+            logger.warning(f"[{section}] ignoring unknown key(s): {', '.join(sorted(unknown))}")
+        counts_pv = parser.get(section, "counts_pv", fallback="").strip()
+        if not counts_pv:
+            raise ConfigError(f"[{section}] counts_pv is required")
+        raw_counts = parser.get(section, "notify_counts", fallback="").strip()
+        if not raw_counts:
+            raise ConfigError(f"[{section}] notify_counts is required")
+        try:
+            notify_counts = float(raw_counts)
+        except ValueError as exc:
+            raise ConfigError(f"[{section}] notify_counts: {exc}") from exc
+        beam_target = parser.get(section, "beam_target", fallback="").strip() or config.instrument_target
+        instruments.append(InstrumentConfig(name, counts_pv, notify_counts, beam_target))
+    return instruments
+
+
+def _validate_instruments(config: AppConfig) -> None:
+    names = set()
+    pv_owners = {
+        config.ts1_beam_current_pv: "the TS1 beam",
+        config.ts2_beam_current_pv: "the TS2 beam",
+        config.muon_beam_current_pv: "the Muon beam",
+    }
+    for inst in config.instruments:
+        section = f"{INSTRUMENT_SECTION_PREFIX}{inst.name}"
+        if inst.name in names:
+            raise ConfigError(f"Instrument {inst.name} is defined more than once")
+        names.add(inst.name)
+        if inst.beam_target not in _INSTRUMENT_TARGETS:
+            raise ConfigError(
+                f"[{section}] beam_target must be one of {', '.join(_INSTRUMENT_TARGETS)}, "
+                f"got '{inst.beam_target}'"
+            )
+        if inst.notify_counts <= 0:
+            raise ConfigError(f"[{section}] notify_counts must be positive")
+        # Each PV update is routed to exactly one owner, so PVs can't be shared.
+        for pv in (inst.counts_pv, inst.run_name_pv):
+            if pv in pv_owners:
+                raise ConfigError(f"[{section}] PV {pv} is already used by {pv_owners[pv]}")
+            pv_owners[pv] = f"instrument {inst.name}"
 
 
 def _validate(config: AppConfig, config_path: Path) -> None:
@@ -114,6 +211,7 @@ def _validate(config: AppConfig, config_path: Path) -> None:
         raise ConfigError("[TUI_CLIENT] reconnect values must be positive")
     if config.tui_reconnect_initial > config.tui_reconnect_max:
         raise ConfigError("[TUI_CLIENT] reconnect_initial cannot be greater than reconnect_max")
+    _validate_instruments(config)
 
 
 def load_config(config_path: Path) -> AppConfig:
@@ -122,9 +220,15 @@ def load_config(config_path: Path) -> AppConfig:
 
     parser = configparser.ConfigParser(interpolation=None)
     parser.read(config_path)
+    return parse_config(parser, config_path)
 
+
+def parse_config(parser: configparser.ConfigParser, config_path: Path) -> AppConfig:
+    """Build and validate an AppConfig from an already-read parser."""
     values = {}
     for f in fields(AppConfig):
+        if "section" not in f.metadata:
+            continue  # not a single INI key, e.g. instruments
         section, key = f.metadata["section"], f.metadata["key"] or f.name
         if not parser.has_option(section, key):
             continue
@@ -138,5 +242,6 @@ def load_config(config_path: Path) -> AppConfig:
 
     values.setdefault("tui_socket_path", values.get("daemon_socket_path", AppConfig.tui_socket_path))
     config = AppConfig(**values)
+    config.instruments = _read_instruments(parser, config)
     _validate(config, config_path)
     return config

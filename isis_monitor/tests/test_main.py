@@ -279,7 +279,7 @@ def _persisted_samples(db):
         store.close()
 
 
-DAEMON_ARGS = argparse.Namespace(dummy=True, notify_counts=130.0, notify_current=False)
+DAEMON_ARGS = argparse.Namespace(dummy=True, notify_current=False)
 
 
 @contextlib.asynccontextmanager
@@ -494,8 +494,8 @@ async def test_run_stop_error_reply_exits_1(tmp_path, capsys):
 
 
 def test_parse_args_modes():
-    args = main.parse_args(["daemon", "c.ini", "-nc", "50", "--dummy"])
-    assert (args.mode, args.notify_counts, args.dummy, args.notify_current) == ("daemon", 50.0, True, None)
+    args = main.parse_args(["daemon", "c.ini", "--dummy"])
+    assert (args.mode, args.dummy, args.notify_current) == ("daemon", True, None)
     assert main.parse_args(["tui", "c.ini"]).mode == "tui"
     assert main.parse_args(["stop", "c.ini"]).mode == "stop"
     with pytest.raises(SystemExit):

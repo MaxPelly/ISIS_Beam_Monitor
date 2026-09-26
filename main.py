@@ -205,7 +205,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
         config,
         beam_channel,
         exp_channel,
-        args.notify_counts,
+        config.instruments[0].notify_counts if config.instruments else config.notify_counts,
         sink=state,
         debounce_seconds=config.debounce_seconds,
     )
@@ -414,9 +414,6 @@ def parse_args(argv=None) -> argparse.Namespace:
 
     daemon_parser = subparsers.add_parser("daemon", help="Run the long-lived daemon process")
     daemon_parser.add_argument("config", type=Path, help="Path to .ini configuration file")
-    daemon_parser.add_argument(
-        "-nc", "--notify_counts", type=float, default=130, help="Counts threshold for notification"
-    )
     daemon_parser.add_argument(
         "-n",
         "--notify_current",
