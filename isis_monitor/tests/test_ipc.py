@@ -311,3 +311,27 @@ async def test_client_surfaces_garbage_from_server(tmp_path):
     await client.close()
     srv.close()
     await srv.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_config_methods_are_routed_to_config_handler(tmp_path):
+    config_handler = AsyncMock(return_value={"config": {"x": 1}})
+    server = IPCServer(tmp_path / "d.sock", DaemonState(), AsyncMock(), config_handler)
+    await server.start()
+    try:
+        async with connected(server) as client:
+            get = await client.request({"method": "get_config"})
+            update = await client.request({"method": "update_config", "settings": {"a": "b"}})
+    finally:
+        await server.stop()
+    assert get["config"] == {"x": 1} and get["ok"] is True
+    assert config_handler.await_args_list[0].args == ("get_config", {"method": "get_config"})
+    assert config_handler.await_args_list[1].args[1]["settings"] == {"a": "b"}
+    assert update["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_config_methods_unknown_without_config_handler(tmp_path):
+    async with serving(tmp_path) as server, connected(server) as client:
+        reply = await client.request({"method": "get_config"})
+    assert (reply["ok"], reply["error"]) == (False, "unknown_method")

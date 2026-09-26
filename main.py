@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from isis_monitor.beam import BeamMonitor, CHANNEL_LABELS
-from isis_monitor.config import ConfigError, load_config
+from isis_monitor.config import ConfigError, editable_settings, load_config, update_config_file
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.ipc import IPCClient, IPCServer
 from isis_monitor.mcr import MCRNewsMonitor
@@ -172,7 +172,8 @@ async def state_persistence_loop(config, state: DaemonState, store: SQLiteStateS
             logger.exception("Failed to persist daemon state; will retry next interval")
 
 
-async def run_daemon(config, args, stop_event: asyncio.Event):
+async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
+    """Run until stopped; returns True if the daemon should restart itself."""
     install_signal_handlers(stop_event)
 
     samples_for_retention = int(86400 * config.retention_days / max(config.sample_interval, 1.0))
@@ -212,6 +213,13 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
         debounce_seconds=config.debounce_seconds,
     )
     mcr_monitor = MCRNewsMonitor(config, mcr_channel, args.notify_current, sink=state)
+    restart_requested = False
+
+    def request_restart(reason: str) -> None:
+        nonlocal restart_requested
+        logger.warning(f"{reason}; restarting daemon")
+        restart_requested = True
+        stop_event.set()
 
     async def command_handler(name: str) -> dict:
         if name in {"force_reconnect", "force_reconnect_all"}:
@@ -223,9 +231,26 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
         if name == "shutdown":
             stop_event.set()
             return {"shutdown": "ok"}
+        if name == "restart":
+            request_restart("Restart requested over IPC")
+            return {"restart": "ok"}
         return {"error": "unknown_command", "name": name}
 
-    ipc_server = IPCServer(Path(config.daemon_socket_path), state, command_handler)
+    async def config_handler(method: str, req: dict) -> dict:
+        # Read from the file rather than the running config, so edits build
+        # on anything changed by hand since the daemon started.
+        try:
+            if method == "get_config":
+                return {"config": editable_settings(await asyncio.to_thread(load_config, args.config))}
+            await asyncio.to_thread(update_config_file, args.config, req.get("settings"))
+        except ConfigError as exc:
+            return {"ok": False, "error": "invalid_config", "detail": str(exc)}
+        except OSError as exc:
+            return {"ok": False, "error": "config_write_failed", "detail": str(exc)}
+        request_restart(f"Config file {args.config} updated over IPC")
+        return {"restarting": True}
+
+    ipc_server = IPCServer(Path(config.daemon_socket_path), state, command_handler, config_handler)
     try:
         await ipc_server.start()
         state.update_health("daemon", "running")
@@ -249,6 +274,14 @@ async def run_daemon(config, args, stop_event: asyncio.Event):
         await asyncio.to_thread(_close_db)
         await asyncio.gather(*(ch.close() for ch in channels))
         logging.getLogger().removeHandler(state_log_handler)
+    return restart_requested
+
+
+def restart_process() -> None:
+    """Replace this process with a fresh copy of itself (same PID, same
+    arguments), e.g. to pick up an edited config file."""
+    logging.shutdown()
+    os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
 
 
 def _apply_snapshot_to_tui(tui: RichTUI, snapshot: dict) -> None:
@@ -467,7 +500,9 @@ def main():
     try:
         if args.mode == "daemon":
             with SingleInstanceLock(Path(config.daemon_lock_file)):
-                asyncio.run(run_daemon(config, args, stop_event))
+                restart = asyncio.run(run_daemon(config, args, stop_event))
+            if restart:  # after the lock and database are released
+                restart_process()
         elif args.mode == "tui":
             asyncio.run(run_tui(config, stop_event))
         elif args.mode == "stop":

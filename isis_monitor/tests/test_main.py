@@ -24,6 +24,13 @@ from isis_monitor.tests.test_beam import FakePVWS, wait_until
 from main import SingleInstanceLock, StateLogHandler
 
 
+@pytest.fixture(autouse=True)
+def no_exec():
+    """A real os.execv would replace the pytest process itself."""
+    with patch("main.os.execv", side_effect=AssertionError("os.execv called in a test")) as execv:
+        yield execv
+
+
 class TestStateLogHandler:
     def test_emit_calls_update_log(self):
         """StateLogHandler.emit should forward the formatted message."""
@@ -574,7 +581,7 @@ def _ini(tmp_path) -> str:
 def test_main_dispatches_each_mode(tmp_path, mode, target):
     with patch.object(main.sys, "argv", ["main.py", mode, _ini(tmp_path)]), \
          patch("main.configure_logging"), \
-         patch(f"main.{target}", new_callable=AsyncMock) as runner:
+         patch(f"main.{target}", new_callable=AsyncMock, return_value=False) as runner:
         main.main()
     runner.assert_awaited_once()
 
@@ -585,3 +592,101 @@ def test_main_keyboard_interrupt_exits_quietly(tmp_path, capsys):
          patch("main.run_stop", new_callable=AsyncMock, side_effect=KeyboardInterrupt):
         main.main()
     assert "Stopping monitors" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Config editing and restart
+# ---------------------------------------------------------------------------
+
+def _daemon_ini(tmp_path) -> Path:
+    ini = tmp_path / "live.ini"
+    ini.write_text(
+        "[DATA]\nmcr_news_url = http://127.0.0.1:9/news\n"
+        "[INSTRUMENT:PEARL]\ncounts_pv = IN:PEARL:COUNTS\nnotify_counts = 130\n"
+    )
+    return ini
+
+
+@contextlib.asynccontextmanager
+async def daemon_with_file(tmp_path):
+    config = _config(tmp_path)
+    args = argparse.Namespace(dummy=True, notify_current=False, config=_daemon_ini(tmp_path))
+    stop = asyncio.Event()
+    with patch("main.install_signal_handlers"):
+        task = asyncio.create_task(main.run_daemon(config, args, stop))
+        await wait_until(lambda: os.path.exists(config.daemon_socket_path))
+        client = IPCClient(config.daemon_socket_path)
+        await client.connect()
+        try:
+            yield task, client, args.config
+        finally:
+            await client.close()
+            stop.set()
+            await asyncio.wait_for(task, 5)
+
+
+@pytest.mark.asyncio
+async def test_daemon_get_config_reads_the_file(tmp_path):
+    async with daemon_with_file(tmp_path) as (task, client, ini):
+        reply = await client.request({"method": "get_config"})
+    assert reply["config"]["instruments"][0]["name"] == "PEARL"
+    assert task.result() is False  # plain stop, no restart
+
+
+@pytest.mark.asyncio
+async def test_daemon_rejects_invalid_config_and_keeps_running(tmp_path):
+    async with daemon_with_file(tmp_path) as (task, client, ini):
+        before = ini.read_text()
+        reply = await client.request({"method": "update_config", "settings": {"instruments": []}})
+        assert (reply["ok"], reply["error"]) == (False, "invalid_config")
+        assert "non-empty" in reply["detail"]
+        assert ini.read_text() == before
+        assert not task.done()
+
+
+@pytest.mark.asyncio
+async def test_daemon_reports_config_write_failure(tmp_path):
+    async with daemon_with_file(tmp_path) as (task, client, ini):
+        with patch("main.update_config_file", side_effect=PermissionError("read-only")):
+            reply = await client.request({"method": "update_config", "settings": {}})
+        assert (reply["ok"], reply["error"], reply["detail"]) == (False, "config_write_failed", "read-only")
+        assert not task.done()
+
+
+@pytest.mark.asyncio
+async def test_daemon_update_config_writes_file_and_requests_restart(tmp_path):
+    async with daemon_with_file(tmp_path) as (task, client, ini):
+        reply = await client.request({
+            "method": "update_config",
+            "settings": {"notifications": {"fun_mode": "true"}},
+        })
+        assert reply == {"ok": True, "restarting": True, "version": 1}
+        assert await asyncio.wait_for(task, 5) is True
+    assert "fun_mode = true" in ini.read_text()
+
+
+@pytest.mark.asyncio
+async def test_daemon_restart_command_requests_restart(tmp_path):
+    async with daemon_with_file(tmp_path) as (task, client, ini):
+        reply = await client.request({"method": "command", "name": "restart"})
+        assert reply["result"] == {"restart": "ok"}
+        assert await asyncio.wait_for(task, 5) is True
+
+
+def test_main_restarts_after_lock_is_released(tmp_path, no_exec):
+    ini = _ini(tmp_path)
+    lock_free = []
+
+    def fake_exec(*_args):
+        with SingleInstanceLock(tmp_path / "d.lock"):  # would raise if still held
+            lock_free.append(True)
+
+    no_exec.side_effect = fake_exec
+    with patch.object(main.sys, "argv", ["main.py", "daemon", ini]), \
+         patch.object(main.sys, "orig_argv", ["python3", "-u", "main.py", "daemon", ini]), \
+         patch("main.configure_logging"), \
+         patch("main.run_daemon", new_callable=AsyncMock, return_value=True):
+        main.main()
+
+    no_exec.assert_called_once_with(main.sys.executable, [main.sys.executable, "-u", "main.py", "daemon", ini])
+    assert lock_free == [True]

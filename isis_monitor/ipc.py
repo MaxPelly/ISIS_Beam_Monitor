@@ -34,10 +34,13 @@ class IPCServer:
         socket_path: Path,
         state: DaemonState,
         command_handler: Callable[[str], Awaitable[dict]],
+        config_handler: Optional[Callable[[str, dict], Awaitable[dict]]] = None,
     ):
+        """`config_handler(method, request)` serves get_config and update_config."""
         self.socket_path = Path(socket_path)
         self.state = state
         self.command_handler = command_handler
+        self.config_handler = config_handler
         self.server: Optional[asyncio.base_events.Server] = None
         self._clients: Set[asyncio.StreamWriter] = set()
         self._closing = False
@@ -72,6 +75,8 @@ class IPCServer:
             return {"logs": self.state.get_logs_snapshot()}
         if method == "command":
             return {"result": await self.command_handler(str(req.get("name", "")))}
+        if method in ("get_config", "update_config") and self.config_handler is not None:
+            return await self.config_handler(method, req)
         return {"ok": False, "error": "unknown_method"}
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
