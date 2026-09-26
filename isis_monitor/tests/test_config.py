@@ -1,3 +1,4 @@
+import os
 import pytest
 from pathlib import Path
 from dataclasses import replace
@@ -695,3 +696,18 @@ def test_update_config_file_checks_revision(tmp_path):
     with pytest.raises(ConfigChangedError, match="has changed since it was read"):
         update_config_file(path, {"notifications": {"fun_mode": "false"}}, revision)
     assert load_config(path).fun_mode is True
+
+
+def test_update_config_file_directory_fsync_failure_is_only_a_warning(tmp_path, caplog):
+    path = _editable_file(tmp_path)
+    real_open = os.open
+
+    def failing_dir_open(target, flags, *args):
+        if Path(target) == tmp_path.resolve():
+            raise OSError("fsync unsupported")
+        return real_open(target, flags, *args)
+
+    with patch("isis_monitor.config.os.open", side_effect=failing_dir_open):
+        update_config_file(path, {"notifications": {"fun_mode": "true"}})
+    assert load_config(path).fun_mode is True
+    assert "Could not fsync" in caplog.text
