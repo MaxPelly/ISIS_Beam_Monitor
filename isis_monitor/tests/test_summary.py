@@ -80,6 +80,9 @@ def test_compute_summary_on_streak_does_not_span_a_feed_gap():
     summary = compute_summary({"TS1": hour_on + after_gap}, since=t0)["TS1"]
     assert summary.longest_on_streak == timedelta(hours=1)
     assert summary.trips == 0
+    # A restart's short gap (a couple of missed samples) doesn't end it.
+    restart = [(ts + timedelta(minutes=63), cur, power) for ts, cur, power in hour_on]
+    assert compute_summary({"TS1": hour_on + restart}, since=t0)["TS1"].longest_on_streak == timedelta(hours=2, minutes=3)
 
 
 def test_compute_summary_treats_unknown_as_off():

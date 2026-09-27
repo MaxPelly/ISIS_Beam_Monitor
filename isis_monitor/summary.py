@@ -49,7 +49,9 @@ def compute_summary(
     """
     until = until or datetime.now(timezone.utc)
     expected_samples = max((until - since).total_seconds() / sample_interval, 1.0)
-    max_gap = timedelta(seconds=1.5 * sample_interval)
+    # Loose enough that a daemon restart (e.g. after a TUI config save), which
+    # misses a sample or two, doesn't end a streak.
+    max_gap = timedelta(seconds=max(3 * sample_interval, 180.0))
     summaries: Dict[str, TargetSummary] = {}
     for beam, samples in history.items():
         recent = [s for s in samples if s[0] >= since]
