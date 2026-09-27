@@ -111,7 +111,7 @@ async def test_handle_update_beam_startup_sends_immediately(mock_config, mock_ch
     assert m.state.beams["TS1"].power == "low"
     beam_channel.broadcast.assert_called_once()
     notification = beam_channel.broadcast.call_args[0][0]
-    assert "online" in notification.title and "TS1" in notification.title
+    assert "online" in notification.title and notification.title.endswith("TS1 is low")
     assert notification.channel == "TS1"
 
 
@@ -212,7 +212,8 @@ async def test_change_aggregator_cancel_all_stops_pending_flush(mock_config, moc
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fun_mode", [False, True])
 async def test_handle_update_beam_flavour_only_in_fun_mode(mock_config, mock_channels, fun_mode):
-    """fun_mode defaults to False — no flavour line is added, even with an rng available."""
+    """Flavour lines appear only with fun_mode on. fun_mode defaults to False,
+    and then no flavour is added even with an rng available."""
     config = replace(mock_config, fun_mode=True) if fun_mode else mock_config
     beam_channel, exp_channel = mock_channels
     m = make_monitor(config, mock_channels, rng=random.Random(1))
@@ -346,6 +347,7 @@ async def test_handle_update_counts_triggers_notification_past_the_target(mock_c
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels, counts_target=100)
     tracker(m).state.run_name = "Run 1"
+    m.state.beams["TS1"].power = "high"  # PEARL's own beam target
 
     await m._handle_update({"pv": PEARL_UAMPS, "value": 90.0})
     assert tracker(m).state.current_counts == 90.0
@@ -358,7 +360,9 @@ async def test_handle_update_counts_triggers_notification_past_the_target(mock_c
     notification = exp_channel.broadcast.call_args[0][0]
     assert "about to finish" in notification.title
     assert notification.text == "Run 1"
-    assert "110.0 / 100" in dict(notification.facts)["Collected"]
+    facts = dict(notification.facts)
+    assert "110.0 / 100" in facts["Collected"]
+    assert facts["Instrument beam"] == "high"
 
 
 @pytest.mark.asyncio
