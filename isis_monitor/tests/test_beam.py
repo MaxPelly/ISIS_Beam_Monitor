@@ -958,3 +958,25 @@ async def test_run_cards_use_the_instruments_channel_setting(mock_config, mock_c
         "PEARL: Data collection stalled",
     ]
     assert {channel for _, channel in titles_channels} == {expected}
+
+
+
+@pytest.mark.asyncio
+async def test_repeated_run_title_after_reconnect_keeps_the_run_start_time(mock_config, mock_channels):
+    """PVWS re-sends the current title on every reconnect; the next new-run
+    card must still report the whole previous run's duration."""
+    _, exp_channel = mock_channels
+    sink = MagicMock()
+    m = make_monitor(mock_config, mock_channels, sink=sink)
+    title = {"pv": mock_config.run_name_pv, "b64byt": base64.b64encode(b"Run 1").decode()}
+    await m._handle_update(title)
+    started = tracker(m).state.run_started_at
+    tracker(m).state.run_started_at = started - timedelta(hours=6)  # the run began 6h ago
+
+    await m._handle_update(title)  # reconnect re-sends it
+    assert tracker(m).state.run_started_at == started - timedelta(hours=6)
+    sink.update_run_name.assert_called_once()
+
+    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": base64.b64encode(b"Run 2").decode()})
+    card = exp_channel.broadcast.call_args[0][0]
+    assert dict(card.facts)["Duration"].startswith("6h")

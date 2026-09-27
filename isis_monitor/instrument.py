@@ -129,6 +129,10 @@ class InstrumentTracker:
                     logger.info(f"Milestone: {milestone.to_plain_text()}")
                     await self.experiment_channel.broadcast(milestone)
 
+        # PVWS re-sends the current title on every (re)subscribe, so a repeat
+        # of the same name mustn't restart the run's clock.
+        if name == self.state.run_name and self.state.run_started_at is not None:
+            return
         self.state.run_name = name
         self.state.run_started_at = time_now
         if self.sink:
