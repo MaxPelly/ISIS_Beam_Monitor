@@ -249,7 +249,7 @@ def test_run_started_builder():
     assert n.facts == [
         ("Previous run", "Run 12345"),
         ("Duration", "2h 0m"),
-        ("Final counts collected", "1000"),
+        ("Final total collected", "1000.0 µA·h"),
     ]
 
 
@@ -262,8 +262,8 @@ def test_run_finishing_builder():
     assert n.emoji == "🏁"
     assert n.flavour == ""
     assert n.facts == [
-        ("Counts", "150 / 130"),
-        ("Rate", "30.0 /min"),
+        ("Collected", "150.0 / 130 µA·h"),
+        ("Rate", "1800.0 µA·h/h"),
         ("ETA", "0s"),
         ("Instrument beam", "high"),
     ]

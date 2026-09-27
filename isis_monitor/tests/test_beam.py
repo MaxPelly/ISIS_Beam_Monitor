@@ -278,7 +278,7 @@ async def test_handle_update_run_name_change(mock_config, mock_channels):
     assert notification.facts == [
         ("Previous run", "Run 12345"),
         ("Duration", "2h 0m"),
-        ("Final counts collected", "1000"),
+        ("Final total collected", "1000.0 µA·h"),
     ]
     assert tracker(m).state.current_counts == 0
 
@@ -425,8 +425,8 @@ async def test_handle_update_counts_triggers_notification(mock_config, mock_chan
     assert "about to finish" in notification.title
     assert notification.text == "Run 1"
     fact_keys = [key for key, _ in notification.facts]
-    assert fact_keys == ["Counts", "Rate", "Instrument beam"]
-    assert ("Counts", "110 / 100") in notification.facts
+    assert fact_keys == ["Collected", "Rate", "Instrument beam"]
+    assert ("Collected", "110.0 / 100 µA·h") in notification.facts
     assert ("Instrument beam", "") in notification.facts  # TS1 never seen a beam-current update
 
 

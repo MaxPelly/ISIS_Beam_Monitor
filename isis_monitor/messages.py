@@ -192,7 +192,7 @@ def run_started(
         facts=[
             ("Previous run", prev_run_name),
             ("Duration", fmt_duration(prev_duration)),
-            ("Final counts collected", f"{prev_counts:.0f}"),
+            ("Final total collected", f"{prev_counts:.1f} µA·h"),
         ],
         flavour=flavour.pick(("*", "new_run"), rng) if rng else "",
         timestamp=time_now,
@@ -209,8 +209,9 @@ def run_finishing(
     time_now: datetime,
     rng: Optional[random.Random] = None,
 ) -> Notification:
-    facts = [("Counts", f"{counts_collected:.0f} / {counts_target:.0f}")]
-    facts.append(("Rate", f"{rate_per_second * 60:.1f} /min"))
+    facts = [("Collected", f"{counts_collected:.1f} / {counts_target:g} µA·h")]
+    # µA·h per hour is the average beam current delivered, in µA.
+    facts.append(("Rate", f"{rate_per_second * 3600:.1f} µA·h/h"))
     if rate_per_second > 0:
         eta_seconds = max(counts_target - counts_collected, 0) / rate_per_second
         facts.append(("ETA", fmt_duration(timedelta(seconds=eta_seconds))))
@@ -231,7 +232,7 @@ def collection_stalled(
 ) -> Notification:
     return Notification(
         title=f"{instrument}: Data collection stalled",
-        text=f"No new counts collected for {fmt_duration(stalled_for)} while {beam_target} beam is on.",
+        text=f"No µA·h collected for {fmt_duration(stalled_for)} while {beam_target} beam is on.",
         severity=Severity.WARNING,
         emoji="⚠️",
         timestamp=time_now,

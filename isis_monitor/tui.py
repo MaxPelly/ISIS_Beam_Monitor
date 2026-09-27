@@ -318,7 +318,7 @@ class RichTUI:
         table.add_column("Name", no_wrap=True)
         table.add_column("Beam", no_wrap=True)
         table.add_column("Run", overflow="ellipsis", no_wrap=True, ratio=1)
-        table.add_column("Counts", no_wrap=True)
+        table.add_column("µA·h", no_wrap=True)
 
         shown = list(self.instruments.items())[:_MAX_INSTRUMENT_ROWS]
         for name, info in shown:
