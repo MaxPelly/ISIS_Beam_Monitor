@@ -231,8 +231,9 @@ sudo systemctl status isis-beam-monitor.service
   sections are ignored with a warning in the log; the next TUI save removes them, or
   delete them by hand to silence the warning.
 - `notify_counts` keeps its meaning and units (µA·h), so existing thresholds still apply.
-- After the daemon restarts, an instrument that is already past its threshold gets a
-  "run about to finish" card straight away, as after any restart.
+- On the first restart after upgrading, an instrument already past its threshold gets a
+  "run about to finish" card straight away, since older snapshots don't record that it was
+  sent. Later restarts (including TUI config saves) remember it.
 - Run cards keep the "Experiment Updates" channel unless an instrument sets
   `channel = instrument`.
 - A config without `counts_pv` lines won't load on an older version (which requires

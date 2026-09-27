@@ -45,7 +45,7 @@ notify_counts = 130
 [TUI]
 # Number of 1-minute samples the TUI shows per beam target (default = 60 → 1-hour rolling window).
 # history_maxlen = 60
-# Interval in seconds between graph samples (default = 60).
+# Interval in seconds between graph samples (1-3600, default = 60).
 # sample_interval = 60
 # Refresh rate for the UI (default = 4).
 # refresh_per_second = 4
@@ -59,7 +59,8 @@ notify_counts = 130
 # socket_path = /tmp/isis_beam_monitor.sock
 # Single-instance lock file for daemon mode.
 # lock_file = /tmp/isis_beam_monitor.lock
-# Beam history retention window in days.
+# Beam history retention window in days (1-365; with [TUI] sample_interval, at most
+# 100,000 samples per beam are kept in memory).
 # retention_days = 7
 
 [TUI_CLIENT]
@@ -76,8 +77,11 @@ notify_counts = 130
 # log_backup_count = 3
 
 [TIMEOUTS_INTERVALS]
+# Seconds between MCR news polls (5-86400).
 # mcr_poll_interval = 60.0
+# Seconds before retrying a lost beam WebSocket (0.5-3600).
 # beam_reconnect_interval = 5.0
+# Seconds before a Teams webhook send is abandoned (1-300).
 # webhook_timeout = 10.0
 
 [BEAM_BOUNDARIES]
