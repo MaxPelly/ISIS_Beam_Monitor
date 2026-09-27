@@ -6,13 +6,13 @@ Terminal I/O is injected — `read_line(prompt)` returns the line typed, or
 None if input was closed — so the editing logic can be tested without one.
 """
 import copy
-from typing import Awaitable, Callable, List, Optional
+from typing import Awaitable, Callable, List, Optional, Sequence
 
 ReadLine = Callable[[str], Awaitable[Optional[str]]]
 Write = Callable[[str], None]
 Request = Callable[[dict], Awaitable[dict]]
 
-_INSTRUMENT_FIELDS = ("name", "notify_counts", "beam_target")
+_INSTRUMENT_FIELDS = ("name", "notify_counts", "beam_target", "channel")
 
 
 class _InputClosed(Exception):
@@ -48,6 +48,7 @@ def render_menu(settings: dict) -> str:
         lines.append(
             f"  {i:>2}) {inst.get('name', ''):<8} notify at {inst.get('notify_counts', '')} µA·h"
             f" on {inst.get('beam_target', '') or '(default)'}"
+            f" · Teams channel: {inst.get('name', '') if inst.get('channel') == 'instrument' else 'Experiment Updates'}"
         )
     lines.append(
         "Commands: <number> edit · a add instrument · d <number> delete instrument"
@@ -81,8 +82,19 @@ def describe_changes(original: dict, edited: dict) -> List[str]:
     return changes
 
 
+async def _ask_choice(read_line: ReadLine, write: Write, label: str, current: str, choices: List[str]) -> str:
+    """Prompt until the answer is one of `choices` (case-insensitive; any
+    answer if there are none), returning the canonical spelling."""
+    canonical = {c.lower(): c for c in choices}
+    while True:
+        answer = await _ask_default(read_line, f"{label} ({'/'.join(choices)})", current)
+        if not choices or answer.lower() in canonical:
+            return canonical.get(answer.lower(), answer)
+        write(f"{label} must be one of {', '.join(choices)}.")
+
+
 async def _edit_instrument(
-    inst: dict, beam_targets: List[str], read_line: ReadLine, write: Write
+    inst: dict, beam_targets: List[str], channel_modes: List[str], read_line: ReadLine, write: Write
 ) -> Optional[dict]:
     """Prompt for each field; returns None if a new instrument's name is left blank."""
     edited = dict(inst)
@@ -90,15 +102,13 @@ async def _edit_instrument(
     if not edited["name"]:
         return None
     edited["notify_counts"] = await _ask_default(read_line, "Notify at (µA·h)", inst.get("notify_counts", ""))
-    while True:
-        target = await _ask_default(
-            read_line, f"Beam target ({'/'.join(beam_targets)})", inst.get("beam_target", "")
-        )
-        canonical = {t.lower(): t for t in beam_targets}
-        if not beam_targets or target.lower() in canonical:
-            edited["beam_target"] = canonical.get(target.lower(), target)
-            return edited
-        write(f"Beam target must be one of {', '.join(beam_targets)}.")
+    edited["beam_target"] = await _ask_choice(
+        read_line, write, "Beam target", inst.get("beam_target", ""), beam_targets
+    )
+    edited["channel"] = await _ask_choice(
+        read_line, write, "Teams channel", inst.get("channel", "") or "experiment", channel_modes
+    )
+    return edited
 
 
 async def edit_settings(
@@ -107,6 +117,7 @@ async def edit_settings(
     beam_targets: List[str],
     read_line: ReadLine,
     write: Write,
+    channel_modes: Sequence[str] = (),
 ) -> Optional[dict]:
     """Let the user edit `settings`. Returns the edited settings once they
     choose to save (and something differs from `original`, the file's
@@ -124,11 +135,13 @@ async def edit_settings(
                 current["notifications"][key] = await _ask_default(read_line, key, current["notifications"][key])
             elif command.isdecimal() and 0 <= int(command) - len(keys) - 1 < len(instruments):
                 index = int(command) - len(keys) - 1
-                instruments[index] = await _edit_instrument(instruments[index], beam_targets, read_line, write)
+                instruments[index] = await _edit_instrument(
+                    instruments[index], beam_targets, list(channel_modes), read_line, write
+                )
             elif command.lower() == "a":
                 write("Adding an instrument (leave the name blank to cancel).")
-                blank = {"name": "", "notify_counts": "", "beam_target": ""}
-                added = await _edit_instrument(blank, beam_targets, read_line, write)
+                blank = {"name": "", "notify_counts": "", "beam_target": "", "channel": "experiment"}
+                added = await _edit_instrument(blank, beam_targets, list(channel_modes), read_line, write)
                 if added is not None:
                     instruments.append(added)
             elif command.lower().startswith("d") and command[1:].strip().isdecimal():
@@ -178,7 +191,9 @@ async def run_config_editor(request: Request, read_line: ReadLine, write: Write)
     original = reply["config"]
     settings = original
     while True:
-        edited = await edit_settings(settings, original, reply.get("beam_targets", []), read_line, write)
+        edited = await edit_settings(
+            settings, original, reply.get("beam_targets", []), read_line, write, reply.get("channel_modes", [])
+        )
         if edited is None:
             return
         try:

@@ -11,11 +11,12 @@ SETTINGS = {
         "stall_minutes": "15", "summary_time": "08:00",
     },
     "instruments": [
-        {"name": "PEARL", "notify_counts": "130", "beam_target": "TS1"},
-        {"name": "WISH", "notify_counts": "50", "beam_target": "TS2"},
+        {"name": "PEARL", "notify_counts": "130", "beam_target": "TS1", "channel": "experiment"},
+        {"name": "WISH", "notify_counts": "50", "beam_target": "TS2", "channel": "experiment"},
     ],
 }
 TARGETS = ["TS1", "TS2", "Muon"]
+MODES = ["experiment", "instrument"]
 
 
 class Terminal:
@@ -40,14 +41,14 @@ class Terminal:
 
 async def edit(*lines):
     term = Terminal(*lines)
-    result = await edit_settings(copy.deepcopy(SETTINGS), SETTINGS, TARGETS, term.read_line, term.write)
+    result = await edit_settings(copy.deepcopy(SETTINGS), SETTINGS, TARGETS, term.read_line, term.write, MODES)
     return result, term
 
 
 def test_render_menu_numbers_settings_then_instruments():
     menu = render_menu(SETTINGS)
     assert " 1) fun_mode" in menu and " 5) summary_time" in menu
-    assert " 6) PEARL    notify at 130 µA·h on TS1" in menu
+    assert " 6) PEARL    notify at 130 µA·h on TS1 · Teams channel: Experiment Updates" in menu
     assert " 7) WISH" in menu
 
 
@@ -68,20 +69,20 @@ async def test_enter_keeps_current_value():
 
 @pytest.mark.asyncio
 async def test_edit_instrument_reprompts_for_invalid_beam_target():
-    result, term = await edit("7", "", "75", "Muons", "Muon", "s", "y")
+    result, term = await edit("7", "", "75", "Muons", "Muon", "", "s", "y")
     assert result["instruments"][1] == {
-        "name": "WISH", "notify_counts": "75", "beam_target": "Muon",
+        "name": "WISH", "notify_counts": "75", "beam_target": "Muon", "channel": "experiment",
     }
     assert "Beam target must be one of TS1, TS2, Muon." in term.text
 
 
 @pytest.mark.asyncio
 async def test_add_instrument_upper_cases_name():
-    result, term = await edit("a", "emu", "10", "Muon", "s", "y")
+    result, term = await edit("a", "emu", "10", "Muon", "", "s", "y")
     assert result["instruments"][-1] == {
-        "name": "EMU", "notify_counts": "10", "beam_target": "Muon",
+        "name": "EMU", "notify_counts": "10", "beam_target": "Muon", "channel": "experiment",
     }
-    assert "+ EMU (notify_counts=10, beam_target=Muon)" in term.text
+    assert "+ EMU (notify_counts=10, beam_target=Muon, channel=experiment)" in term.text
 
 
 @pytest.mark.asyncio
@@ -132,7 +133,8 @@ def test_describe_changes_covers_renames_and_order():
 # ---------------------------------------------------------------------------
 
 def daemon(*update_replies):
-    replies = [{"ok": True, "config": copy.deepcopy(SETTINGS), "revision": "rev1", "beam_targets": TARGETS},
+    replies = [{"ok": True, "config": copy.deepcopy(SETTINGS), "revision": "rev1", "beam_targets": TARGETS,
+                "channel_modes": MODES},
                *update_replies]
     return AsyncMock(side_effect=replies)
 
@@ -154,8 +156,8 @@ async def test_run_config_editor_lets_user_fix_invalid_config():
         {"ok": False, "error": "invalid_config", "detail": "[INSTRUMENT:WISH] notify_counts must be a positive number"},
         {"ok": True, "restarting": True},
     )
-    term = Terminal("7", "", "0", "", "s", "y",   # rejected by the daemon
-                    "7", "", "5", "", "s", "y",   # fixed; earlier edit still in place
+    term = Terminal("7", "", "0", "", "", "s", "y",   # rejected by the daemon
+                    "7", "", "5", "", "", "s", "y",   # fixed; earlier edit still in place
                     "")
     await run_config_editor(request, term.read_line, term.write)
     assert "Save failed (invalid_config): [INSTRUMENT:WISH] notify_counts" in term.text
@@ -208,7 +210,7 @@ async def test_run_config_editor_keeps_edits_when_connection_is_lost_on_save():
 
 @pytest.mark.asyncio
 async def test_beam_target_is_case_insensitive_and_stored_canonically():
-    result, _ = await edit("7", "", "", "muon", "s", "y")
+    result, _ = await edit("7", "", "", "muon", "", "s", "y")
     assert result["instruments"][1]["beam_target"] == "Muon"
 
 
@@ -231,3 +233,13 @@ async def test_closed_input_with_changes_says_they_were_discarded():
     result, term = await edit("1", "true")
     assert result is None
     assert "Input closed; your changes were discarded." in term.text
+
+
+@pytest.mark.asyncio
+async def test_teams_channel_prompt_validates_and_shows_in_menu():
+    result, term = await edit("6", "", "", "", "teams", "Instrument", "s", "y")
+    assert result["instruments"][0]["channel"] == "instrument"
+    assert "Teams channel must be one of experiment, instrument." in term.text
+    assert "Teams channel (experiment/instrument) [experiment]: " in term.prompts
+    assert "PEARL channel: experiment → instrument" in term.text
+    assert "Teams channel: PEARL" in render_menu(result)
