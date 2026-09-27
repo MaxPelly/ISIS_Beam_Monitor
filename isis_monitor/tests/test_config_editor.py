@@ -69,7 +69,8 @@ async def test_enter_keeps_current_value():
 
 @pytest.mark.asyncio
 async def test_edit_instrument_reprompts_for_invalid_beam_target():
-    result, term = await edit("7", "", "75", "Muons", "Muon", "", "s", "y")
+    """Beam targets are case-insensitive and stored canonically."""
+    result, term = await edit("7", "", "75", "Muons", "muon", "", "s", "y")
     assert result["instruments"][1] == {
         "name": "WISH", "notify_counts": "75", "beam_target": "Muon", "channel": "experiment",
     }
@@ -100,23 +101,18 @@ async def test_cannot_delete_last_instrument_or_a_missing_one():
 
 
 @pytest.mark.asyncio
-async def test_quit_with_changes_asks_before_discarding():
-    result, term = await edit("1", "true", "q", "n", "q", "y")
+async def test_declining_save_or_discard_returns_to_menu():
+    result, term = await edit("1", "true", "s", "n", "q", "n", "q", "y")
     assert result is None
     assert term.prompts.count("Discard your changes? [y/N]: ") == 2
 
 
 @pytest.mark.asyncio
-async def test_declining_save_returns_to_menu():
-    result, term = await edit("1", "true", "s", "n", "q", "y")
-    assert result is None
-
-
-@pytest.mark.asyncio
 async def test_unknown_command_and_closed_input():
-    result, term = await edit("zz")
+    result, term = await edit("zz", "²", "d ²")  # superscript digits aren't numbers here
     assert "Unknown command: zz" in term.text
-    assert result is None  # input closed after "zz"
+    assert "Unknown command: ²" in term.text and "Unknown command: d ²" in term.text
+    assert result is None  # input closed afterwards
 
 
 def test_describe_changes_covers_renames_and_order():
@@ -209,23 +205,11 @@ async def test_run_config_editor_keeps_edits_when_connection_is_lost_on_save():
 
 
 @pytest.mark.asyncio
-async def test_beam_target_is_case_insensitive_and_stored_canonically():
-    result, _ = await edit("7", "", "", "muon", "", "s", "y")
-    assert result["instruments"][1]["beam_target"] == "Muon"
-
-
-@pytest.mark.asyncio
 async def test_blank_name_cancels_adding_an_instrument():
     result, term = await edit("a", "", "q")
     assert result is None
     assert "Adding an instrument (leave the name blank to cancel)." in term.text
     assert term.prompts.count("Name []: ") == 1
-
-
-@pytest.mark.asyncio
-async def test_superscript_digit_is_an_unknown_command_not_a_crash():
-    result, term = await edit("²", "d ²", "q")
-    assert "Unknown command: ²" in term.text and "Unknown command: d ²" in term.text
 
 
 @pytest.mark.asyncio
