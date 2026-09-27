@@ -973,3 +973,28 @@ async def test_run_daemon_seeds_trackers_from_the_restored_snapshot(tmp_path):
         async with daemon(config):
             pass
     assert seeded["PEARL"]["run_name"] == "Run 9" and seeded["PEARL"]["end_notified"] is True
+
+
+
+@pytest.mark.asyncio
+async def test_config_save_is_refused_once_shutdown_has_started(tmp_path):
+    """A save accepted after SIGTERM or a shutdown command would re-exec the daemon."""
+    config = _config(tmp_path)
+    args = argparse.Namespace(dummy=True, notify_current=False, config=_daemon_ini(tmp_path))
+    stop = asyncio.Event()
+    handlers = {}
+    real_ipc = main.IPCServer
+
+    def capture(*a):
+        server = real_ipc(*a)
+        handlers["config"] = a[3]
+        return server
+
+    with patch("main.install_signal_handlers"), patch("main.IPCServer", side_effect=capture):
+        task = asyncio.create_task(main.run_daemon(config, args, stop))
+        await wait_until(lambda: "config" in handlers)
+        revision = (await handlers["config"]("get_config", {}))["revision"]
+        stop.set()
+        reply = await handlers["config"]("update_config", {"revision": revision, "settings": {}})
+        assert await asyncio.wait_for(task, 5) is False
+    assert (reply["ok"], reply["error"]) == (False, "restart_pending")

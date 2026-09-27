@@ -267,8 +267,10 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             try:
                 if method == "get_config":
                     return await asyncio.to_thread(read_config)
-                if restart_requested:
-                    return {"ok": False, "error": "restart_pending", "detail": "The daemon is already restarting"}
+                if restart_requested or stop_event.is_set():
+                    # A save accepted during a shutdown would turn it into a restart.
+                    return {"ok": False, "error": "restart_pending",
+                            "detail": "The daemon is already stopping or restarting"}
                 if not isinstance(req.get("revision"), str):
                     return {"ok": False, "error": "invalid_request", "detail": "revision from get_config is required"}
                 await asyncio.to_thread(update_config_file, args.config, req.get("settings"), req["revision"])
