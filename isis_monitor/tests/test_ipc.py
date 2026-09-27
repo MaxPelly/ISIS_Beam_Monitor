@@ -389,8 +389,12 @@ async def test_stop_does_not_hang_on_a_client_that_stopped_reading(tmp_path):
     await asyncio.sleep(0.2)  # let the server fill the socket buffer
 
     with patch("isis_monitor.ipc.STOP_FLUSH_TIMEOUT", 0.1):
-        await asyncio.wait_for(server.stop(), timeout=3)
+        # asyncio.wait rather than wait_for, so a regression fails instead of
+        # hanging the test run (wait_for can't cancel a stuck wait_closed).
+        stopping = asyncio.ensure_future(server.stop())
+        done, _pending = await asyncio.wait({stopping}, timeout=3)
     writer.close()
+    assert stopping in done, "IPCServer.stop() hung on a client that stopped reading"
 
 
 @pytest.mark.asyncio
