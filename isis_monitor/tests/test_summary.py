@@ -308,3 +308,27 @@ async def test_daily_summary_counts_runs_only_on_instruments_using_that_target(t
     }
     assert runs == {"TS1": "2", "TS2": "0", "Muons": "1"}
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_daily_summary_loop_survives_database_errors(tmp_path, caplog):
+    """A transient SQLite error at load or save time is logged, not fatal."""
+    import sqlite3
+    config = make_config(summary_time=datetime.now(get_timezone()).strftime("%H:%M"))
+    store = SQLiteStateStore(tmp_path / "summary_errors.db")
+    real_run = store.run
+
+    async def failing_run(fn, *args):
+        if fn.__name__ in ("_load_records", "_save_progress"):
+            raise sqlite3.OperationalError("database is locked")
+        return await real_run(fn, *args)
+
+    store.run = failing_run
+    channel = NotificationChannel("Beam")
+    channel.broadcast = AsyncMock()
+    await _run_summary_loop_briefly(config, DaemonState(), store, channel)
+
+    assert channel.broadcast.call_count == 3  # still sent, and only once
+    assert "Failed to load daily summary state" in caplog.text
+    assert "Failed to save daily summary state" in caplog.text
+    store.close()

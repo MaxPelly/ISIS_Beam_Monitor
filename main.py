@@ -179,7 +179,7 @@ async def state_persistence_loop(config, state: DaemonState, store: SQLiteStateS
             store.commit()
 
         try:
-            await asyncio.to_thread(_persist)
+            await store.run(_persist)
         except sqlite3.Error:
             logger.exception("Failed to persist daemon state; will retry next interval")
 
@@ -300,7 +300,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             store.commit()
             store.close()
 
-        await asyncio.to_thread(_close_db)
+        await store.run(_close_db)
         await asyncio.gather(*(ch.close() for ch in channels))
         logging.getLogger().removeHandler(state_log_handler)
     return restart_requested

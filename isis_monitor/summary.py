@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import random
+import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Deque, Dict, List, Optional, Tuple
@@ -122,8 +123,13 @@ async def daily_summary_loop(
     rng: Optional[random.Random] = None,
 ) -> None:
     """Send one summary card per target at config.summary_time (local time), once a day."""
-    records = await asyncio.to_thread(_load_records, store)
-    last_sent_date = await asyncio.to_thread(_load_last_sent, store)
+    try:
+        records = await store.run(_load_records, store)
+        last_sent_date = await store.run(_load_last_sent, store)
+    except sqlite3.Error:
+        # Worst case today's summary is sent again; better than no summaries.
+        logger.exception("Failed to load daily summary state; starting fresh")
+        records, last_sent_date = {}, None
     target_hour, target_minute = (int(x) for x in config.summary_time.split(":"))
 
     while not stop_event.is_set():
@@ -170,6 +176,10 @@ async def daily_summary_loop(
             )
             await beam_channel.broadcast(notification)
 
-        await asyncio.to_thread(_save_progress, store, last_sent_date, records)
+        try:
+            await store.run(_save_progress, store, last_sent_date, records)
+        except sqlite3.Error:
+            # last_sent_date is still set in memory, so it isn't resent today.
+            logger.exception("Failed to save daily summary state")
 
     logger.warning("Daily summary loop quit")

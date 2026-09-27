@@ -267,6 +267,7 @@ async def test_state_persistence_loop_survives_database_errors(tmp_path, caplog)
     config = _config(tmp_path, sample_interval=0.01)
     store = MagicMock()
     store.write_samples.side_effect = [sqlite3.OperationalError("disk I/O error"), None, None, None]
+    store.run = AsyncMock(side_effect=lambda fn, *args: fn(*args))
     stop = asyncio.Event()
 
     task = asyncio.create_task(main.state_persistence_loop(config, DaemonState(), store, stop))

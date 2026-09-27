@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional, Tuple
+from typing import Any, Callable, Iterable, Optional, Tuple
 
 
 class SQLiteStateStore:
@@ -16,6 +18,14 @@ class SQLiteStateStore:
         # our writes briefly instead of failing with "database is locked".
         self.conn.execute("PRAGMA busy_timeout = 5000")
         self._init_schema()
+        # One connection is shared by every caller, and concurrent use of a
+        # sqlite3 connection from several threads corrupts its state, so all
+        # async callers go through run(), which uses this single thread.
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sqlite")
+
+    async def run(self, fn: Callable[..., Any], *args: Any) -> Any:
+        """Run fn(*args) off the event loop on the store's one worker thread."""
+        return await asyncio.get_running_loop().run_in_executor(self._executor, fn, *args)
 
     def _init_schema(self) -> None:
         self.conn.executescript(
@@ -41,6 +51,7 @@ class SQLiteStateStore:
 
     def close(self) -> None:
         self.conn.close()
+        self._executor.shutdown(wait=False)  # may be called from its own thread
 
     def write_samples(self, rows: Iterable[Tuple[datetime, str, float, str]]) -> None:
         self.conn.executemany(
