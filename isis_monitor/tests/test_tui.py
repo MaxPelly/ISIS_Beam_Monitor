@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from isis_monitor.tui import RichTUI, _progress_bar, _render_sparkline, sparkline_chars
+from isis_monitor.tui import RichTUI, _fmt_window, _progress_bar, _render_sparkline, sparkline_chars
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +46,7 @@ def test_start_draws_every_panel_and_stop_stops_live():
     assert "TS1" in _panel_text(tui, "beam_table")
     assert "0/60 samples" in _panel_text(tui, "beam_graph")
     assert "rolling 60 min" in _panel_text(tui, "beam_graph")
+    assert _fmt_window(1800) == "30 min" and _fmt_window(86400) == "24 h"
     short = make_tui(history_maxlen=30, sample_interval=3)
     short._update_beam_graph()
     assert "rolling 90s" in _panel_text(short, "beam_graph")

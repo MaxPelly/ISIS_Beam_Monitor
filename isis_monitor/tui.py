@@ -96,6 +96,13 @@ def _render_sparkline(
     return text
 
 
+def _fmt_window(seconds: float) -> str:
+    """A history window's length, in the unit that suits its size."""
+    if seconds < 120:
+        return f"{seconds:.0f}s"
+    return f"{seconds / 60:.0f} min" if seconds < 7200 else f"{seconds / 3600:.0f} h"
+
+
 class RichTUI:
     def __init__(
         self,
@@ -276,7 +283,7 @@ class RichTUI:
         self.layout["beam_graph"].update(
             Panel(
                 content,
-                title=f"Beam Current -- rolling {fmt(self.history_maxlen * interval_s)}",
+                title=f"Beam Current -- rolling {_fmt_window(self.history_maxlen * interval_s)}",
                 subtitle=subtitle,
                 border_style="cyan",
             )

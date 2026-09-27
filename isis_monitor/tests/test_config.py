@@ -404,7 +404,7 @@ def test_instrument_progress_pv_is_derived_from_the_name(tmp_path, caplog):
     assert "[INSTRUMENT:POLARIS] ignoring unknown key(s): counts_pv" in caplog.text
 
 
-def test_update_config_file_drops_old_counts_pv_and_rejects_editing_it(tmp_path):
+def test_update_config_file_drops_unknown_instrument_keys_and_rejects_editing_them(tmp_path):
     path = _editable_file(tmp_path, EDITABLE_BASE + "[INSTRUMENT:WISH]\ncounts_pv = OLD\nnotify_counts = 5\n")
     update_config_file(path, editable_settings(load_config(path)))
     assert "counts_pv" not in path.read_text().split("[INSTRUMENT:PEARL]")[1]
