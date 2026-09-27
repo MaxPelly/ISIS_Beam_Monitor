@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import contextlib
 from abc import ABC, abstractmethod
 from dataclasses import replace
 from typing import List, Optional
@@ -147,16 +148,27 @@ class DummyNotifier(Notifier):
 
 
 class NotificationChannel:
-    """Manages a group of notifiers for a specific topic."""
+    """Manages a group of notifiers for a specific topic.
+
+    broadcast() only queues a notification; a worker task sends them in
+    order, so a slow or hung webhook (up to webhook_timeout per send) never
+    holds up the caller — notably the beam WebSocket loop, which would
+    otherwise stop reading and miss keepalive pongs.
+    """
+    QUEUE_SIZE = 100  # beyond this (e.g. a long Teams outage) the oldest are dropped
+    CLOSE_TIMEOUT = 5.0  # how long close() waits for queued notifications to send
+
     def __init__(self, name: str):
         self.name = name
         self.notifiers: List[Notifier] = []
+        self._queue: Optional[asyncio.Queue] = None
+        self._worker: Optional[asyncio.Task] = None
 
     def add_notifier(self, notifier: Notifier):
         self.notifiers.append(notifier)
 
     async def broadcast(self, notification: Notification):
-        """Sends the notification to all registered notifiers in parallel."""
+        """Queue the notification for every notifier and return straight away."""
         if not self.notifiers:
             logger.debug(
                 f"Channel '{self.name}' has no notifiers configured; skipping broadcast."
@@ -164,6 +176,25 @@ class NotificationChannel:
             return
         if not notification.channel:
             notification = replace(notification, channel=self.name)
+        if self._queue is None:
+            self._queue = asyncio.Queue(maxsize=self.QUEUE_SIZE)
+            self._worker = asyncio.create_task(self._send_loop())
+        if self._queue.full():
+            dropped = self._queue.get_nowait()
+            self._queue.task_done()
+            logger.warning(f"Channel '{self.name}' send queue full; dropped notification: {dropped.title}")
+        self._queue.put_nowait(notification)
+
+    async def _send_loop(self) -> None:
+        while True:
+            notification = await self._queue.get()
+            try:
+                await self._send(notification)
+            finally:
+                self._queue.task_done()
+
+    async def _send(self, notification: Notification) -> None:
+        """Send to all registered notifiers in parallel."""
         results = await asyncio.gather(
             *(n.send(notification) for n in self.notifiers), return_exceptions=True
         )
@@ -171,5 +202,21 @@ class NotificationChannel:
             if isinstance(result, Exception):
                 logger.error(f"{type(notifier).__name__} failed on channel '{self.name}': {result!r}")
 
+    async def flush(self, timeout: Optional[float] = None) -> bool:
+        """Wait until everything queued so far has been sent; False on timeout."""
+        if self._queue is None:
+            return True
+        try:
+            await asyncio.wait_for(self._queue.join(), timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
     async def close(self) -> None:
+        if not await self.flush(self.CLOSE_TIMEOUT):
+            logger.warning(f"Channel '{self.name}' closed with {self._queue.qsize()} notification(s) unsent")
+        if self._worker is not None:
+            self._worker.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._worker
         await asyncio.gather(*(n.close() for n in self.notifiers), return_exceptions=True)

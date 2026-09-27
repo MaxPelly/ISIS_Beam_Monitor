@@ -1,7 +1,8 @@
+import asyncio
 import pytest
 from dataclasses import replace
 from unittest.mock import patch, MagicMock, AsyncMock
-from isis_monitor.notifiers import TeamsNotifier, DummyNotifier, NotificationChannel
+from isis_monitor.notifiers import TeamsNotifier, DummyNotifier, NotificationChannel, Notifier
 from isis_monitor.messages import Notification, Severity
 import aiohttp
 
@@ -206,6 +207,7 @@ async def test_notification_channel():
 
     notification = Notification(title="Title", text="Broadcast message")
     await channel.broadcast(notification)
+    await channel.flush()
 
     # broadcast() fills in a blank channel with the NotificationChannel's own
     # name, so the notifiers receive a copy rather than the exact same object.
@@ -223,6 +225,7 @@ async def test_notification_channel_does_not_override_explicit_channel():
 
     notification = Notification(title="Title", text="Text", channel="TS1")
     await channel.broadcast(notification)
+    await channel.flush()
 
     mock_notifier.send.assert_called_once_with(notification)
 
@@ -254,6 +257,7 @@ async def test_notification_channel_logs_failing_notifier_and_still_delivers(cap
     channel.add_notifier(good)
 
     await channel.broadcast(Notification(title="t", text="x"))
+    await channel.flush()
 
     good.send.assert_awaited_once()
     assert "_FailingNotifier failed on channel 'Beam'" in caplog.text
@@ -302,3 +306,51 @@ def test_create_payload_includes_timestamp_line():
     body = payload["attachments"][0]["content"]["body"]
     assert body[-1]["isSubtle"] is True
     assert "Jan" in body[-1]["text"]
+
+
+
+class _SlowNotifier(Notifier):
+    def __init__(self, delay):
+        self.delay = delay
+        self.sent = []
+
+    async def send(self, notification):
+        await asyncio.sleep(self.delay)
+        self.sent.append(notification.title)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_returns_without_waiting_for_a_slow_webhook():
+    """A hung webhook mustn't hold up the caller (e.g. the beam WebSocket loop)."""
+    channel = NotificationChannel("Beam")
+    slow = _SlowNotifier(10)
+    channel.add_notifier(slow)
+    await asyncio.wait_for(channel.broadcast(Notification(title="a", text="")), 0.1)
+    assert slow.sent == []
+    channel.CLOSE_TIMEOUT = 0.05
+    await channel.close()  # gives up on the unsent one rather than hanging
+
+
+@pytest.mark.asyncio
+async def test_queued_notifications_are_sent_in_order_and_flushed_on_close():
+    channel = NotificationChannel("Beam")
+    slow = _SlowNotifier(0.01)
+    channel.add_notifier(slow)
+    for title in "abc":
+        await channel.broadcast(Notification(title=title, text=""))
+    await channel.close()
+    assert slow.sent == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_full_queue_drops_the_oldest_notification(caplog):
+    channel = NotificationChannel("Beam")
+    channel.QUEUE_SIZE = 2
+    slow = _SlowNotifier(0.05)
+    channel.add_notifier(slow)
+    for title in "abcd":
+        await channel.broadcast(Notification(title=title, text=""))
+    await channel.close()
+    # broadcast() doesn't yield, so all four arrive before the worker takes one.
+    assert slow.sent == ["c", "d"]
+    assert "dropped notification: a" in caplog.text and "dropped notification: b" in caplog.text
