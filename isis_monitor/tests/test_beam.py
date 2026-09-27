@@ -41,21 +41,27 @@ SETTLE = DEBOUNCE_SECONDS * 3  # wait comfortably past the debounce window in te
 
 @pytest.fixture
 def mock_config():
-    return AppConfig(
-        mcr_news_url="",
-        isis_websocket_url="wss://test",
-        news_teams_url="",
-        beam_teams_url="",
-        experiment_teams_url="",
-        instruments=[InstrumentConfig(
-            "PEARL", 100.0, "TS1", run_name_pv=AppConfig.run_name_pv,
-        )],
-    )
+    return AppConfig(isis_websocket_url="wss://test", instruments=[InstrumentConfig("PEARL", 100.0, "TS1")])
 
 
 @pytest.fixture
 def mock_channels():
     return fake_channel("Beam"), fake_channel("Exp")
+
+
+def title(name, pv=AppConfig.run_name_pv):
+    """A PVWS run-title update; the title arrives base64-encoded."""
+    raw = name if isinstance(name, bytes) else name.encode()
+    return {"pv": pv, "b64byt": base64.b64encode(raw).decode()}
+
+
+def stall_monitor(mock_config, mock_channels, run_name="Run 1"):
+    """A monitor connected to PVWS with TS1 on, run_name active and stall_minutes ~0.6s."""
+    m = make_monitor(replace(mock_config, stall_minutes=0.01), mock_channels)
+    m._current_ws = MagicMock()
+    tracker(m).state.run_name = run_name
+    m.beams["TS1"].power = "high"
+    return m
 
 
 def make_monitor(mock_config, mock_channels, counts_target=100, rng=None, sink=None):
@@ -234,8 +240,7 @@ async def test_handle_update_run_name_first_set(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels, sink=sink)
 
     run_name = "Run 12345"
-    b64 = base64.b64encode(run_name.encode()).decode()
-    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": b64})
+    await m._handle_update(title(run_name))
 
     assert tracker(m).state.run_name == run_name
     exp_channel.broadcast.assert_not_called()  # No previous run → no notification
@@ -252,8 +257,7 @@ async def test_handle_update_run_name_change(mock_config, mock_channels):
     tracker(m).state.current_counts = 1000.0
 
     new_run = "Run 12346"
-    b64 = base64.b64encode(new_run.encode()).decode()
-    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": b64})
+    await m._handle_update(title(new_run))
 
     assert tracker(m).state.run_name == new_run
     exp_channel.broadcast.assert_called_once()
@@ -276,8 +280,7 @@ async def test_handle_update_run_name_change_resets_end_notified(mock_config, mo
     tracker(m).state.run_started_at = datetime.now(timezone.utc)
     tracker(m).state.end_notified = True
 
-    b64 = base64.b64encode(b"Run 2").decode()
-    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": b64})
+    await m._handle_update(title("Run 2"))
     assert tracker(m).state.end_notified is False
 
     exp_channel.broadcast.reset_mock()
@@ -297,32 +300,19 @@ async def test_handle_update_run_name_nan_ignored(mock_config, mock_channels):
     exp_channel.broadcast.assert_not_called()
 
 
-async def test_handle_update_run_name_change_no_milestone_for_zero_total(mock_config, mock_channels):
-    """The sink returns 0 for an instrument it doesn't know; 0 % 25 == 0
-    must not be mistaken for a milestone."""
-    fun_config = replace(mock_config, fun_mode=True)
+@pytest.mark.parametrize("fun_mode, total", [
+    (True, 0),  # the sink's total for an unknown instrument: 0 % 25 == 0 isn't a milestone
+    (False, 25),
+])
+async def test_handle_update_run_name_change_no_milestone(mock_config, mock_channels, fun_mode, total):
     _, exp_channel = mock_channels
     sink = MagicMock()
-    sink.record_run_completed.return_value = 0
-    m = make_monitor(fun_config, mock_channels, sink=sink)
-    tracker(m).state.run_name = "Run 1"
-    tracker(m).state.run_started_at = datetime.now(timezone.utc)
-
-    await m._handle_update({"pv": fun_config.run_name_pv, "b64byt": base64.b64encode(b"Run 2").decode()})
-
-    assert exp_channel.broadcast.call_count == 1  # just the "new run" card
-
-
-async def test_handle_update_run_name_change_no_milestone_without_fun_mode(mock_config, mock_channels):
-    beam_channel, exp_channel = mock_channels
-    sink = MagicMock()
-    sink.record_run_completed.return_value = 25
-    m = make_monitor(mock_config, mock_channels, sink=sink)  # fun_mode defaults to False
+    sink.record_run_completed.return_value = total
+    m = make_monitor(replace(mock_config, fun_mode=fun_mode), mock_channels, sink=sink)
     tracker(m).state.run_name = "Run 24"
     tracker(m).state.run_started_at = datetime.now(timezone.utc)
 
-    b64 = base64.b64encode(b"Run 25").decode()
-    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": b64})
+    await m._handle_update(title("Run 25"))
 
     exp_channel.broadcast.assert_called_once()  # only the "new run" card
 
@@ -465,10 +455,8 @@ def test_fit_rate_computes_slope_per_second():
 async def test_check_collection_progress_no_check_without_enough_history(mock_config, mock_channels):
     """Fewer than STALL_CHECK_WINDOW worth of samples means there's nothing
     to compare against yet — must not warn."""
-    beam_channel, exp_channel = mock_channels
-    m = make_monitor(mock_config, mock_channels)
-    m._current_ws = MagicMock()  # connected to PVWS
-    tracker(m).state.run_name = "Run 1"
+    _, exp_channel = mock_channels
+    m = stall_monitor(mock_config, mock_channels)
     now = datetime.now(timezone.utc)
 
     tracker(m).state.collected_samples.append((now - timedelta(minutes=1), 100.0))
@@ -484,12 +472,8 @@ async def test_check_collection_progress_no_false_stall_when_counts_update_in_ba
     batches than the 60s check interval must not look stalled just because a
     batch hasn't landed in the latest minute — movement is judged over
     STALL_CHECK_WINDOW, not the last tick."""
-    beam_config = replace(mock_config, stall_minutes=0.01)
-    beam_channel, exp_channel = mock_channels
-    m = make_monitor(beam_config, mock_channels)
-    m._current_ws = MagicMock()  # connected to PVWS
-    tracker(m).state.run_name = "Run 1"
-    m.beams["TS1"].power = "high"
+    _, exp_channel = mock_channels
+    m = stall_monitor(mock_config, mock_channels)
     now = datetime.now(timezone.utc)
 
     # A counts batch landed 4 minutes ago (inside the 5-minute window), so
@@ -506,13 +490,8 @@ async def test_check_collection_progress_no_false_stall_when_counts_update_in_ba
 
 
 async def test_check_collection_progress_detects_stall_when_instrument_beam_on(mock_config, mock_channels):
-    beam_config = replace(mock_config, stall_minutes=0.01)  # ~0.6s, fast for tests
-    beam_channel, exp_channel = mock_channels
-    m = make_monitor(beam_config, mock_channels)
-    m._current_ws = MagicMock()  # connected to PVWS
-    tracker(m).state.run_name = "Run 1"
-    m.beams["TS1"].power = "high"  # instrument beam is on
-
+    _, exp_channel = mock_channels
+    m = stall_monitor(mock_config, mock_channels)  # the instrument's beam is on
     now = datetime.now(timezone.utc)
     _seed_collected_baseline(m, now, 100.0)
     tracker(m).state.current_counts = 100.0  # unmoved over the window
@@ -527,13 +506,8 @@ async def test_check_collection_progress_detects_stall_when_instrument_beam_on(m
 
 
 async def test_check_collection_progress_movement_resets_stall_clock(mock_config, mock_channels):
-    beam_config = replace(mock_config, stall_minutes=0.01)
-    beam_channel, exp_channel = mock_channels
-    m = make_monitor(beam_config, mock_channels)
-    m._current_ws = MagicMock()  # connected to PVWS
-    tracker(m).state.run_name = "Run 1"
-    m.beams["TS1"].power = "high"
-
+    _, exp_channel = mock_channels
+    m = stall_monitor(mock_config, mock_channels)
     now = datetime.now(timezone.utc)
     _seed_collected_baseline(m, now, 100.0)
     tracker(m).state.current_counts = 100.0
@@ -551,13 +525,8 @@ async def test_check_collection_progress_movement_resets_stall_clock(mock_config
 async def test_check_collection_progress_no_active_run_never_warns(mock_config, mock_channels):
     """Between runs, the collected count is naturally static — that must not
     look like a stall just because no run is currently in progress."""
-    beam_config = replace(mock_config, stall_minutes=0.01)
-    beam_channel, exp_channel = mock_channels
-    m = make_monitor(beam_config, mock_channels)
-    m._current_ws = MagicMock()  # connected to PVWS
-    assert tracker(m).state.run_name == ""  # no run active
-    m.beams["TS1"].power = "high"
-
+    _, exp_channel = mock_channels
+    m = stall_monitor(mock_config, mock_channels, run_name="")  # no run active
     now = datetime.now(timezone.utc)
     _seed_collected_baseline(m, now, 100.0)
     tracker(m).state.current_counts = 100.0
@@ -864,7 +833,7 @@ async def test_updates_are_routed_to_their_own_instrument(mock_config, mock_chan
     m = two_instrument_monitor(mock_config, mock_channels)
     pearl, wish = m.instruments["PEARL"], m.instruments["WISH"]
 
-    await m._handle_update({"pv": "IN:WISH:DAE:WDTITLE", "b64byt": base64.b64encode(b"Wish run").decode()})
+    await m._handle_update(title("Wish run", "IN:WISH:DAE:WDTITLE"))
     await m._handle_update({"pv": "IN:WISH:DAE:TOTALUAMPS", "value": 60.0})
 
     assert (wish.state.run_name, wish.state.current_counts) == ("Wish run", 60.0)
@@ -934,7 +903,7 @@ async def test_run_cards_use_the_instruments_channel_setting(mock_config, mock_c
     t.state.run_name = "Run 24"
     t.state.run_started_at = datetime.now(timezone.utc)
 
-    await m._handle_update({"pv": config.run_name_pv, "b64byt": base64.b64encode(b"Run 25").decode()})
+    await m._handle_update(title("Run 25"))
     now = datetime.now(timezone.utc)
     _seed_collected_baseline(m, now, 150.0)  # samples are oldest first
     await m._handle_update({"pv": PEARL_UAMPS, "value": 150.0})
@@ -956,16 +925,16 @@ async def test_repeated_run_title_after_reconnect_keeps_the_run_start_time(mock_
     _, exp_channel = mock_channels
     sink = MagicMock()
     m = make_monitor(mock_config, mock_channels, sink=sink)
-    title = {"pv": mock_config.run_name_pv, "b64byt": base64.b64encode(b"Run 1").decode()}
-    await m._handle_update(title)
+    run_1 = title("Run 1")
+    await m._handle_update(run_1)
     started = tracker(m).state.run_started_at
     tracker(m).state.run_started_at = started - timedelta(hours=6)  # the run began 6h ago
 
-    await m._handle_update(title)  # reconnect re-sends it
+    await m._handle_update(run_1)  # reconnect re-sends it
     assert tracker(m).state.run_started_at == started - timedelta(hours=6)
     sink.update_run_name.assert_called_once()
 
-    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": base64.b64encode(b"Run 2").decode()})
+    await m._handle_update(title("Run 2"))
     card = exp_channel.broadcast.call_args[0][0]
     assert dict(card.facts)["Duration"].startswith("6h")
 
@@ -973,10 +942,9 @@ async def test_repeated_run_title_after_reconnect_keeps_the_run_start_time(mock_
 async def test_no_stall_warning_while_pvws_is_disconnected(mock_config, mock_channels):
     """Counts are frozen and beam states stale during an outage."""
     _, exp_channel = mock_channels
-    m = make_monitor(replace(mock_config, stall_minutes=0.01), mock_channels)
+    m = stall_monitor(mock_config, mock_channels)  # TS1 "high" as last known before the outage
+    m._current_ws = None  # PVWS disconnected
     t = tracker(m)
-    t.state.run_name = "Run 1"
-    m.beams["TS1"].power = "high"  # last known before the outage
     now = datetime.now(timezone.utc)
     _seed_collected_baseline(m, now, 100.0)
     t.state.current_counts = 100.0
@@ -1023,13 +991,13 @@ async def test_restored_run_is_not_reset_or_renotified_after_a_restart(mock_conf
         "run_name": "Run 1", "run_started_at": started.isoformat(), "counts": 120.0, "end_notified": True,
     }, "MERLIN": {"run_name": "x", "run_started_at": started.isoformat()}})
 
-    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": base64.b64encode(b"Run 1").decode()})
+    await m._handle_update(title("Run 1"))
     await m._handle_update({"pv": PEARL_UAMPS, "value": 121.0})
     exp_channel.broadcast.assert_not_called()
     assert tracker(m).state.run_started_at == started
 
     # The run then changes: the card covers the whole run, restart included.
-    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": base64.b64encode(b"Run 2").decode()})
+    await m._handle_update(title("Run 2"))
     card = exp_channel.broadcast.call_args[0][0]
     assert dict(card.facts)["Duration"].startswith("3h")
     sink.update_run_progress.assert_called_with("PEARL", ANY, False)
@@ -1086,7 +1054,7 @@ async def test_new_run_is_saved_before_the_milestone_card(mock_config, mock_chan
     m = make_monitor(fun_config, mock_channels, sink=sink)
     tracker(m).state.run_name = "Run 24"
     tracker(m).state.run_started_at = datetime.now(timezone.utc)
-    await m._handle_update({"pv": fun_config.run_name_pv, "b64byt": base64.b64encode(b"Run 25").decode()})
+    await m._handle_update(title("Run 25"))
     assert order == ["PEARL: New run started", "saved", "PEARL: 25 runs completed"]
     sink.record_run_completed.assert_called_once_with("PEARL", ANY)
 
@@ -1095,12 +1063,11 @@ async def test_new_run_is_saved_before_the_milestone_card(mock_config, mock_chan
 async def test_blank_decoded_run_title_is_ignored(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
-    pv = mock_config.run_name_pv
-    await m._handle_update({"pv": pv, "b64byt": base64.b64encode(b"Run 1").decode()})
-    await m._handle_update({"pv": pv, "b64byt": base64.b64encode(b"\x00\x00\x00").decode()})
+    await m._handle_update(title("Run 1"))
+    await m._handle_update(title(b"\x00\x00\x00"))
     assert tracker(m).state.run_name == "Run 1"
     exp_channel.broadcast.assert_not_called()
-    await m._handle_update({"pv": pv, "b64byt": base64.b64encode(b"Run 2").decode()})
+    await m._handle_update(title("Run 2"))
     assert exp_channel.broadcast.call_args[0][0].text == "Run 2"
 
 
