@@ -104,8 +104,7 @@ def test_sample_all_currents_appends_publishes_and_returns_rows():
 
     rows = state.sample_all_currents(ts)
 
-    assert (ts, "TS1", 150.0, "high") in rows
-    assert len(rows) == len(state.beam_states)
+    assert rows == [(ts, "TS1", 150.0, "high")]  # the others have no reading yet
     assert state.history["TS1"][-1] == (ts, 150.0, "high")
     events = _drain(q)
     assert {e.event for e in events} == {"sample"}

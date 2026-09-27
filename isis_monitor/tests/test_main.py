@@ -245,7 +245,7 @@ async def test_state_persistence_loop_samples_trims_and_persists(tmp_path):
 
     rows = store.load_recent_samples(stale - timedelta(days=1))
     assert all(r["timestamp"] > stale.isoformat() for r in rows)  # stale row pruned
-    assert {r["target"] for r in rows} == {"TS1", "TS2", "Muons"}
+    assert {r["target"] for r in rows} == {"TS1"}  # TS2 and Muons have no reading
     assert all(ts > stale for ts, _, _ in state.history["TS2"])  # stale sample trimmed
     assert json.loads(store.load_snapshot("daemon_state"))["beam_states"]["TS1"]["power"] == "high"
     store.close()

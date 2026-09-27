@@ -143,11 +143,13 @@ class DaemonState(MonitorSinkProtocol):
 
     def sample_all_currents(self, ts: Optional[datetime] = None) -> List[Tuple[datetime, str, float, str]]:
         """Append the latest value of every beam to its history; return the
-        rows as (timestamp, beam, current, power) for persisting."""
+        rows as (timestamp, beam, current, power) for persisting. Beams with
+        no live reading ("unknown", e.g. just after reconnecting) are skipped."""
         ts = ts or datetime.now(timezone.utc)
         rows = [
             (ts, beam, float(state["current"]), str(state["power"]))
             for beam, state in self.beam_states.items()
+            if state["power"] != "unknown"
         ]
         for _, beam, current, power in rows:
             self.append_beam_sample(beam, current, power, ts=ts)
