@@ -57,7 +57,9 @@ Each instrument gets its own section. Run notifications for every instrument go 
 
 ```ini
 [INSTRUMENT:PEARL]
-# Required: total µA·h collected this run at which "run about to finish" is sent.
+# Required: the run's target in total µA·h collected. "Run about to finish" is sent
+# [NOTIFICATIONS] finish_warning_minutes before it's expected to be reached (or on
+# reaching it, if the rate isn't known yet).
 notify_counts = 130
 # Optional: TS1, TS2 or Muon — the beam reported on run cards and checked
 # before stall warnings (default = [PVS] instrument_target, itself TS1 by default).
