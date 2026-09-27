@@ -210,33 +210,20 @@ async def test_change_aggregator_cancel_all_stops_pending_flush(mock_config, moc
 
 
 @pytest.mark.asyncio
-async def test_handle_update_beam_fun_mode_off_no_flavour(mock_config, mock_channels):
+@pytest.mark.parametrize("fun_mode", [False, True])
+async def test_handle_update_beam_flavour_only_in_fun_mode(mock_config, mock_channels, fun_mode):
     """fun_mode defaults to False — no flavour line is added, even with an rng available."""
+    config = replace(mock_config, fun_mode=True) if fun_mode else mock_config
     beam_channel, exp_channel = mock_channels
-    m = make_monitor(mock_config, mock_channels, rng=random.Random(1))
+    m = make_monitor(config, mock_channels, rng=random.Random(1))
 
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})  # startup
-    assert beam_channel.broadcast.call_args[0][0].flavour == ""
+    await m._handle_update({"pv": config.ts1_beam_current_pv, "value": "10.0"})  # startup
+    assert (beam_channel.broadcast.call_args[0][0].flavour != "") is fun_mode
     beam_channel.broadcast.reset_mock()
 
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})
+    await m._handle_update({"pv": config.ts1_beam_current_pv, "value": "60.0"})
     await asyncio.sleep(SETTLE)
-    assert beam_channel.broadcast.call_args[0][0].flavour == ""
-
-
-@pytest.mark.asyncio
-async def test_handle_update_beam_fun_mode_on_adds_flavour(mock_config, mock_channels):
-    fun_config = replace(mock_config, fun_mode=True)
-    beam_channel, exp_channel = mock_channels
-    m = make_monitor(fun_config, mock_channels, rng=random.Random(1))
-
-    await m._handle_update({"pv": fun_config.ts1_beam_current_pv, "value": "10.0"})  # startup
-    assert beam_channel.broadcast.call_args[0][0].flavour != ""
-    beam_channel.broadcast.reset_mock()
-
-    await m._handle_update({"pv": fun_config.ts1_beam_current_pv, "value": "60.0"})
-    await asyncio.sleep(SETTLE)
-    assert beam_channel.broadcast.call_args[0][0].flavour != ""
+    assert (beam_channel.broadcast.call_args[0][0].flavour != "") is fun_mode
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +341,7 @@ async def test_handle_update_run_name_change_no_milestone_without_fun_mode(mock_
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_handle_update_counts_below_threshold(mock_config, mock_channels):
+async def test_handle_update_counts_triggers_notification_past_the_target(mock_config, mock_channels):
     """TOTALUAMPS publishes the total µA·h collected this run as a number."""
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels, counts_target=100)
@@ -362,14 +349,7 @@ async def test_handle_update_counts_below_threshold(mock_config, mock_channels):
 
     await m._handle_update({"pv": PEARL_UAMPS, "value": 90.0})
     assert tracker(m).state.current_counts == 90.0
-    exp_channel.broadcast.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_handle_update_counts_triggers_notification(mock_config, mock_channels):
-    beam_channel, exp_channel = mock_channels
-    m = make_monitor(mock_config, mock_channels, counts_target=100)
-    tracker(m).state.run_name = "Run 1"
+    exp_channel.broadcast.assert_not_called()  # below the target
 
     await m._handle_update({"pv": PEARL_UAMPS, "value": 110.0})
     assert tracker(m).state.current_counts == 110.0
