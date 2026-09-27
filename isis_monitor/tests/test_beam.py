@@ -111,8 +111,8 @@ async def test_handle_update_beam_startup_sends_immediately(mock_config, mock_ch
 
     await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})
 
-    assert m.state.beams["TS1"].current == 10.0
-    assert m.state.beams["TS1"].power == "low"
+    assert m.beams["TS1"].current == 10.0
+    assert m.beams["TS1"].power == "low"
     beam_channel.broadcast.assert_called_once()
     notification = beam_channel.broadcast.call_args[0][0]
     assert "online" in notification.title and notification.title.endswith("TS1 is low")
@@ -130,8 +130,8 @@ async def test_handle_update_beam_no_change_no_broadcast(mock_config, mock_chann
     await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "45.0"})
     await asyncio.sleep(SETTLE)
 
-    assert m.state.beams["TS1"].current == 45.0
-    assert m.state.beams["TS1"].power == "low"
+    assert m.beams["TS1"].current == 45.0
+    assert m.beams["TS1"].power == "low"
     beam_channel.broadcast.assert_not_called()
 
 
@@ -145,7 +145,7 @@ async def test_handle_update_beam_change_is_debounced(mock_config, mock_channels
     beam_channel.broadcast.reset_mock()
 
     await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})
-    assert m.state.beams["TS1"].power == "medium"  # state updates immediately
+    assert m.beams["TS1"].power == "medium"  # state updates immediately
     beam_channel.broadcast.assert_not_called()  # but no card yet — still pending
 
     await asyncio.sleep(SETTLE)
@@ -351,7 +351,7 @@ async def test_handle_update_counts_triggers_notification_past_the_target(mock_c
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels, counts_target=100)
     tracker(m).state.run_name = "Run 1"
-    m.state.beams["TS1"].power = "high"  # PEARL's own beam target
+    m.beams["TS1"].power = "high"  # PEARL's own beam target
 
     await m._handle_update({"pv": PEARL_UAMPS, "value": 90.0})
     assert tracker(m).state.current_counts == 90.0
@@ -512,7 +512,7 @@ async def test_check_collection_progress_no_false_stall_when_counts_update_in_ba
     m = make_monitor(beam_config, mock_channels)
     m._current_ws = MagicMock()  # connected to PVWS
     tracker(m).state.run_name = "Run 1"
-    m.state.beams["TS1"].power = "high"
+    m.beams["TS1"].power = "high"
     now = datetime.now(timezone.utc)
 
     # A counts batch landed 4 minutes ago (inside the 5-minute window), so
@@ -535,7 +535,7 @@ async def test_check_collection_progress_detects_stall_when_instrument_beam_on(m
     m = make_monitor(beam_config, mock_channels)
     m._current_ws = MagicMock()  # connected to PVWS
     tracker(m).state.run_name = "Run 1"
-    m.state.beams["TS1"].power = "high"  # instrument beam is on
+    m.beams["TS1"].power = "high"  # instrument beam is on
 
     now = datetime.now(timezone.utc)
     _seed_collected_baseline(m, now, 100.0)
@@ -557,7 +557,7 @@ async def test_check_collection_progress_movement_resets_stall_clock(mock_config
     m = make_monitor(beam_config, mock_channels)
     m._current_ws = MagicMock()  # connected to PVWS
     tracker(m).state.run_name = "Run 1"
-    m.state.beams["TS1"].power = "high"
+    m.beams["TS1"].power = "high"
 
     now = datetime.now(timezone.utc)
     _seed_collected_baseline(m, now, 100.0)
@@ -582,7 +582,7 @@ async def test_check_collection_progress_no_active_run_never_warns(mock_config, 
     m = make_monitor(beam_config, mock_channels)
     m._current_ws = MagicMock()  # connected to PVWS
     assert tracker(m).state.run_name == ""  # no run active
-    m.state.beams["TS1"].power = "high"
+    m.beams["TS1"].power = "high"
 
     now = datetime.now(timezone.utc)
     _seed_collected_baseline(m, now, 100.0)
@@ -1003,8 +1003,8 @@ async def test_stall_check_uses_each_instruments_beam_target(mock_config, mock_c
     _, exp_channel = mock_channels
     m = two_instrument_monitor(replace(mock_config, stall_minutes=0.01), mock_channels)
     m._current_ws = MagicMock()  # connected to PVWS
-    m.state.beams["TS1"].power = "high"
-    m.state.beams["TS2"].power = "off"
+    m.beams["TS1"].power = "high"
+    m.beams["TS2"].power = "off"
     now = datetime.now(timezone.utc)
     for t in m.instruments.values():
         t.state.run_name = "Run 1"
@@ -1044,7 +1044,7 @@ async def test_run_cards_use_the_instruments_channel_setting(mock_config, mock_c
     m = make_monitor(config, mock_channels, sink=sink)
     m._current_ws = MagicMock()  # connected to PVWS
     t = tracker(m)
-    m.state.beams["TS1"].power = "high"
+    m.beams["TS1"].power = "high"
     t.state.run_name = "Run 24"
     t.state.run_started_at = datetime.now(timezone.utc)
 
@@ -1092,7 +1092,7 @@ async def test_no_stall_warning_while_pvws_is_disconnected(mock_config, mock_cha
     m = make_monitor(replace(mock_config, stall_minutes=0.01), mock_channels)
     t = tracker(m)
     t.state.run_name = "Run 1"
-    m.state.beams["TS1"].power = "high"  # last known before the outage
+    m.beams["TS1"].power = "high"  # last known before the outage
     now = datetime.now(timezone.utc)
     _seed_collected_baseline(m, now, 100.0)
     t.state.current_counts = 100.0
@@ -1114,11 +1114,11 @@ async def test_dropped_flicker_does_not_reset_time_in_state(mock_config, mock_ch
     pv = mock_config.ts1_beam_current_pv
     await m._handle_update({"pv": pv, "value": 150.0})  # startup: high
     ten_hours_ago = datetime.now(timezone.utc) - timedelta(hours=10)
-    m.state.beams["TS1"].since = ten_hours_ago
+    m.beams["TS1"].since = ten_hours_ago
 
     await m._handle_update({"pv": pv, "value": 100.0})  # flicker to medium...
     await m._handle_update({"pv": pv, "value": 150.0})  # ...and straight back
-    assert m.state.beams["TS1"].since == ten_hours_ago
+    assert m.beams["TS1"].since == ten_hours_ago
     await asyncio.sleep(SETTLE)  # flicker dropped
 
     beam_channel.broadcast.reset_mock()

@@ -52,7 +52,7 @@ def _classify_ws_error(exc: BaseException) -> Tuple[str, str]:
 @dataclass
 class BeamTarget:
     """Describes one accelerator beam target."""
-    state_key: str      # Key into MonitorState.beams; also the name used in messages
+    state_key: str      # Key into BeamMonitor.beams; also the name used in messages
     channel_label: str  # Passed to the sink and notifications as the channel name
 
 
@@ -196,14 +196,6 @@ class BeamChangeAggregator:
         self._pending.clear()
 
 
-class MonitorState:
-    """Holds the runtime state of the beam monitor."""
-    def __init__(self):
-        self.beams: Dict[str, BeamState] = {
-            bt.state_key: BeamState() for bt in BEAM_TARGETS
-        }
-
-
 class BeamMonitor:
     def __init__(
         self,
@@ -217,7 +209,7 @@ class BeamMonitor:
         self.data_url = config.isis_websocket_url
         self.beam_channel = beam_channel
         self.sink = sink
-        self.state = MonitorState()
+        self.beams: Dict[str, BeamState] = {bt.state_key: BeamState() for bt in BEAM_TARGETS}
         # Flavour lines are only picked with fun_mode on; None turns them off.
         self._flavour_rng = (rng or random.Random()) if config.fun_mode else None
         self.change_aggregator = BeamChangeAggregator(beam_channel, config.debounce_seconds, self._flavour_rng)
@@ -275,7 +267,7 @@ class BeamMonitor:
         """Handle a beam-current value update for a single target."""
         beam_val = self._safe_float(raw_val)
         new_state = self._get_power_label(beam_val, bt.state_key)
-        beam_state = self.state.beams[bt.state_key]
+        beam_state = self.beams[bt.state_key]
         prev_state = beam_state.power
         prev_val = beam_state.current
         prev_since = beam_state.since
@@ -333,7 +325,7 @@ class BeamMonitor:
                 tracker.restore(saved[name])
 
     def _beam_power(self, target: str) -> str:
-        beam_state = self.state.beams.get(target)
+        beam_state = self.beams.get(target)
         return beam_state.power if beam_state else "unknown"
 
     async def _check_collection_progress(self, time_now: datetime) -> None:
