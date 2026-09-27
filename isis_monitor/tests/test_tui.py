@@ -46,7 +46,9 @@ def test_start_draws_every_panel_and_stop_stops_live():
     assert "TS1" in _panel_text(tui, "beam_table")
     assert "0/60 samples" in _panel_text(tui, "beam_graph")
     assert "rolling 60 min" in _panel_text(tui, "beam_graph")
-    assert "rolling 90s" in _panel_text(make_tui(history_maxlen=30, sample_interval=3), "beam_graph")
+    short = make_tui(history_maxlen=30, sample_interval=3)
+    short._update_beam_graph()
+    assert "rolling 90s" in _panel_text(short, "beam_graph")
     with patch.object(tui.live, "stop") as mock_stop:
         tui.stop()
     mock_stop.assert_called_once()
