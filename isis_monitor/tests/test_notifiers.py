@@ -354,3 +354,30 @@ async def test_full_queue_drops_the_oldest_notification(caplog):
     # broadcast() doesn't yield, so all four arrive before the worker takes one.
     assert slow.sent == ["c", "d"]
     assert "dropped notification: a" in caplog.text and "dropped notification: b" in caplog.text
+
+
+
+@pytest.mark.asyncio
+async def test_worker_survives_an_unexpected_send_error(caplog):
+    channel = NotificationChannel("Beam")
+    slow = _SlowNotifier(0)
+    channel.add_notifier(slow)
+    with patch.object(channel, "_send", side_effect=[RuntimeError("boom"), None]) as send:
+        await channel.broadcast(Notification(title="a", text=""))
+        await channel.broadcast(Notification(title="b", text=""))
+        await channel.flush(1)
+    assert send.await_count == 2
+    assert "Sending on channel 'Beam' failed" in caplog.text
+    await channel.close()
+
+
+@pytest.mark.asyncio
+async def test_broadcast_after_close_is_ignored(caplog):
+    channel = NotificationChannel("Beam")
+    slow = _SlowNotifier(0)
+    channel.add_notifier(slow)
+    await channel.close()
+    await channel.broadcast(Notification(title="late", text=""))
+    await asyncio.sleep(0.01)
+    assert slow.sent == [] and channel._worker is None
+    assert "is closed; not sending: late" in caplog.text

@@ -163,6 +163,7 @@ class NotificationChannel:
         self.notifiers: List[Notifier] = []
         self._queue: Optional[asyncio.Queue] = None
         self._worker: Optional[asyncio.Task] = None
+        self._closed = False
 
     def add_notifier(self, notifier: Notifier):
         self.notifiers.append(notifier)
@@ -173,6 +174,9 @@ class NotificationChannel:
             logger.debug(
                 f"Channel '{self.name}' has no notifiers configured; skipping broadcast."
             )
+            return
+        if self._closed:
+            logger.warning(f"Channel '{self.name}' is closed; not sending: {notification.title}")
             return
         if not notification.channel:
             notification = replace(notification, channel=self.name)
@@ -190,6 +194,8 @@ class NotificationChannel:
             notification = await self._queue.get()
             try:
                 await self._send(notification)
+            except Exception:  # never let one bad send stop all later ones
+                logger.exception(f"Sending on channel '{self.name}' failed")
             finally:
                 self._queue.task_done()
 
@@ -203,7 +209,8 @@ class NotificationChannel:
                 logger.error(f"{type(notifier).__name__} failed on channel '{self.name}': {result!r}")
 
     async def flush(self, timeout: Optional[float] = None) -> bool:
-        """Wait until everything queued so far has been sent; False on timeout."""
+        """Wait until the queue is empty (including anything queued meanwhile);
+        False on timeout."""
         if self._queue is None:
             return True
         try:
@@ -213,6 +220,7 @@ class NotificationChannel:
             return False
 
     async def close(self) -> None:
+        self._closed = True
         if not await self.flush(self.CLOSE_TIMEOUT):
             logger.warning(f"Channel '{self.name}' closed with {self._queue.qsize()} notification(s) unsent")
         if self._worker is not None:
