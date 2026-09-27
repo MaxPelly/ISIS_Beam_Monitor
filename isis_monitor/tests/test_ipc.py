@@ -44,34 +44,6 @@ async def test_ipc_snapshot_and_command(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ipc_subscribe_updates(tmp_path):
-    socket_path = tmp_path / "daemon.sock"
-    state = DaemonState()
-
-    async def command_handler(_name: str):
-        return {"ok": True}
-
-    server = IPCServer(socket_path, state, command_handler)
-    await server.start()
-
-    client = IPCClient(socket_path)
-    await client.connect()
-
-    sub = await client.request({"method": "subscribe_updates"})
-    assert sub["ok"] is True
-
-    state.update_beam_state("TS1", 12.3, "low")
-
-    events = client.iter_events()
-    payload = await asyncio.wait_for(events.__anext__(), timeout=1.0)
-    assert payload["event"] == "beam"
-    assert payload["payload"]["beam"] == "TS1"
-
-    await client.close()
-    await server.stop()
-
-
-@pytest.mark.asyncio
 async def test_ipc_request_and_events_do_not_race(tmp_path):
     """A command sent while the event stream is being consumed must not
     raise — request() and iter_events() no longer share a bare readline()."""
@@ -107,7 +79,7 @@ async def test_ipc_request_and_events_do_not_race(tmp_path):
     with contextlib.suppress(asyncio.CancelledError):
         await consumer_task
 
-    assert any(ev["event"] == "beam" for ev in received_events)
+    assert any(ev["event"] == "beam" and ev["payload"]["beam"] == "TS1" for ev in received_events)
 
     await client.close()
     await server.stop()
