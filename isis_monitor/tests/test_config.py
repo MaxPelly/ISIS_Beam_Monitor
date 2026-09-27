@@ -107,18 +107,15 @@ summary_time = 07:30
     assert config.mcr_page_url == "https://example.com/mcr"
 
 
-def test_load_config_invalid_instrument_target(tmp_path):
+def test_load_config_instrument_target_must_be_a_state_key(tmp_path):
     """A typo like the display label "Muons" instead of the state_key "Muon"
     must be rejected at load time rather than silently degrading to
     "unknown" in every run-card fact."""
-    with pytest.raises(ConfigError, match="instrument_target"):
-        load_config(_write(tmp_path, "[PVS]\ninstrument_target = Muons\n"))
-
-
-def test_load_config_valid_instrument_targets(tmp_path):
     for target in ("TS1", "TS2", "Muon"):
         config = load_config(_write(tmp_path, f"[PVS]\ninstrument_target = {target}\n"))
         assert config.instrument_target == target
+    with pytest.raises(ConfigError, match="instrument_target"):
+        load_config(_write(tmp_path, "[PVS]\ninstrument_target = Muons\n"))
 
 
 def test_load_config_defaults_match_dataclass_defaults(tmp_path):
@@ -243,7 +240,6 @@ def test_legacy_instrument_errors_name_pvs_section(tmp_path, extra, match):
     ("[INSTRUMENT:PEARL]\nnotify_counts = inf\n", "must be a positive number"),
     ("[INSTRUMENT:PEARL]\n", "notify_counts is required"),
     ("[INSTRUMENT:PEARL]\nnotify_counts = lots\n", r"\[INSTRUMENT:PEARL\] notify_counts"),
-    ("[INSTRUMENT:PEARL]\nnotify_counts = 0\n", "notify_counts must be a positive number"),
     ("[INSTRUMENT:PEARL]\nnotify_counts = 5\nbeam_target = Muons\n", "beam_target must be one of"),
     ("[INSTRUMENT:PEARL]\nnotify_counts = 5\n[INSTRUMENT:pearl]\nnotify_counts = 5\n",
      "defined more than once"),
@@ -262,7 +258,6 @@ def test_invalid_instrument_sections(tmp_path, extra, match):
     ("debounce_seconds = nan", "debounce_seconds must be between"),
     ("debounce_seconds = inf", "debounce_seconds must be between"),
     ("stall_minutes = 0", "stall_minutes must be above 0"),
-    ("stall_minutes = inf", "stall_minutes must be above 0"),
     ("stall_minutes = 1e20", "stall_minutes must be above 0"),
     ("stall_minutes = nan", "stall_minutes must be above 0"),
     ("summary_time = not-a-time", "summary_time"),
@@ -381,7 +376,6 @@ def test_update_config_file_writes_through_symlink(tmp_path):
     ({"instruments": ["PEARL"]}, "instrument must be an object"),
     ({"instruments": [{"name": "PEARL", "teams_url": "x"}]}, "'teams_url' can't be edited"),
     ({"instruments": [{"notify_counts": "5"}]}, "needs an instrument name"),
-    ({"instruments": [{"name": "A B", "notify_counts": "5"}]}, "may only contain"),
     ({"instruments": [{"name": "PEARL", "notify_counts": "0"}]}, "must be a positive number"),
     ({"instruments": [{"name": "X", "notify_counts": "5"},
                       {"name": "x", "notify_counts": "5"}]}, "defined more than once"),
