@@ -10,8 +10,7 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.table import Table
 
-from isis_monitor.beam import CHANNEL_LABELS
-from isis_monitor.config import TARGET_LABELS
+from isis_monitor.config import CHANNEL_LABELS, TARGET_LABELS
 
 
 _STATE_COLOURS = {

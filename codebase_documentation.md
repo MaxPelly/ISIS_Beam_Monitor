@@ -9,7 +9,7 @@ The ISIS Beam Monitor is a real-time monitoring system designed to track acceler
 ### High-Level Design
 The system uses a two-tier architecture (daemon and client) communicating via local UNIX domain sockets:
 1.  **Daemon**: A long-lived background process holding the master `DaemonState` (in `daemon_state.py`). It orchestrates monitors, persists state to a local SQLite database (`storage.py`), and serves multiple clients via JSON over IPC (`ipc.py`).
-2.  **Monitors**: Asynchronous tasks that fetch and process data from external sources (WebSockets for beam data, HTTP polling for MCR news). They feed data into the `DaemonState` via `MonitorSinkProtocol`.
+2.  **Monitors**: Asynchronous tasks that fetch and process data from external sources (WebSockets for beam data, HTTP polling for MCR news). They report into the `DaemonState` passed to them as `sink` (a mock in tests).
 3.  **Notifications**: `isis_monitor/messages.py` builds channel-agnostic `Notification` objects (title, severity, emoji, facts, optional flavour/URL) for every notification-worthy event; `notifiers.py` renders and delivers them (e.g. as Microsoft Teams Adaptive Cards) via `NotificationChannel`s.
 4.  **TUI Client**: A terminal UI built with the `rich` library. It acts as an IPC client, fetching the initial state snapshot from the daemon and then subscribing to a real-time event stream to update its display. It can also edit a subset of the config over IPC; the daemon validates and saves it, then re-execs itself to apply it.
 
@@ -20,7 +20,7 @@ The system uses a two-tier architecture (daemon and client) communicating via lo
 ### `isis_monitor/beam.py`
 The core logic for accelerator beam monitoring.
 -   **`BeamMonitor`**: Manages the single WebSocket connection. It subscribes to the three beam-current PVs plus every instrument's counts and run-name PVs, handles beam updates itself, and routes instrument PVs to the owning `InstrumentTracker` (`pv_to_counts` / `pv_to_run_name`; config validation guarantees no PV is shared). `run()` works until cancelled: it gathers the websocket loop (`_run_loop`, a plain `async for` over messages that reconnects after `beam_reconnect_interval`, or immediately when `request_reconnect()` closes the socket; `_classify_ws_error()` sorts failures into transient ones (dropped connections, timeouts, 5xx) and persistent ones (a rejected handshake, bad URL, TLS or DNS failure, or an unexpected error), which set beam health to `"error"` and double the retry wait up to `BEAM_MAX_BACKOFF` (300s, or the interval if that's longer) until the next successful connection; repeats of the same kind of failure are logged at debug, and one line summarises the outage on reconnect) with `_collection_check_loop`, which runs each tracker's stall check roughly every 60s (one failing tracker is logged and doesn't stop the others). A malformed PV update is logged and skipped rather than dropping the connection.
--   **`BeamTarget`**: `state_key` ("TS1"/"TS2"/"Muon", also used in messages and as an instrument's `beam_target`) and `channel_label` ("TS1"/"TS2"/"Muons", used by the sink, TUI and notification routing). Both come from `config.TARGET_LABELS`, the one definition of the three targets (`BEAM_TARGET_KEYS` and `beam.CHANNEL_LABELS` are derived from it).
+-   **`BeamTarget`**: `state_key` ("TS1"/"TS2"/"Muon", also used in messages and as an instrument's `beam_target`) and `channel_label` ("TS1"/"TS2"/"Muons", used by the sink, TUI and notification routing). Both come from `config.TARGET_LABELS`, the one definition of the three targets (`BEAM_TARGET_KEYS` and `CHANNEL_LABELS` are derived from it).
 -   **State Management**: Tracks current beam currents and power levels (off, low, medium, high) to detect transitions, plus per-target `since` timestamps; held in `BeamMonitor.beams` (one `BeamState` per target); `_beam_power(target)` lets trackers look up their instrument's beam. Flavour lines use one rng that `BeamMonitor` passes to the aggregator and trackers only when `fun_mode` is on (otherwise `None`).
 -   **`BeamChangeAggregator`**: Debounces raw beam-state transitions for `debounce_seconds` before turning them into notifications, dropping ones that flap back to their original state, and noting when other targets went off in the same window (the three targets share one accelerator, so correlated trips are the common case, not an edge case).
 
@@ -81,9 +81,6 @@ Manages local communication between the daemon and clients.
 ### `main.py` — restarting the daemon
 `run_daemon` returns `True` when a restart was requested (a successful `update_config` or the `restart` command; config edits are serialised with a lock and refused once a restart is pending). `main()` then, after the lock, database and socket are released, calls `restart_process()`: it flushes output and `os.execve`s the same interpreter and `sys.orig_argv`, keeping the PID, with `ISIS_MONITOR_RESTARTED=1` so the new process ignores `-n/--notify_current`. If exec fails it prints the error and exits 1. Tests make `os.execve` raise via an autouse fixture, since a real exec would replace pytest.
 
-### `isis_monitor/protocols.py`
-Defines `MonitorSinkProtocol`, the interface monitors use to report into `DaemonState` (or a mock in tests).
-
 ---
 
 ## Configuration
@@ -128,7 +125,6 @@ In `RichTUI._make_layout()`, sections are defined using `split_column` and `spli
 -   **Multiple Notifiers**: Add support for Email, Slack, or SMS notifiers by implementing the `Notifier` interface.
 
 ### Best Practices for Extension
-1.  **Follow the Protocols**: Always use `isis_monitor.protocols` when adding new sinks to keep monitors decoupled.
-2.  **Async/Await**: Ensure all blocking I/O (like networking or DB access) is handled asynchronously (or wrapped in `to_thread`, or `store.run` for SQLite) to prevent freezing the TUI or Daemon.
-3.  **State Safety**: `DaemonState` and `RichTUI` are only touched from the event-loop thread. Code running in a worker thread must hand results back to the loop rather than mutating them directly.
-4.  **Shutdown**: Monitors run until cancelled (`main.run_until_stopped`), so they need no stop-event plumbing; loops that write to SQLite instead watch `stop_event` so an in-flight write finishes before the store is closed.
+1.  **Async/Await**: Ensure all blocking I/O (like networking or DB access) is handled asynchronously (or wrapped in `to_thread`, or `store.run` for SQLite) to prevent freezing the TUI or Daemon.
+2.  **State Safety**: `DaemonState` and `RichTUI` are only touched from the event-loop thread. Code running in a worker thread must hand results back to the loop rather than mutating them directly.
+3.  **Shutdown**: Monitors run until cancelled (`main.run_until_stopped`), so they need no stop-event plumbing; loops that write to SQLite instead watch `stop_event` so an in-flight write finishes before the store is closed.

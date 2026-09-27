@@ -9,9 +9,9 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Deque, Optional, Sequence, Tuple
 
 from isis_monitor.config import InstrumentConfig
+from isis_monitor.daemon_state import DaemonState
 from isis_monitor.messages import collection_stalled, run_finishing, run_milestone, run_started
 from isis_monitor.notifiers import NotificationChannel
-from isis_monitor.protocols import MonitorSinkProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class InstrumentTracker:
         stall_minutes: float,
         finish_warning_minutes: float = 15.0,
         flavour_rng: Optional[random.Random] = None,  # set only with fun_mode
-        sink: Optional[MonitorSinkProtocol] = None,
+        sink: Optional[DaemonState] = None,
     ):
         self.instrument = instrument
         self.experiment_channel = experiment_channel

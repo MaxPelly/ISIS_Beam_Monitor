@@ -13,10 +13,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import websockets
 
 from isis_monitor.config import TARGET_LABELS, AppConfig
+from isis_monitor.daemon_state import DaemonState
 from isis_monitor.instrument import InstrumentTracker
 from isis_monitor.messages import beam_change, fmt_duration, startup_status
 from isis_monitor.notifiers import NotificationChannel
-from isis_monitor.protocols import MonitorSinkProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,6 @@ class BeamTarget:
 
 
 BEAM_TARGETS: List[BeamTarget] = [BeamTarget(key, label) for key, label in TARGET_LABELS.items()]
-CHANNEL_LABELS: Tuple[str, ...] = tuple(TARGET_LABELS.values())  # "TS1", "TS2", "Muons"
 
 
 @dataclass
@@ -182,7 +181,7 @@ class BeamMonitor:
         config: AppConfig,
         beam_channel: NotificationChannel,
         experiment_channel: NotificationChannel,
-        sink: Optional[MonitorSinkProtocol] = None,
+        sink: Optional[DaemonState] = None,
         rng: Optional[random.Random] = None,
     ):
         self.config = config

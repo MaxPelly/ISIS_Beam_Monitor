@@ -20,6 +20,7 @@ logger = logging.getLogger("isis_monitor.config")
 # (used by the sink, TUI and notification routing).
 TARGET_LABELS = {"TS1": "TS1", "TS2": "TS2", "Muon": "Muons"}
 BEAM_TARGET_KEYS = tuple(TARGET_LABELS)
+CHANNEL_LABELS = tuple(TARGET_LABELS.values())  # "TS1", "TS2", "Muons"
 
 # Teams payload channel for an instrument's run cards: "experiment" sends the
 # experiment NotificationChannel's name ("Experiment Updates"), "instrument"

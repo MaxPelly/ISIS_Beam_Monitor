@@ -8,9 +8,9 @@ import aiohttp
 from typing import Optional
 
 from isis_monitor.config import AppConfig
+from isis_monitor.daemon_state import DaemonState
 from isis_monitor.messages import mcr_news
 from isis_monitor.notifiers import NotificationChannel
-from isis_monitor.protocols import MonitorSinkProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class MCRNewsMonitor:
         config: AppConfig,
         channel: NotificationChannel,
         notify_current: bool = False,
-        sink: Optional[MonitorSinkProtocol] = None,
+        sink: Optional[DaemonState] = None,
         rng: Optional[random.Random] = None,
     ):
         self.config = config

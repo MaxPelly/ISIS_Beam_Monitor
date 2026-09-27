@@ -16,10 +16,11 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
-from isis_monitor.beam import BeamMonitor, CHANNEL_LABELS
+from isis_monitor.beam import BeamMonitor
 from isis_monitor.config_editor import run_config_editor
 from isis_monitor.config import (
     BEAM_TARGET_KEYS,
+    CHANNEL_LABELS,
     CHANNEL_MODES,
     ConfigChangedError,
     ConfigError,

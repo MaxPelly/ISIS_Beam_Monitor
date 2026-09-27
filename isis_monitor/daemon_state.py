@@ -8,9 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from isis_monitor.beam import CHANNEL_LABELS
-from isis_monitor.config import InstrumentConfig
-from isis_monitor.protocols import MonitorSinkProtocol
+from isis_monitor.config import CHANNEL_LABELS, InstrumentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +31,7 @@ class DaemonEvent:
     payload: dict
 
 
-class DaemonState(MonitorSinkProtocol):
+class DaemonState:
     """The daemon's in-memory state and event bus.
 
     Confined to the event-loop thread: it is not thread-safe, because the
