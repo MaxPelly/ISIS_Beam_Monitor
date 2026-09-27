@@ -358,7 +358,7 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
     ts = datetime.now(timezone.utc) - timedelta(minutes=5)
     store = SQLiteStateStore(tmp_path / "state.db")
     store.write_samples([(ts, "TS2", 7.0, "low")])
-    store.upsert_snapshot("daemon_state", json.dumps({"mcr_news": "old news", "total_runs_completed": 30}))
+    store.upsert_snapshot("daemon_state", json.dumps({"mcr_news": "old news", "instruments": {"PEARL": {"total_runs": 30}}}))
     store.commit()
     store.close()
 
@@ -373,7 +373,7 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
         await client.close()
 
     assert snap["mcr_news"] == "old news"
-    assert snap["instruments"]["PEARL"]["total_runs"] == 30  # legacy total moves to the first instrument
+    assert snap["instruments"]["PEARL"]["total_runs"] == 30
     assert history["TS2"][0]["current"] == 7.0
     assert set(beam_only) == {"beam"}
     assert set(both) == {"beam", "mcr"}

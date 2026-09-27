@@ -250,27 +250,6 @@ def test_instrument_state_persists_through_snapshot():
     assert "PEARL" not in restored.instruments
 
 
-def test_legacy_snapshot_restores_into_first_instrument():
-    """Snapshots from before multi-instrument support had one global run."""
-    legacy = json.dumps({"run_name": "Old run", "current_counts": 42.0, "total_runs_completed": 30})
-    state = DaemonState(instruments=INSTRUMENTS)
-    state.restore_from_snapshot_json(legacy)
-    assert state.instruments["PEARL"]["run_name"] == "Old run"
-    assert state.instruments["PEARL"]["counts"] == 42.0
-    assert state.instruments["PEARL"]["total_runs"] == 30
-    assert state.instruments["WISH"]["total_runs"] == 0
-
-
-def test_legacy_snapshot_without_run_fields_or_instruments_is_a_noop():
-    state = DaemonState(instruments=INSTRUMENTS)
-    state.restore_from_snapshot_json(json.dumps({"mcr_news": "x"}))
-    assert state.instruments["PEARL"]["total_runs"] == 0
-
-    empty = DaemonState()
-    empty.restore_from_snapshot_json(json.dumps({"total_runs_completed": 3}))
-    assert empty.instruments == {}
-
-
 def test_malformed_instrument_entries_in_snapshot_are_skipped():
     state = DaemonState(instruments=INSTRUMENTS)
     state.restore_from_snapshot_json(json.dumps({"instruments": {

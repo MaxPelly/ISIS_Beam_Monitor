@@ -276,17 +276,7 @@ class DaemonState(MonitorSinkProtocol):
         that have since been removed are dropped."""
         saved = snap.get("instruments")
         if not isinstance(saved, dict):
-            # Snapshot from before multi-instrument support: its single run
-            # belongs to the first instrument.
-            if not self.instruments or not any(
-                k in snap for k in ("run_name", "current_counts", "total_runs_completed")
-            ):
-                return
-            saved = {next(iter(self.instruments)): {
-                "run_name": snap.get("run_name", ""),
-                "counts": snap.get("current_counts", -1.0),
-                "total_runs": snap.get("total_runs_completed", 0),
-            }}
+            return
         for name, info in saved.items():
             if name not in self.instruments or not isinstance(info, dict):
                 continue
