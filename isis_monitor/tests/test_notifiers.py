@@ -2,7 +2,7 @@ import asyncio
 import pytest
 from dataclasses import replace
 from unittest.mock import patch, MagicMock, AsyncMock
-from isis_monitor.notifiers import TeamsNotifier, DummyNotifier, NotificationChannel, Notifier
+from isis_monitor.notifiers import _retry_after, TeamsNotifier, DummyNotifier, NotificationChannel, Notifier
 from isis_monitor.messages import Notification, Severity
 import aiohttp
 
@@ -51,12 +51,12 @@ def make_mock_session(status: int = 200, response_text: str = "OK"):
     return mock_session
 
 
-def make_status_session(*statuses: int):
+def make_status_session(*statuses: int, headers=None):
     """A session whose successive posts return each of `statuses` in turn."""
     session = make_mock_session()
     contexts = []
     for status in statuses:
-        resp = MagicMock(status=status, headers={})
+        resp = MagicMock(status=status, headers=headers or {})
         resp.text = AsyncMock(return_value="body")
         ctx = MagicMock()
         ctx.__aenter__ = AsyncMock(return_value=resp)
@@ -295,6 +295,30 @@ async def test_teams_notifier_waits_between_retries(caplog):
 
     assert [c.args[0] for c in sleep.await_args_list] == [2.0, 4.0]
     assert "retrying in 2s" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_teams_notifier_honours_retry_after():
+    notifier = TeamsNotifier("http://example.invalid/hook")
+    notifier._session = make_status_session(429, 200, headers={"Retry-After": "7"})
+
+    with patch("isis_monitor.notifiers.asyncio.sleep", new=AsyncMock()) as sleep:
+        await notifier.send(Notification(title="t", text="x"))
+
+    sleep.assert_awaited_once_with(7.0)
+
+
+def test_retry_after_parsing():
+    from datetime import datetime, timedelta, timezone
+    from email.utils import format_datetime
+    in_30s = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=30), usegmt=True)
+
+    assert _retry_after("5") == 5.0
+    assert _retry_after("3600") == 60.0  # capped
+    assert 25 <= _retry_after(in_30s) <= 30
+    assert _retry_after("Mon, 01 Jan 2001 00:00:00 GMT") == 0.0  # already past
+    for bad in (None, "", "soon", "nan", "inf"):
+        assert _retry_after(bad) is None, bad
 
 
 @pytest.mark.asyncio

@@ -1,8 +1,11 @@
 import logging
 import asyncio
 import contextlib
+import math
 from abc import ABC, abstractmethod
 from dataclasses import replace
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import List, Optional, Tuple
 
 import aiohttp
@@ -19,6 +22,24 @@ _SEVERITY_STYLE = {
 }
 
 
+MAX_RETRY_AFTER = 60.0  # cap on a server's Retry-After, so it can't stall the channel
+
+
+def _retry_after(value: object) -> Optional[float]:
+    """Seconds to wait from a Retry-After header (seconds or an HTTP date),
+    capped at MAX_RETRY_AFTER; None if missing or unreadable."""
+    if not isinstance(value, str):
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            seconds = (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError):
+            return None
+    return min(max(seconds, 0.0), MAX_RETRY_AFTER) if math.isfinite(seconds) else None
+
+
 class Notifier(ABC):
     """Abstract interface for any notification method."""
     @abstractmethod
@@ -33,8 +54,9 @@ class TeamsNotifier(Notifier):
     """Sends notifications to a Microsoft Teams Incoming Webhook.
 
     Rate limiting (429), server errors and network failures are retried
-    after each of RETRY_DELAYS; the channel's worker waits meanwhile, so
-    this is kept short and bounded.
+    after each of RETRY_DELAYS (or the server's Retry-After, capped at
+    MAX_RETRY_AFTER); the channel's worker waits meanwhile, so this is kept
+    short and bounded.
     """
     RETRY_DELAYS = (2.0, 4.0)  # seconds before the 2nd and 3rd attempts
 
@@ -133,18 +155,21 @@ class TeamsNotifier(Notifier):
 
         payload = self._create_payload(notification)
         for attempt, delay in enumerate((*self.RETRY_DELAYS, None), 1):
-            error, retryable = await self._post(payload)
+            error, retryable, retry_after = await self._post(payload)
             if error is None:
                 return
             if delay is None or not retryable:
                 suffix = f" (after {attempt} attempts)" if attempt > 1 else ""
                 logger.error(f"{error}{suffix}")
                 return
+            if retry_after is not None:
+                delay = retry_after
             logger.warning(f"{error}; retrying in {delay:g}s")
             await asyncio.sleep(delay)
 
-    async def _post(self, payload: dict) -> Tuple[Optional[str], bool]:
-        """One attempt: (error message or None on success, whether to retry)."""
+    async def _post(self, payload: dict) -> Tuple[Optional[str], bool, Optional[float]]:
+        """One attempt: (error message or None on success, whether to retry,
+        the server's Retry-After in seconds if it gave one)."""
         try:
             session = await self._get_session()
             async with session.post(
@@ -153,16 +178,20 @@ class TeamsNotifier(Notifier):
                 timeout=aiohttp.ClientTimeout(total=self.timeout),
             ) as resp:
                 if resp.status < 400:
-                    return None, False
+                    return None, False, None
                 body = await resp.text()
                 # 429 (rate limited) and 5xx are temporary; any other 4xx won't
                 # get better by resending the same request.
                 retryable = resp.status == 429 or resp.status >= 500
-                return f"Teams webhook returned HTTP {resp.status}: {body[:200]}", retryable
+                return (
+                    f"Teams webhook returned HTTP {resp.status}: {body[:200]}",
+                    retryable,
+                    _retry_after(resp.headers.get("Retry-After")),
+                )
         except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
-            return f"Failed to send Teams webhook: {e}", True
+            return f"Failed to send Teams webhook: {e}", True, None
         except Exception as e:
-            return f"Failed to send Teams webhook: {e}", False
+            return f"Failed to send Teams webhook: {e}", False, None
 
 
 class DummyNotifier(Notifier):
