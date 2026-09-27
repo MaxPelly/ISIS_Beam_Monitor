@@ -3,12 +3,9 @@ import random
 from isis_monitor.flavour import pick
 
 
-def test_pick_is_deterministic_for_a_given_seed():
-    assert pick(("*", "high"), random.Random(1)) == pick(("*", "high"), random.Random(1))
-
-
 def test_pick_falls_back_to_wildcard_target():
     # "TS1" has no target-specific pool for "high" — falls back to ("*", "high").
+    # This also relies on pick() being deterministic for a given seed.
     target_specific = pick(("TS1", "high"), random.Random(1))
     wildcard = pick(("*", "high"), random.Random(1))
     assert target_specific == wildcard
