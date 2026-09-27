@@ -18,6 +18,8 @@ from isis_monitor.messages import (
     startup_status,
 )
 
+DT = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+
 
 # ---------------------------------------------------------------------------
 # fmt_time
@@ -25,15 +27,13 @@ from isis_monitor.messages import (
 
 def test_fmt_time_converts_utc_to_uk_local():
     # Summer, so UK is on BST (UTC+1): 13:05 UTC -> 14:05 local.
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    assert fmt_time(dt) == "Wed 23 Sep 14:05"
+    assert fmt_time(DT) == "Wed 23 Sep 14:05"
 
 
 def test_set_timezone_changes_fmt_time():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     try:
         set_timezone("America/New_York")
-        assert fmt_time(dt) == "Wed 23 Sep 09:05"
+        assert fmt_time(DT) == "Wed 23 Sep 09:05"
         assert get_timezone().key == "America/New_York"
     finally:
         set_timezone("Europe/London")  # restore the default for other tests
@@ -55,14 +55,13 @@ def test_fmt_duration():
 # ---------------------------------------------------------------------------
 
 def test_to_plain_text_includes_all_parts():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     notification = Notification(
         title="TS1 Beam is now high",
         text="Current: 150.000 uA",
         emoji="🟢",
         facts=[("Previous", "medium")],
         flavour="Off to the races.",
-        timestamp=dt,
+        timestamp=DT,
     )
 
     plain = notification.to_plain_text()
@@ -84,14 +83,13 @@ def test_to_plain_text_and_summary_omit_empty_optional_parts():
 # ---------------------------------------------------------------------------
 
 def test_to_summary_is_one_line_with_details_but_no_flavour():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     notification = Notification(
         title="TS1 Beam is now high",
         text="Current: 150.000 uA\nfacility-wide trip",
         emoji="🟢",
         facts=[("Previous", "medium"), ("Was medium for", "3h 12m")],
         flavour="Off to the races.",
-        timestamp=dt,
+        timestamp=DT,
     )
 
     summary = notification.to_summary()
@@ -107,9 +105,8 @@ def test_to_summary_is_one_line_with_details_but_no_flavour():
 # ---------------------------------------------------------------------------
 
 def test_beam_change_builder_going_up_is_good():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = beam_change(
-        "TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=3, minutes=12), dt, channel="TS1",
+        "TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=3, minutes=12), DT, channel="TS1",
     )
     assert n.title == "TS1 ⬆️ low → high"
     assert n.severity == Severity.GOOD
@@ -120,22 +117,20 @@ def test_beam_change_builder_going_up_is_good():
         ("% of high threshold", "107%"),
         ("Was low for", "3h 12m"),
     ]
-    assert n.timestamp == dt
+    assert n.timestamp == DT
     assert n.channel == "TS1"
     assert n.flavour == ""  # no rng, no flavour
 
 
 def test_beam_change_builder_dropping_to_low_is_warning():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = beam_change("TS1", "medium", "low", 20.0, 80.0, 140.0, timedelta(minutes=45), dt)
+    n = beam_change("TS1", "medium", "low", 20.0, 80.0, 140.0, timedelta(minutes=45), DT)
     assert n.title == "TS1 ⬇️ medium → low"
     assert n.severity == Severity.WARNING
     assert n.emoji == "🟠"
 
 
 def test_beam_change_builder_going_to_off_is_attention():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = beam_change("TS1", "low", "off", 0.0, 20.0, 140.0, timedelta(minutes=10), dt)
+    n = beam_change("TS1", "low", "off", 0.0, 20.0, 140.0, timedelta(minutes=10), DT)
     assert n.title == "TS1 ⬇️ low → off"
     assert n.severity == Severity.ATTENTION
     assert n.emoji == "🔴"
@@ -144,45 +139,40 @@ def test_beam_change_builder_going_to_off_is_attention():
 def test_beam_change_builder_restored_emoji_only_after_an_hour_plus_outage():
     """A quick blip (< 1h off) is not a 'restored' event — no party emoji.
     Recovering from an hour-plus outage gets the celebratory emoji instead."""
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = beam_change("TS1", "off", "high", 150.0, 0.0, 140.0, timedelta(minutes=30), dt)
+    n = beam_change("TS1", "off", "high", 150.0, 0.0, 140.0, timedelta(minutes=30), DT)
     assert n.emoji == "🟢"
-    n = beam_change("TS1", "off", "high", 150.0, 0.0, 140.0, timedelta(hours=1, minutes=5), dt)
+    n = beam_change("TS1", "off", "high", 150.0, 0.0, 140.0, timedelta(hours=1, minutes=5), DT)
     assert n.emoji == "🎉"
 
 
 def test_beam_change_builder_zero_high_threshold_does_not_crash():
     """A misconfigured (0.0) high boundary must degrade gracefully, not raise."""
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = beam_change("Muon", "low", "high", 3.0, 1.0, 0.0, timedelta(minutes=5), dt)
+    n = beam_change("Muon", "low", "high", 3.0, 1.0, 0.0, timedelta(minutes=5), DT)
     assert ("% of high threshold", "n/a") in n.facts
 
 
 def test_beam_change_builder_with_rng_picks_deterministic_flavour():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = beam_change(
-        "TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), dt, rng=random.Random(1),
+        "TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), DT, rng=random.Random(1),
     )
     assert n.flavour != ""
     # Same seed picks the same line every time.
     n2 = beam_change(
-        "TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), dt, rng=random.Random(1),
+        "TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), DT, rng=random.Random(1),
     )
     assert n.flavour == n2.flavour
 
 
 def test_beam_change_builder_includes_trip_note():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = beam_change(
-        "TS1", "low", "off", 0.0, 20.0, 140.0, timedelta(minutes=10), dt,
+        "TS1", "low", "off", 0.0, 20.0, 140.0, timedelta(minutes=10), DT,
         trip_note="⚠️ TS2 and Muons also went off, likely a facility-wide trip",
     )
     assert "facility-wide trip" in n.text
 
 
 def test_startup_status_builder():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = startup_status("TS1", "high", 150.0, dt, channel="TS1")
+    n = startup_status("TS1", "high", 150.0, DT, channel="TS1")
     assert n.title == "Monitor online: TS1 is high"
     assert n.emoji == "🛰️"
     assert "150.000 uA" in n.text
@@ -191,8 +181,7 @@ def test_startup_status_builder():
 
 
 def test_run_started_builder():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = run_started("PEARL", "Run 12346", "Run 12345", timedelta(hours=2), 1000.0, dt)
+    n = run_started("PEARL", "Run 12346", "Run 12345", timedelta(hours=2), 1000.0, DT)
     assert n.title == "PEARL: New run started"
     assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
     assert n.text == "Run 12346"
@@ -205,13 +194,12 @@ def test_run_started_builder():
         ("Final total collected", "1000.0 µA·h"),
     ]
     # Negative counts mean no reading ever arrived for the previous run.
-    n = run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), -1.0, dt)
+    n = run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), -1.0, DT)
     assert ("Final total collected", "unknown") in n.facts
 
 
 def test_run_finishing_builder():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = run_finishing("PEARL", "Run 12345", 150.0, 130.0, 0.5, "high", dt)
+    n = run_finishing("PEARL", "Run 12345", 150.0, 130.0, 0.5, "high", DT)
     assert n.title == "PEARL: Run about to finish"
     assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
     assert n.text == "Run 12345"
@@ -225,72 +213,65 @@ def test_run_finishing_builder():
         ("Instrument beam", "high"),
     ]
     # Sent ahead of the target: a real ETA (80 µA·h to go at 1 µA·h a minute).
-    n = run_finishing("PEARL", "Run 12345", 50.0, 130.0, 1 / 60, "high", dt)
+    n = run_finishing("PEARL", "Run 12345", 50.0, 130.0, 1 / 60, "high", DT)
     assert dict(n.facts)["ETA"] == "1h 20m"
     # No ETA when the rate isn't positive.
-    n = run_finishing("PEARL", "Run 12345", 50.0, 130.0, 0.0, "high", dt)
+    n = run_finishing("PEARL", "Run 12345", 50.0, 130.0, 0.0, "high", DT)
     assert "ETA" not in [key for key, _ in n.facts]
 
 
 def test_mcr_news_builder():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = mcr_news("Machine update: nothing to report.", dt)
+    n = mcr_news("Machine update: nothing to report.", DT)
     assert n.title == "MCR News"
     assert n.text == "Machine update: nothing to report."
     assert n.severity == Severity.INFO
     assert n.emoji == "📰"
     assert n.flavour == ""
     assert n.url is None
-    n = mcr_news("Machine update.", dt, url="https://example.com/mcr")
+    n = mcr_news("Machine update.", DT, url="https://example.com/mcr")
     assert n.url == "https://example.com/mcr"
     assert n.url_label == "Open MCR news"
 
 
 def test_mcr_news_builder_good_keyword():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = mcr_news("Timing issues have been rectified. Beam back on @ 15:35", dt)
+    n = mcr_news("Timing issues have been rectified. Beam back on @ 15:35", DT)
     assert n.severity == Severity.GOOD
     assert n.emoji == "🎉"
 
 
 def test_mcr_news_builder_attention_keyword():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = mcr_news("We are investigating a water flow fault on Target 2.", dt)
+    n = mcr_news("We are investigating a water flow fault on Target 2.", DT)
     assert n.severity == Severity.ATTENTION
     assert n.emoji == "🚨"
 
 
 def test_mcr_news_builder_warning_keyword():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = mcr_news("Scheduled maintenance will take place this evening.", dt)
+    n = mcr_news("Scheduled maintenance will take place this evening.", DT)
     assert n.severity == Severity.WARNING
     assert n.emoji == "🔧"
 
 
 def test_mcr_news_builder_good_checked_before_attention():
     """A resolution message naming the fault it just fixed must classify as GOOD."""
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = mcr_news("The faulty power supply in the Inner Synchrotron has been repaired.", dt)
+    n = mcr_news("The faulty power supply in the Inner Synchrotron has been repaired.", DT)
     assert n.severity == Severity.GOOD
     assert n.emoji == "🎉"
 
 
 def test_builders_pick_flavour_when_rng_given():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     rng = random.Random(1)
     for n in (
-        startup_status("TS1", "high", 150.0, dt, rng=rng),
-        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, dt, rng=rng),
-        run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", dt, rng=rng),
-        mcr_news("News", dt, rng=rng),
-        run_milestone("PEARL", 25, dt, rng=rng),
+        startup_status("TS1", "high", 150.0, DT, rng=rng),
+        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, DT, rng=rng),
+        run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", DT, rng=rng),
+        mcr_news("News", DT, rng=rng),
+        run_milestone("PEARL", 25, DT, rng=rng),
     ):
         assert n.flavour != "", n.title
 
 
 def test_collection_stalled_builder():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = collection_stalled("PEARL", "TS1", timedelta(minutes=17), dt)
+    n = collection_stalled("PEARL", "TS1", timedelta(minutes=17), DT)
     assert n.title == "PEARL: Data collection stalled"
     assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
     assert n.severity == Severity.WARNING
@@ -300,8 +281,7 @@ def test_collection_stalled_builder():
 
 
 def test_daily_summary_builder():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = daily_summary("TS1", 95.0, 2, timedelta(hours=5, minutes=30), "▁▂▃▄▅", 7, dt)
+    n = daily_summary("TS1", 95.0, 2, timedelta(hours=5, minutes=30), "▁▂▃▄▅", 7, DT)
     assert n.title == "TS1 daily summary"
     assert n.severity == Severity.GOOD  # >= 90% uptime
     assert n.emoji == "📊"
@@ -314,22 +294,20 @@ def test_daily_summary_builder():
         ("Runs in last 24h", "7"),
     ]
     assert n.channel == "TS1"  # display_name doubles as the channel label here
-    n = daily_summary("TS1", 50.0, 5, timedelta(hours=1), "▁▂", 1, dt)
+    n = daily_summary("TS1", 50.0, 5, timedelta(hours=1), "▁▂", 1, DT)
     assert n.severity == Severity.INFO  # below 90% uptime
 
 
 def test_daily_summary_shows_data_coverage_only_when_samples_are_missing():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    args = ("TS1", 95.0, 0, timedelta(hours=10), "▇", 3, dt)
+    args = ("TS1", 95.0, 0, timedelta(hours=10), "▇", 3, DT)
     assert "Data coverage" not in dict(daily_summary(*args, coverage_pct=99.5).facts)
     facts = daily_summary(*args, coverage_pct=62.4).facts
     assert facts[:2] == [("Uptime", "95%"), ("Data coverage", "62%")]
 
 
 def test_daily_summary_builder_new_record_note_and_fact_of_the_day():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = daily_summary(
-        "TS1", 95.0, 0, timedelta(hours=10), "▇", 3, dt,
+        "TS1", 95.0, 0, timedelta(hours=10), "▇", 3, DT,
         is_new_record=True, fact_of_the_day="Neutrons are neutral.",
     )
     assert "New record" in n.text
@@ -337,8 +315,7 @@ def test_daily_summary_builder_new_record_note_and_fact_of_the_day():
 
 
 def test_run_milestone_builder():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = run_milestone("PEARL", 25, dt)
+    n = run_milestone("PEARL", 25, DT)
     assert n.title == "PEARL: 25 runs completed"
     assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
     assert n.severity == Severity.GOOD
@@ -350,16 +327,15 @@ def test_no_builder_bakes_its_own_emoji_into_the_title():
     """`to_plain_text()` and the Teams card both prefix `emoji` onto `title` —
     a builder must never also embed that emoji inside the title text itself,
     or it renders twice everywhere the notification is shown."""
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     notifications = [
-        beam_change("TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), dt),
-        startup_status("TS1", "high", 150.0, dt),
-        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, dt),
-        run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", dt),
-        collection_stalled("PEARL", "TS1", timedelta(minutes=17), dt),
-        mcr_news("Machine update.", dt),
-        daily_summary("TS1", 95.0, 0, timedelta(hours=10), "▇", 3, dt, is_new_record=True),
-        run_milestone("PEARL", 25, dt),
+        beam_change("TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), DT),
+        startup_status("TS1", "high", 150.0, DT),
+        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, DT),
+        run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", DT),
+        collection_stalled("PEARL", "TS1", timedelta(minutes=17), DT),
+        mcr_news("Machine update.", DT),
+        daily_summary("TS1", 95.0, 0, timedelta(hours=10), "▇", 3, DT, is_new_record=True),
+        run_milestone("PEARL", 25, DT),
     ]
     for n in notifications:
         if n.emoji:
