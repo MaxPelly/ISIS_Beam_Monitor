@@ -177,6 +177,9 @@ class InstrumentTracker:
             await self.experiment_channel.broadcast(notification)
             self.state.end_notified = True
 
+    def reset_stall_clock(self) -> None:
+        self.state.collection_stalled_since = None
+
     def _prune_collected_samples(self, now: datetime) -> None:
         cutoff = now - COUNTS_SAMPLE_WINDOW
         samples = self.state.collected_samples

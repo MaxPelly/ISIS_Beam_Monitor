@@ -487,6 +487,7 @@ async def test_check_collection_progress_no_check_without_enough_history(mock_co
     to compare against yet — must not warn."""
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
+    m._current_ws = MagicMock()  # connected to PVWS
     tracker(m).state.run_name = "Run 1"
     now = datetime.now(timezone.utc)
 
@@ -507,6 +508,7 @@ async def test_check_collection_progress_no_false_stall_when_counts_update_in_ba
     beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
+    m._current_ws = MagicMock()  # connected to PVWS
     tracker(m).state.run_name = "Run 1"
     m.state.beams["TS1"].power = "high"
     now = datetime.now(timezone.utc)
@@ -529,6 +531,7 @@ async def test_check_collection_progress_detects_stall_when_instrument_beam_on(m
     beam_config = replace(mock_config, stall_minutes=0.01)  # ~0.6s, fast for tests
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
+    m._current_ws = MagicMock()  # connected to PVWS
     tracker(m).state.run_name = "Run 1"
     m.state.beams["TS1"].power = "high"  # instrument beam is on
 
@@ -550,6 +553,7 @@ async def test_check_collection_progress_no_stall_warning_when_instrument_beam_o
     beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
+    m._current_ws = MagicMock()  # connected to PVWS
     tracker(m).state.run_name = "Run 1"
     m.state.beams["TS1"].power = "off"  # instrument beam is off — no warning expected
 
@@ -567,6 +571,7 @@ async def test_check_collection_progress_movement_resets_stall_clock(mock_config
     beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
+    m._current_ws = MagicMock()  # connected to PVWS
     tracker(m).state.run_name = "Run 1"
     m.state.beams["TS1"].power = "high"
 
@@ -591,6 +596,7 @@ async def test_check_collection_progress_no_active_run_never_warns(mock_config, 
     beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
     m = make_monitor(beam_config, mock_channels)
+    m._current_ws = MagicMock()  # connected to PVWS
     assert tracker(m).state.run_name == ""  # no run active
     m.state.beams["TS1"].power = "high"
 
@@ -902,6 +908,7 @@ async def test_stall_check_uses_each_instruments_beam_target(mock_config, mock_c
     """WISH is on TS2, which is off, so only PEARL (on TS1, high) warns."""
     _, exp_channel = mock_channels
     m = two_instrument_monitor(replace(mock_config, stall_minutes=0.01), mock_channels)
+    m._current_ws = MagicMock()  # connected to PVWS
     m.state.beams["TS1"].power = "high"
     m.state.beams["TS2"].power = "off"
     now = datetime.now(timezone.utc)
@@ -921,6 +928,7 @@ async def test_stall_check_uses_each_instruments_beam_target(mock_config, mock_c
 @pytest.mark.asyncio
 async def test_one_instruments_failed_stall_check_does_not_skip_others(mock_config, mock_channels, caplog):
     m = two_instrument_monitor(mock_config, mock_channels)
+    m._current_ws = MagicMock()  # connected to PVWS
     m.instruments["PEARL"].check_collection_progress = AsyncMock(side_effect=RuntimeError("boom"))
     m.instruments["WISH"].check_collection_progress = AsyncMock()
 
@@ -940,6 +948,7 @@ async def test_run_cards_use_the_instruments_channel_setting(mock_config, mock_c
     sink = MagicMock()
     sink.record_run_completed.return_value = 25
     m = make_monitor(config, mock_channels, sink=sink)
+    m._current_ws = MagicMock()  # connected to PVWS
     t = tracker(m)
     m.state.beams["TS1"].power = "high"
     t.state.run_name = "Run 24"
@@ -980,3 +989,23 @@ async def test_repeated_run_title_after_reconnect_keeps_the_run_start_time(mock_
     await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": base64.b64encode(b"Run 2").decode()})
     card = exp_channel.broadcast.call_args[0][0]
     assert dict(card.facts)["Duration"].startswith("6h")
+
+
+
+@pytest.mark.asyncio
+async def test_no_stall_warning_while_pvws_is_disconnected(mock_config, mock_channels):
+    """Counts are frozen and beam states stale during an outage."""
+    _, exp_channel = mock_channels
+    m = make_monitor(replace(mock_config, stall_minutes=0.01), mock_channels)
+    t = tracker(m)
+    t.state.run_name = "Run 1"
+    m.state.beams["TS1"].power = "high"  # last known before the outage
+    now = datetime.now(timezone.utc)
+    _seed_collected_baseline(m, now, 100.0)
+    t.state.current_counts = 100.0
+    t.state.collection_stalled_since = now - timedelta(minutes=30)
+
+    await m._check_collection_progress(now)
+    await m._check_collection_progress(now + timedelta(minutes=5))
+    exp_channel.broadcast.assert_not_called()
+    assert t.state.collection_stalled_since is None  # restarts once reconnected

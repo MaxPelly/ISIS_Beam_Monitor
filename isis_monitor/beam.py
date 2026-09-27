@@ -297,6 +297,12 @@ class BeamMonitor:
         return beam_state.power if beam_state else "unknown"
 
     async def _check_collection_progress(self, time_now: datetime) -> None:
+        if self._current_ws is None:
+            # Counts can't move while PVWS is disconnected, and beam states are
+            # stale; don't mistake that for a stall. The clock restarts on reconnect.
+            for tracker in self.instruments.values():
+                tracker.reset_stall_clock()
+            return
         for tracker in self.instruments.values():
             # One instrument's failure mustn't stop the others being checked.
             try:
