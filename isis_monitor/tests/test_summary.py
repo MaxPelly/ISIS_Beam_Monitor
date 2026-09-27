@@ -73,6 +73,15 @@ def test_compute_summary_coverage_counts_missing_samples():
     assert fast.coverage_pct == 30.0
 
 
+def test_compute_summary_on_streak_does_not_span_a_feed_gap():
+    t0 = datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc)
+    hour_on = [(t0 + timedelta(minutes=i), 150.0, "high") for i in range(61)]
+    after_gap = [(ts + timedelta(hours=7), cur, power) for ts, cur, power in hour_on]
+    summary = compute_summary({"TS1": hour_on + after_gap}, since=t0)["TS1"]
+    assert summary.longest_on_streak == timedelta(hours=1)
+    assert summary.trips == 0
+
+
 def test_compute_summary_treats_unknown_as_off():
     t0 = datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc)
     samples = [(t0, 10.0, "unknown"), (t0 + timedelta(minutes=1), 10.0, "unknown")]
@@ -163,8 +172,8 @@ async def test_daily_summary_loop_flags_and_persists_new_record(tmp_path):
 
     state = DaemonState()
     t0 = datetime.now(timezone.utc) - timedelta(hours=2)
-    state.history["TS1"].append((t0, 10.0, "high"))
-    state.history["TS1"].append((t0 + timedelta(hours=2), 10.0, "high"))
+    for minute in range(121):
+        state.history["TS1"].append((t0 + timedelta(minutes=minute), 10.0, "high"))
 
     store = SQLiteStateStore(tmp_path / "summary_test3.db")
     beam_channel = NotificationChannel("Beam")

@@ -49,6 +49,7 @@ def compute_summary(
     """
     until = until or datetime.now(timezone.utc)
     expected_samples = max((until - since).total_seconds() / sample_interval, 1.0)
+    max_gap = timedelta(seconds=1.5 * sample_interval)
     summaries: Dict[str, TargetSummary] = {}
     for beam, samples in history.items():
         recent = [s for s in samples if s[0] >= since]
@@ -62,18 +63,20 @@ def compute_summary(
         trips = 0
         longest_on_streak = timedelta(0)
         streak_start = recent[0][0] if recent[0][2] not in _OFF_LIKE else None
-        prev_power = recent[0][2]
+        prev_ts, prev_power = recent[0][0], recent[0][2]
         for ts, _, power in recent[1:]:
             is_on = power not in _OFF_LIKE
-            was_on = prev_power not in _OFF_LIKE
-            if was_on and not is_on:
+            if prev_power not in _OFF_LIKE and not is_on:
                 trips += 1
-                if streak_start is not None:
-                    longest_on_streak = max(longest_on_streak, ts - streak_start)
-                    streak_start = None
-            elif not was_on and is_on:
+            # A gap means the feed was down, so the beam wasn't seen to stay
+            # on through it: a streak ends at the last sample before one.
+            gap = ts - prev_ts > max_gap
+            if streak_start is not None and (gap or not is_on):
+                longest_on_streak = max(longest_on_streak, (prev_ts if gap else ts) - streak_start)
+                streak_start = None
+            if is_on and streak_start is None:
                 streak_start = ts
-            prev_power = power
+            prev_ts, prev_power = ts, power
         if streak_start is not None:
             longest_on_streak = max(longest_on_streak, recent[-1][0] - streak_start)
 
