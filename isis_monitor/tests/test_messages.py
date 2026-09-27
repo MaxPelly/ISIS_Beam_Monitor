@@ -74,10 +74,9 @@ def test_to_plain_text_includes_all_parts():
     assert "Wed 23 Sep 14:05" in plain
 
 
-def test_to_plain_text_omits_empty_optional_parts():
-    notification = Notification(title="Title", text="Text")
-    plain = notification.to_plain_text()
-    assert plain == "Title\nText"
+def test_to_plain_text_and_summary_omit_empty_optional_parts():
+    assert Notification(title="Title", text="Text").to_plain_text() == "Title\nText"
+    assert Notification(title="Title", text="").to_summary() == "Title"
 
 
 # ---------------------------------------------------------------------------
@@ -101,10 +100,6 @@ def test_to_summary_is_one_line_with_details_but_no_flavour():
         "🟢 TS1 Beam is now high | Current: 150.000 uA facility-wide trip"
         " | Previous: medium | Was medium for: 3h 12m | Wed 23 Sep 14:05"
     )
-
-
-def test_to_summary_omits_empty_optional_parts():
-    assert Notification(title="Title", text="").to_summary() == "Title"
 
 
 # ---------------------------------------------------------------------------
@@ -146,11 +141,14 @@ def test_beam_change_builder_going_to_off_is_attention():
     assert n.emoji == "🔴"
 
 
-def test_beam_change_builder_short_outage_keeps_state_emoji():
-    """A quick blip (< 1h off) is not a 'restored' event — no party emoji."""
+def test_beam_change_builder_restored_emoji_only_after_an_hour_plus_outage():
+    """A quick blip (< 1h off) is not a 'restored' event — no party emoji.
+    Recovering from an hour-plus outage gets the celebratory emoji instead."""
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = beam_change("TS1", "off", "high", 150.0, 0.0, 140.0, timedelta(minutes=30), dt)
     assert n.emoji == "🟢"
+    n = beam_change("TS1", "off", "high", 150.0, 0.0, 140.0, timedelta(hours=1, minutes=5), dt)
+    assert n.emoji == "🎉"
 
 
 def test_beam_change_builder_zero_high_threshold_does_not_crash():
@@ -158,13 +156,6 @@ def test_beam_change_builder_zero_high_threshold_does_not_crash():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = beam_change("Muon", "low", "high", 3.0, 1.0, 0.0, timedelta(minutes=5), dt)
     assert ("% of high threshold", "n/a") in n.facts
-
-
-def test_beam_change_builder_long_outage_is_restored():
-    """Recovering from an hour-plus outage gets the celebratory emoji instead."""
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = beam_change("TS1", "off", "high", 150.0, 0.0, 140.0, timedelta(hours=1, minutes=5), dt)
-    assert n.emoji == "🎉"
 
 
 def test_beam_change_builder_with_rng_picks_deterministic_flavour():
@@ -213,6 +204,9 @@ def test_run_started_builder():
         ("Duration", "2h 0m"),
         ("Final total collected", "1000.0 µA·h"),
     ]
+    # Negative counts mean no reading ever arrived for the previous run.
+    n = run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), -1.0, dt)
+    assert ("Final total collected", "unknown") in n.facts
 
 
 def test_run_finishing_builder():
@@ -230,13 +224,9 @@ def test_run_finishing_builder():
         ("ETA", "0s"),
         ("Instrument beam", "high"),
     ]
-
-
-def test_run_finishing_builder_omits_eta_when_rate_not_positive():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    # No ETA when the rate isn't positive.
     n = run_finishing("PEARL", "Run 12345", 50.0, 130.0, 0.0, "high", dt)
-    fact_keys = [key for key, _ in n.facts]
-    assert "ETA" not in fact_keys
+    assert "ETA" not in [key for key, _ in n.facts]
 
 
 def test_mcr_news_builder():
@@ -321,12 +311,8 @@ def test_daily_summary_builder():
         ("Runs in last 24h", "7"),
     ]
     assert n.channel == "TS1"  # display_name doubles as the channel label here
-
-
-def test_daily_summary_builder_low_uptime_is_info():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = daily_summary("TS1", 50.0, 5, timedelta(hours=1), "▁▂", 1, dt)
-    assert n.severity == Severity.INFO
+    assert n.severity == Severity.INFO  # below 90% uptime
 
 
 def test_daily_summary_builder_new_record_note_and_fact_of_the_day():
@@ -368,8 +354,3 @@ def test_no_builder_bakes_its_own_emoji_into_the_title():
         if n.emoji:
             assert n.emoji not in n.title, f"{n.emoji!r} duplicated in title of {n.title!r}"
 
-
-def test_run_started_with_no_reading_shows_unknown_total():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), -1.0, dt)
-    assert ("Final total collected", "unknown") in n.facts
