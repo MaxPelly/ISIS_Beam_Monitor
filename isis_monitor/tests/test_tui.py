@@ -61,6 +61,7 @@ class TestUpdateBeamState:
         assert tui.beam_states["TS1"] == {"current": 123.456, "power": "high"}
         text = _panel_text(tui, "beam_table")
         assert "123.456" in text and "HIGH" in text
+        assert tui.last_update.strftime("%H:%M:%S") in text  # "Last Update" in the title
 
     def test_ignores_unknown_beam_target(self):
         tui = make_tui()
@@ -158,7 +159,7 @@ class TestDaemonHistory:
         tui = make_tui()
         tui.update_connection_state("connected")
         assert tui.connection_state == "CONNECTED"
-        assert "CONNECTED" in _panel_text(tui, "header")
+        assert "[CONNECTED]" in _panel_text(tui, "header")
 
 
 # ---------------------------------------------------------------------------
@@ -188,11 +189,8 @@ class TestUpdateLog:
             tui.update_log(f"Log {i}")
         text = _panel_text(tui, "logs")
         assert "Log 19" in text and "Log 5" in text and "Log 4" not in text
+        assert text.index("Log 5") < text.index("Log 19")  # oldest first
 
-
-# ---------------------------------------------------------------------------
-# Instruments panel
-# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Instruments panel
