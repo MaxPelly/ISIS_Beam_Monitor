@@ -23,23 +23,11 @@ def test_daemon_state_snapshot():
     assert snap["beam_states"]["TS1"]["current"] == 45.0
     assert snap["health"]["daemon"] == "running"
     
-    # Check that history and logs are NOT in snapshot
+    # History and logs are fetched separately, not in the snapshot
     assert "history" not in snap
     assert "logs" not in snap
-
-def test_daemon_state_get_history_and_logs():
-    state = DaemonState()
-    ts = datetime.now(timezone.utc)
-    state.append_beam_sample("TS1", 10.0, "low", ts=ts)
     state.update_log("Log entry 1")
-
-    history = state.get_history_snapshot()
-    assert len(history["TS1"]) == 1
-    assert history["TS1"][0]["current"] == 10.0
-
-    logs = state.get_logs_snapshot()
-    assert len(logs) == 1
-    assert logs[0] == "Log entry 1"
+    assert state.get_logs_snapshot() == ["Log entry 1"]
 
 def test_daemon_state_pubsub():
     state = DaemonState()
@@ -124,20 +112,14 @@ def test_sample_all_currents_appends_publishes_and_returns_rows():
     assert len(events) == len(rows)
 
 
-def test_append_beam_sample_without_publish_and_unknown_beam():
+def test_append_beam_sample_without_publish_and_unknown_beams():
     state = DaemonState()
     q = state.subscribe()
     state.append_beam_sample("TS1", 1.0, "low", publish=False)
     state.append_beam_sample("Nope", 1.0, "low")
+    state.update_beam_state("Nope", 1.0, "low")
     assert len(state.history["TS1"]) == 1
     assert "Nope" not in state.history
-    assert q.empty()
-
-
-def test_update_beam_state_ignores_unknown_beam():
-    state = DaemonState()
-    q = state.subscribe()
-    state.update_beam_state("Nope", 1.0, "low")
     assert "Nope" not in state.beam_states
     assert q.empty()
 
@@ -159,7 +141,7 @@ def test_get_history_snapshot_limit_returns_newest():
     limited = state.get_history_snapshot(limit=2)
     assert [row["current"] for row in limited["TS1"]] == [3.0, 4.0]
     assert limited["TS2"] == []
-    assert len(state.get_history_snapshot()["TS1"]) == 5
+    assert [row["current"] for row in state.get_history_snapshot()["TS1"]] == [0.0, 1.0, 2.0, 3.0, 4.0]
 
 
 def test_run_name_and_counts_events():
