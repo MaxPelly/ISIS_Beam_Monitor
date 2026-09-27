@@ -238,7 +238,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
         stop_event.set()
 
     async def command_handler(name: str) -> dict:
-        if name in {"force_reconnect", "force_reconnect_all"}:
+        if name == "force_reconnect_all":
             return {"beam": beam_monitor.request_reconnect(), "mcr": mcr_monitor.request_reconnect()}
         if name == "force_reconnect_beam":
             return {"beam": beam_monitor.request_reconnect()}
