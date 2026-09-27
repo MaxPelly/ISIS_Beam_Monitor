@@ -428,3 +428,9 @@ def test_no_builder_bakes_its_own_emoji_into_the_title():
     for n in notifications:
         if n.emoji:
             assert n.emoji not in n.title, f"{n.emoji!r} duplicated in title of {n.title!r}"
+
+
+def test_run_started_with_no_reading_shows_unknown_total():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    n = run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), -1.0, dt)
+    assert ("Final total collected", "unknown") in n.facts

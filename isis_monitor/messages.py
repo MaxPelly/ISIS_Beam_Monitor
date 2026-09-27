@@ -192,7 +192,8 @@ def run_started(
         facts=[
             ("Previous run", prev_run_name),
             ("Duration", fmt_duration(prev_duration)),
-            ("Final total collected", f"{prev_counts:.1f} µA·h"),
+            # Negative means no reading ever arrived for that run.
+            ("Final total collected", f"{prev_counts:.1f} µA·h" if prev_counts >= 0 else "unknown"),
         ],
         flavour=flavour.pick(("*", "new_run"), rng) if rng else "",
         timestamp=time_now,
