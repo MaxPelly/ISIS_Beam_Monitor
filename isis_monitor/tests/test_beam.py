@@ -1121,3 +1121,16 @@ async def test_blank_decoded_run_title_is_ignored(mock_config, mock_channels):
     exp_channel.broadcast.assert_not_called()
     await m._handle_update({"pv": pv, "b64byt": base64.b64encode(b"Run 2").decode()})
     assert exp_channel.broadcast.call_args[0][0].text == "Run 2"
+
+
+@pytest.mark.asyncio
+async def test_reconnect_requested_during_handshake_does_not_block_later_ones(mock_config, mock_channels):
+    """The new connection satisfies a request made while it was being set up."""
+    async with FakePVWS() as server:
+        m = ws_monitor(mock_config, mock_channels, server.url)
+        m._force_reconnect.set()  # as if r was pressed mid-handshake
+        async with running(m):
+            await asyncio.wait_for(server.connected.wait(), 2)
+            await wait_until(lambda: m._current_ws is not None)
+            assert m.request_reconnect() is True  # not ignored as "already pending"
+            await wait_until(lambda: server.connections == 2)

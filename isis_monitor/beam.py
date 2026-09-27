@@ -388,6 +388,10 @@ class BeamMonitor:
             try:
                 async with websockets.connect(self.data_url) as ws:
                     self._current_ws = ws
+                    # A reconnect requested during the handshake is satisfied by
+                    # this new connection; left set, it would make later
+                    # requests no-ops until the connection next dropped.
+                    self._force_reconnect.clear()
                     logger.info("WebSocket connected.")
                     self._set_health("connected")
                     await ws.send(subscribe_msg)
