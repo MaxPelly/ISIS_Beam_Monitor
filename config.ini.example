@@ -102,5 +102,8 @@ notify_counts = 130
 # How many minutes the µA·h collected can stay flat, while the instrument's
 # beam is on, before a stall warning is sent (at most 10080, i.e. 7 days).
 # stall_minutes = 15
+# How many minutes before a run is expected to reach its notify_counts the
+# "run about to finish" card is sent (0-10080; 0 = only once it's reached).
+# finish_warning_minutes = 15
 # Time (HH:MM, in the timezone above) the daily beam-uptime summary is sent at.
 # summary_time = 08:00

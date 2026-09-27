@@ -34,6 +34,7 @@ EDITABLE_NOTIFICATION_KEYS = {
     "timezone": "notifications_timezone",
     "debounce_seconds": "debounce_seconds",
     "stall_minutes": "stall_minutes",
+    "finish_warning_minutes": "finish_warning_minutes",
     "summary_time": "summary_time",
 }
 _EDITABLE_INSTRUMENT_KEYS = ("name", *_INSTRUMENT_KEYS)
@@ -148,6 +149,8 @@ class AppConfig:
     notifications_timezone: str = _ini("NOTIFICATIONS", "Europe/London", "timezone")
     debounce_seconds: float = _ini("NOTIFICATIONS", 20.0)
     stall_minutes: float = _ini("NOTIFICATIONS", 15.0)
+    # How far ahead of a run reaching notify_counts its "about to finish" card is sent
+    finish_warning_minutes: float = _ini("NOTIFICATIONS", 15.0)
     summary_time: str = _ini("NOTIFICATIONS", "08:00")  # local HH:MM the daily summary is sent at
 
     # Built from the [INSTRUMENT:<NAME>] sections (or the legacy [PVS] keys)
@@ -281,6 +284,8 @@ def _validate(config: AppConfig, config_path: Path) -> None:
         raise ConfigError(f"[NOTIFICATIONS] debounce_seconds must be between 0 and {MAX_DEBOUNCE_SECONDS}")
     if not 0 < config.stall_minutes <= MAX_STALL_MINUTES:
         raise ConfigError(f"[NOTIFICATIONS] stall_minutes must be above 0 and at most {MAX_STALL_MINUTES}")
+    if not 0 <= config.finish_warning_minutes <= MAX_STALL_MINUTES:
+        raise ConfigError(f"[NOTIFICATIONS] finish_warning_minutes must be between 0 and {MAX_STALL_MINUTES}")
     for name, (low, high) in _BOUNDS.items():
         value = getattr(config, name)
         if not low <= value <= high:  # also rejects nan

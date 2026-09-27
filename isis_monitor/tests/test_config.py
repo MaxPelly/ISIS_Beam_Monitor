@@ -97,12 +97,14 @@ fun_mode = yes
 timezone = America/New_York
 debounce_seconds = 5
 stall_minutes = 10
+finish_warning_minutes = 30
 summary_time = 07:30
 """))
     assert config.fun_mode is True
     assert config.notifications_timezone == "America/New_York"
     assert config.debounce_seconds == 5.0
     assert config.stall_minutes == 10.0
+    assert config.finish_warning_minutes == 30.0
     assert config.summary_time == "07:30"
     assert config.mcr_page_url == "https://example.com/mcr"
 
@@ -125,7 +127,7 @@ def test_load_config_defaults_match_dataclass_defaults(tmp_path):
     assert config.mcr_poll_interval == 60.0
     assert (config.fun_mode, config.notifications_timezone, config.debounce_seconds) == (
         False, "Europe/London", 20.0)
-    assert (config.instrument_target, config.stall_minutes) == ("TS1", 15.0)
+    assert (config.instrument_target, config.stall_minutes, config.finish_warning_minutes) == ("TS1", 15.0, 15.0)
     assert (config.mcr_page_url, config.summary_time) == ("", "08:00")
     # With no [PVS] or [INSTRUMENT:*] sections the one instrument is PEARL.
     assert [(i.name, i.notify_counts) for i in config.instruments] == [("PEARL", 130.0)]
@@ -260,6 +262,8 @@ def test_invalid_instrument_sections(tmp_path, extra, match):
     ("stall_minutes = 0", "stall_minutes must be above 0"),
     ("stall_minutes = 1e20", "stall_minutes must be above 0"),
     ("stall_minutes = nan", "stall_minutes must be above 0"),
+    ("finish_warning_minutes = -1", "finish_warning_minutes must be between"),
+    ("finish_warning_minutes = nan", "finish_warning_minutes must be between"),
     ("summary_time = not-a-time", "summary_time"),
     ("summary_time = 25:00", "summary_time"),
 ])
@@ -298,7 +302,7 @@ def test_editable_settings_are_ini_strings(tmp_path):
     assert editable_settings(config) == {
         "notifications": {
             "fun_mode": "false", "timezone": "Europe/London", "debounce_seconds": "20",
-            "stall_minutes": "10", "summary_time": "08:00",
+            "stall_minutes": "10", "finish_warning_minutes": "15", "summary_time": "08:00",
         },
         "instruments": [{"name": "PEARL", "notify_counts": "130", "beam_target": "TS1", "channel": "experiment"}],
     }
