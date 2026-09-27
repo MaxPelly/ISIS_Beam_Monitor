@@ -317,3 +317,39 @@ def test_run_start_without_a_timezone_is_restored_as_utc():
     state = DaemonState(instruments=INSTRUMENTS)
     state.restore_from_snapshot_json(json.dumps({"instruments": {"WISH": {"run_started_at": "2026-09-27T08:00:00"}}}))
     assert state.instruments["WISH"]["run_started_at"] == "2026-09-27T08:00:00+00:00"
+
+
+def test_recent_run_completions_survive_a_snapshot():
+    now = datetime.now(timezone.utc)
+    state = DaemonState(instruments=INSTRUMENTS)
+    state.record_run_completed("PEARL", now - timedelta(hours=25))  # too old to keep
+    state.record_run_completed("PEARL", now - timedelta(hours=2))
+    state.record_run_completed("WISH", now - timedelta(hours=1))
+
+    snap = state.snapshot()
+    assert len(snap["run_completions"]) == 2
+    # WISH has since been removed from the config.
+    restored = DaemonState(instruments=INSTRUMENTS[:1])
+    restored.restore_from_snapshot_json(json.dumps(snap))
+    assert restored.count_runs_completed_since(now - timedelta(hours=24)) == 1
+    assert list(restored.run_completions) == [(now - timedelta(hours=2), "PEARL")]
+
+
+def test_old_and_malformed_run_completions_are_not_restored(caplog):
+    now = datetime.now(timezone.utc)
+    state = DaemonState(instruments=INSTRUMENTS)
+    state.restore_from_snapshot_json(json.dumps({"mcr_news": "x"}))  # snapshot from before this was saved
+    assert not state.run_completions
+
+    with caplog.at_level(logging.WARNING):
+        state.restore_from_snapshot_json(json.dumps({"run_completions": [
+            [(now - timedelta(hours=30)).isoformat(), "PEARL"],
+            ["not a time", "PEARL"],
+            [now.isoformat(), ["unhashable"]],
+            "junk",
+            [(now - timedelta(minutes=5)).replace(tzinfo=None).isoformat(), "WISH"],  # naive means UTC
+        ]}))
+    assert [name for _, name in state.run_completions] == ["WISH"]
+    assert "Skipped 3 malformed run completion(s)" in caplog.text
+    state.restore_from_snapshot_json(json.dumps({"run_completions": {"not": "a list"}}))
+    assert len(state.run_completions) == 1

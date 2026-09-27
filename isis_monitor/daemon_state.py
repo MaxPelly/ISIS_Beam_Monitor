@@ -5,7 +5,7 @@ import json
 import logging
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from isis_monitor.beam import CHANNEL_LABELS
@@ -15,6 +15,9 @@ from isis_monitor.protocols import MonitorSinkProtocol
 logger = logging.getLogger(__name__)
 
 SUBSCRIBER_QUEUE_SIZE = 500
+# How far back run completions are kept in the snapshot: the daily summary
+# counts runs over the last 24h, so older ones don't survive a restart.
+RUN_COMPLETIONS_WINDOW = timedelta(hours=24)
 
 
 def _aware_iso(text: str) -> str:
@@ -210,11 +213,15 @@ class DaemonState(MonitorSinkProtocol):
         )
 
     def snapshot(self) -> dict:
+        cutoff = datetime.now(timezone.utc) - RUN_COMPLETIONS_WINDOW
         return {
             "last_update": self.last_update.isoformat(),
             "beam_states": {beam: dict(state) for beam, state in self.beam_states.items()},
             "mcr_news": self.mcr_news,
             "instruments": {name: dict(info) for name, info in self.instruments.items()},
+            "run_completions": [
+                [ts.isoformat(), name] for ts, name in self.run_completions if ts >= cutoff
+            ],
             "health": dict(self.health),
         }
 
@@ -251,6 +258,7 @@ class DaemonState(MonitorSinkProtocol):
                 }
         self.mcr_news = str(snap.get("mcr_news", self.mcr_news))
         self._restore_instruments(snap)
+        self._restore_run_completions(snap.get("run_completions"))
         # Health isn't restored: saved values describe connections from before
         # the restart, and would show "connected" before anything has connected.
 
@@ -288,3 +296,22 @@ class DaemonState(MonitorSinkProtocol):
                 logger.warning(f"Skipping malformed snapshot state for instrument {name}")
                 continue
             current.update(restored)
+
+    def _restore_run_completions(self, saved: object) -> None:
+        """Restore recent completions of instruments still in the config."""
+        if not isinstance(saved, list):
+            return
+        cutoff = datetime.now(timezone.utc) - RUN_COMPLETIONS_WINDOW
+        skipped = 0
+        for entry in saved:
+            try:
+                text, name = entry
+                ts = datetime.fromisoformat(_aware_iso(text))
+                wanted = name in self.instruments and ts >= cutoff
+            except (TypeError, ValueError):  # includes an unhashable name
+                skipped += 1
+                continue
+            if wanted:
+                self.run_completions.append((ts, name))
+        if skipped:
+            logger.warning(f"Skipped {skipped} malformed run completion(s) in snapshot")
