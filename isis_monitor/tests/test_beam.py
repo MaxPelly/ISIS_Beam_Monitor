@@ -783,7 +783,7 @@ async def test_run_loop_bad_url_marks_health_and_retries(mock_config, mock_chann
 def test_classify_ws_error():
     import socket
     import ssl
-    from websockets.exceptions import ConnectionClosedError, InvalidStatus, InvalidURI
+    from websockets.exceptions import ConnectionClosedError, InvalidMessage, InvalidStatus, InvalidURI, SecurityError
     from websockets.http11 import Response
 
     cases = {
@@ -793,7 +793,10 @@ def test_classify_ws_error():
         InvalidStatus(Response(401, "Unauthorized", Headers())): "rejected",
         InvalidURI("nope", "not a ws URL"): "config",
         ssl.SSLCertVerificationError("certificate verify failed"): "tls",
-        socket.gaierror(-2, "Name or service not known"): "dns",
+        socket.gaierror(socket.EAI_NONAME, "Name or service not known"): "dns",
+        socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution"): "transient",
+        InvalidMessage("did not receive a valid HTTP response"): "transient",
+        SecurityError("too many redirects"): "rejected",
         ConnectionClosedError(None, None): "transient",
         ConnectionRefusedError(111, "refused"): "transient",
         asyncio.TimeoutError(): "transient",
@@ -857,11 +860,13 @@ async def test_run_loop_logs_repeated_failures_once(mock_config, mock_channels, 
         url = server.url
     # Server is now closed, so every attempt is refused.
     m = ws_monitor(mock_config, mock_channels, url, reconnect_interval=0.01)
-    with caplog.at_level(logging.INFO, logger="isis_monitor.beam"):
+    def logged(level):
+        return [r for r in caplog.records if "reconnecting in" in r.getMessage() and r.levelno == level]
+
+    with caplog.at_level(logging.DEBUG, logger="isis_monitor.beam"):
         async with running(m):
-            await wait_until(lambda: "reconnecting in" in caplog.text)
-            await asyncio.sleep(0.1)  # several more refused attempts
-            assert caplog.text.count("reconnecting in") == 1
+            await wait_until(lambda: len(logged(logging.DEBUG)) >= 2)  # repeats
+            assert len(logged(logging.WARNING)) == 1
 
             port = int(url.rsplit(":", 1)[1])
             server = FakePVWS()

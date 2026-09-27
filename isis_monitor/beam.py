@@ -35,13 +35,17 @@ def _classify_ws_error(exc: BaseException) -> Tuple[str, str]:
         return "rejected", f"PVWS rejected the connection (HTTP {status}); check [DATA] isis_websocket_url"
     if isinstance(exc, websockets.InvalidURI):
         return "config", f"invalid URL ({exc}); check [DATA] isis_websocket_url"
-    # Both are OSErrors, so they're checked first.
+    # Both are OSErrors, so they're checked first. EAI_AGAIN is a temporary
+    # lookup failure, as a short network outage gives.
     if isinstance(exc, ssl.SSLError):
         return "tls", f"TLS error: {exc}"
-    if isinstance(exc, socket.gaierror):
+    if isinstance(exc, socket.gaierror) and exc.errno != socket.EAI_AGAIN:
         return "dns", f"can't resolve the PVWS host ({exc}); network down or wrong URL?"
-    if isinstance(exc, (websockets.ConnectionClosed, OSError, asyncio.TimeoutError)):
+    # InvalidMessage: the handshake was cut off, e.g. while PVWS restarts.
+    if isinstance(exc, (websockets.ConnectionClosed, websockets.InvalidMessage, OSError, asyncio.TimeoutError)):
         return "transient", f"connection lost: {str(exc) or repr(exc)}"
+    if isinstance(exc, websockets.InvalidHandshake):  # e.g. too many redirects, a bad upgrade
+        return "rejected", f"PVWS handshake failed ({exc}); check [DATA] isis_websocket_url"
     return "unexpected", f"unexpected error: {exc!r}"
 
 
@@ -465,5 +469,7 @@ class BeamMonitor:
                     await asyncio.wait_for(self._force_reconnect.wait(), timeout=delay)
             if self._force_reconnect.is_set():
                 self._force_reconnect.clear()
+                # The operator may have fixed the problem: start afresh.
+                backoff, last_kind = 0.0, ""
                 logger.info("Beam reconnect requested by operator.")
                 self._set_health("reconnecting")
