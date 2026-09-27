@@ -191,7 +191,7 @@ experiment_teams_url =
 [DAEMON]
 retention_days = 0
 """)
-    with pytest.raises(ConfigError, match="retention_days"):
+    with pytest.raises(ConfigError, match=r"\[DAEMON\] retention_days must be between 1 and 365"):
         load_config(config_file)
 
 
@@ -753,3 +753,20 @@ def test_update_config_file_writes_channel(tmp_path):
     update_config_file(path, settings)
     assert load_config(path).instruments[0].channel == "instrument"
     assert "channel = instrument" in path.read_text()
+
+
+
+@pytest.mark.parametrize("extra, match", [
+    ("[TIMEOUTS_INTERVALS]\nmcr_poll_interval = 0\n", r"\[TIMEOUTS_INTERVALS\] mcr_poll_interval must be between 5"),
+    ("[TIMEOUTS_INTERVALS]\nbeam_reconnect_interval = -1\n", "beam_reconnect_interval must be between"),
+    ("[TIMEOUTS_INTERVALS]\nwebhook_timeout = 0\n", "webhook_timeout must be between 1 and 300"),
+    ("[TUI]\nsample_interval = nan\n", "sample_interval must be between"),
+    ("[TUI]\nhistory_maxlen = -5\n", "history_maxlen must be between"),
+    ("[TUI]\nlogs_maxlen = 0\n", "logs_maxlen must be between"),
+    ("[DAEMON]\nretention_days = 100000000\n", "retention_days must be between"),
+    ("[LOGGING]\nlog_backup_count = -1\n", "log_backup_count must be between"),
+    ("[DAEMON]\nretention_days = 30\n[TUI]\nsample_interval = 1\n", "samples per beam"),
+])
+def test_out_of_range_numeric_settings_are_rejected(tmp_path, extra, match):
+    with pytest.raises(ConfigError, match=match):
+        load_config(_write(tmp_path, extra))

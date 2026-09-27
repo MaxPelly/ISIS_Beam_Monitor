@@ -39,6 +39,23 @@ EDITABLE_NOTIFICATION_KEYS = {
 _EDITABLE_INSTRUMENT_KEYS = ("name", *_INSTRUMENT_KEYS)
 MAX_DEBOUNCE_SECONDS = 3600
 MAX_STALL_MINUTES = 7 * 24 * 60
+# (min, max) for numeric settings only edited by hand. Out-of-range values
+# would busy-loop (0 intervals), disable timeouts (aiohttp treats 0 as none),
+# crash (negative deque sizes, timedelta overflow) or exhaust memory.
+_BOUNDS = {
+    "mcr_poll_interval": (5, 86400),
+    "beam_reconnect_interval": (0.5, 3600),
+    "webhook_timeout": (1, 300),
+    "sample_interval": (1, 3600),
+    "history_maxlen": (1, 100_000),
+    "refresh_per_second": (1, 60),
+    "logs_maxlen": (1, 10_000),
+    "retention_days": (1, 365),
+    "log_max_bytes": (0, 1_000_000_000),
+    "log_backup_count": (0, 100),
+}
+# The daemon keeps retention_days of samples per beam in memory.
+MAX_HISTORY_SAMPLES = 100_000
 # The name becomes part of the derived run-name PV, so it must be one PV segment.
 _INSTRUMENT_NAME_RE = re.compile(r"[A-Z0-9_-]+")
 
@@ -264,8 +281,19 @@ def _validate(config: AppConfig, config_path: Path) -> None:
         raise ConfigError(f"[NOTIFICATIONS] debounce_seconds must be between 0 and {MAX_DEBOUNCE_SECONDS}")
     if not 0 < config.stall_minutes <= MAX_STALL_MINUTES:
         raise ConfigError(f"[NOTIFICATIONS] stall_minutes must be above 0 and at most {MAX_STALL_MINUTES}")
-    if config.retention_days <= 0:
-        raise ConfigError("[DAEMON] retention_days must be a positive integer")
+    for name, (low, high) in _BOUNDS.items():
+        value = getattr(config, name)
+        if not low <= value <= high:  # also rejects nan
+            meta = next(f.metadata for f in fields(AppConfig) if f.name == name)
+            raise ConfigError(
+                f"[{meta['section']}] {meta['key'] or name} must be between {low} and {high}, got {value}"
+            )
+    samples = 86400 * config.retention_days / config.sample_interval
+    if samples > MAX_HISTORY_SAMPLES:
+        raise ConfigError(
+            f"[DAEMON] retention_days / [TUI] sample_interval would keep {samples:.0f} samples per beam "
+            f"in memory (at most {MAX_HISTORY_SAMPLES}); shorten retention or lengthen the interval"
+        )
     if config.tui_reconnect_initial <= 0 or config.tui_reconnect_max <= 0:
         raise ConfigError("[TUI_CLIENT] reconnect values must be positive")
     if config.tui_reconnect_initial > config.tui_reconnect_max:
