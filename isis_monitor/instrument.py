@@ -1,6 +1,7 @@
 """Run and counts tracking for one instrument, fed by BeamMonitor's WebSocket."""
 import base64
 import logging
+import math
 import random
 from collections import deque
 from dataclasses import dataclass, field
@@ -125,18 +126,16 @@ class InstrumentTracker:
         if self.sink:
             self.sink.update_run_name(self.instrument.name, name)
 
-    async def handle_counts(self, text_val: Any, time_now: datetime) -> None:
-        if _is_blank(text_val):
-            return
+    async def handle_counts(self, raw_value: Any, time_now: datetime) -> None:
+        """`raw_value` is IN:<NAME>:DAE:TOTALUAMPS: total µA·h collected this run."""
+        # Not _is_blank(): 0 is a real reading at the start of a run.
         try:
-            # "live_current/total_collected"; live current is already
-            # tracked via the beam-current PVs, so only the total is used.
-            parts = str(text_val).split("/")
-            float(parts[0])  # validates the format; value unused
-            total_collected = float(parts[1])
-        except (IndexError, ValueError) as e:
-            logger.warning(f"Failed to parse counts from '{text_val}': {e}")
+            total_collected = float(raw_value)
+        except (TypeError, ValueError):
+            logger.warning(f"Failed to parse {self.instrument.counts_pv} value {raw_value!r}")
             return
+        if not math.isfinite(total_collected):
+            return  # PVWS sends NaN for a PV with no value yet
 
         self.state.current_counts = total_collected
         self.state.collected_samples.append((time_now, total_collected))

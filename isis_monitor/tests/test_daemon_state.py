@@ -8,8 +8,8 @@ from isis_monitor.daemon_state import SUBSCRIBER_QUEUE_SIZE, DaemonState
 from main import StateLogHandler
 
 INSTRUMENTS = [
-    InstrumentConfig("PEARL", "IN:PEARL:COUNTS", 130.0, "TS1"),
-    InstrumentConfig("WISH", "IN:WISH:COUNTS", 50.0, "TS2"),
+    InstrumentConfig("PEARL", 130.0, "TS1"),
+    InstrumentConfig("WISH", 50.0, "TS2"),
 ]
 
 def test_daemon_state_snapshot():
@@ -256,8 +256,8 @@ def test_instrument_state_persists_through_snapshot():
     # MERLIN is new and PEARL was removed from the config since the snapshot;
     # notify_counts comes from the new config, not the snapshot.
     restored = DaemonState(instruments=[
-        InstrumentConfig("WISH", "IN:WISH:COUNTS", 75.0, "TS2"),
-        InstrumentConfig("MERLIN", "IN:MERLIN:COUNTS", 10.0, "TS1"),
+        InstrumentConfig("WISH", 75.0, "TS2"),
+        InstrumentConfig("MERLIN", 10.0, "TS1"),
     ])
     restored.restore_from_snapshot_json(snap_json)
     assert restored.instruments["WISH"] == {

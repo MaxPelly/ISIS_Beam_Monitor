@@ -356,7 +356,7 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
     store.commit()
     store.close()
 
-    config = _config(tmp_path, instruments=[InstrumentConfig("PEARL", "IN:PEARL:COUNTS", 130.0, "TS1")])
+    config = _config(tmp_path, instruments=[InstrumentConfig("PEARL", 130.0, "TS1")])
     async with daemon(config):
         client = IPCClient(config.daemon_socket_path)
         await client.connect()
@@ -610,7 +610,7 @@ def _daemon_ini(tmp_path) -> Path:
     ini = tmp_path / "live.ini"
     ini.write_text(
         "[DATA]\nmcr_news_url = http://127.0.0.1:9/news\n"
-        "[INSTRUMENT:PEARL]\ncounts_pv = IN:PEARL:COUNTS\nnotify_counts = 130\n"
+        "[INSTRUMENT:PEARL]\nnotify_counts = 130\n"
     )
     return ini
 
@@ -660,7 +660,7 @@ async def test_daemon_rejects_update_based_on_stale_read(tmp_path):
     """A hand edit (or another TUI's save) since get_config must not be overwritten."""
     async with daemon_with_file(tmp_path) as (task, client, ini):
         revision = await _revision(client)
-        ini.write_text(ini.read_text() + "[INSTRUMENT:WISH]\ncounts_pv = W\nnotify_counts = 5\n")
+        ini.write_text(ini.read_text() + "[INSTRUMENT:WISH]\nnotify_counts = 5\n")
         reply = await client.request({
             "method": "update_config", "revision": revision, "settings": {"notifications": {"fun_mode": "true"}},
         })

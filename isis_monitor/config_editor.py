@@ -12,7 +12,7 @@ ReadLine = Callable[[str], Awaitable[Optional[str]]]
 Write = Callable[[str], None]
 Request = Callable[[dict], Awaitable[dict]]
 
-_INSTRUMENT_FIELDS = ("name", "counts_pv", "notify_counts", "beam_target")
+_INSTRUMENT_FIELDS = ("name", "notify_counts", "beam_target")
 
 
 class _InputClosed(Exception):
@@ -46,8 +46,8 @@ def render_menu(settings: dict) -> str:
     offset = len(notifications) + 1
     for i, inst in enumerate(settings["instruments"], start=offset):
         lines.append(
-            f"  {i:>2}) {inst.get('name', ''):<8} notify at {inst.get('notify_counts', '')}"
-            f" on {inst.get('beam_target', '') or '(default)'}  PV {inst.get('counts_pv', '')}"
+            f"  {i:>2}) {inst.get('name', ''):<8} notify at {inst.get('notify_counts', '')} µA·h"
+            f" on {inst.get('beam_target', '') or '(default)'}"
         )
     lines.append(
         "Commands: <number> edit · a add instrument · d <number> delete instrument"
@@ -89,7 +89,6 @@ async def _edit_instrument(
     edited["name"] = (await _ask_default(read_line, "Name", inst.get("name", ""))).upper()
     if not edited["name"]:
         return None
-    edited["counts_pv"] = await _ask_default(read_line, "Counts PV", inst.get("counts_pv", ""))
     edited["notify_counts"] = await _ask_default(read_line, "Notify at counts", inst.get("notify_counts", ""))
     while True:
         target = await _ask_default(
@@ -128,7 +127,7 @@ async def edit_settings(
                 instruments[index] = await _edit_instrument(instruments[index], beam_targets, read_line, write)
             elif command.lower() == "a":
                 write("Adding an instrument (leave the name blank to cancel).")
-                blank = {"name": "", "counts_pv": "", "notify_counts": "", "beam_target": ""}
+                blank = {"name": "", "notify_counts": "", "beam_target": ""}
                 added = await _edit_instrument(blank, beam_targets, read_line, write)
                 if added is not None:
                     instruments.append(added)

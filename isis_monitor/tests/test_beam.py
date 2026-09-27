@@ -14,6 +14,9 @@ from isis_monitor.beam import (
 from isis_monitor.instrument import STALL_CHECK_WINDOW, _fit_rate
 
 
+PEARL_UAMPS = "IN:PEARL:DAE:TOTALUAMPS"
+
+
 def tracker(m):
     """The monitor's only instrument tracker."""
     (only,) = m.instruments.values()
@@ -38,7 +41,7 @@ def mock_config():
         beam_teams_url="",
         experiment_teams_url="",
         instruments=[InstrumentConfig(
-            "PEARL", AppConfig.counts_pv, 100.0, "TS1", run_name_pv=AppConfig.run_name_pv,
+            "PEARL", 100.0, "TS1", run_name_pv=AppConfig.run_name_pv,
         )],
     )
 
@@ -297,7 +300,7 @@ async def test_handle_update_run_name_change_resets_end_notified(mock_config, mo
     exp_channel.broadcast.reset_mock()
     # counts_target=10 is small enough that the old "< target - 25" reset
     # path would never trip; the run-start reset must do it instead.
-    await m._handle_update({"pv": mock_config.counts_pv, "text": "5/12"})
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 12.0})
     exp_channel.broadcast.assert_called_once()
     assert "about to finish" in exp_channel.broadcast.call_args[0][0].title
 
@@ -393,18 +396,17 @@ async def test_handle_update_run_name_change_no_milestone_without_fun_mode(mock_
 
 
 # ---------------------------------------------------------------------------
-# _handle_update — counts (text) arm
+# _handle_update — counts (IN:<NAME>:DAE:TOTALUAMPS) arm
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_handle_update_counts_below_threshold(mock_config, mock_channels):
-    """counts_pv's text is live_current/total_collected — only the total
-    (parts[1]) is tracked; live current is discarded."""
+    """TOTALUAMPS publishes the total µA·h collected this run as a number."""
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels, counts_target=100)
     tracker(m).state.run_name = "Run 1"
 
-    await m._handle_update({"pv": mock_config.counts_pv, "text": "50/90"})
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 90.0})
     assert tracker(m).state.current_counts == 90.0
     exp_channel.broadcast.assert_not_called()
 
@@ -415,7 +417,7 @@ async def test_handle_update_counts_triggers_notification(mock_config, mock_chan
     m = make_monitor(mock_config, mock_channels, counts_target=100)
     tracker(m).state.run_name = "Run 1"
 
-    await m._handle_update({"pv": mock_config.counts_pv, "text": "50/110"})
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 110.0})
     assert tracker(m).state.current_counts == 110.0
     assert tracker(m).state.end_notified is True
     exp_channel.broadcast.assert_called_once()
@@ -436,7 +438,7 @@ async def test_handle_update_counts_resets_end_notified(mock_config, mock_channe
     tracker(m).state.end_notified = True
 
     # Drops below target - 25 = 75 → resets flag
-    await m._handle_update({"pv": mock_config.counts_pv, "text": "50/50"})
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 50.0})
     assert tracker(m).state.end_notified is False
 
 
@@ -445,8 +447,19 @@ async def test_handle_update_counts_malformed(mock_config, mock_channels):
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels, counts_target=100)
 
-    await m._handle_update({"pv": mock_config.counts_pv, "text": "bad_format"})
+    await m._handle_update({"pv": PEARL_UAMPS, "value": "bad_format"})
+    await m._handle_update({"pv": PEARL_UAMPS, "value": float("inf")})
+    await m._handle_update({"pv": PEARL_UAMPS, "text": "50/90"})  # old dashboard format: not routed
     assert tracker(m).state.current_counts == -1.0  # unchanged, no crash
+
+
+@pytest.mark.asyncio
+async def test_handle_update_counts_zero_is_a_real_reading(mock_config, mock_channels):
+    """TOTALUAMPS is 0 at the start of a run; that mustn't be taken as blank."""
+    m = make_monitor(mock_config, mock_channels, counts_target=100)
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 12.5})
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 0})
+    assert tracker(m).state.current_counts == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -668,7 +681,7 @@ async def test_run_loop_subscribes_and_dispatches_updates(mock_config, mock_chan
 
     assert set(server.subscriptions[0]["pvs"]) == {
         mock_config.ts1_beam_current_pv, mock_config.ts2_beam_current_pv,
-        mock_config.muon_beam_current_pv, mock_config.counts_pv, mock_config.run_name_pv,
+        mock_config.muon_beam_current_pv, PEARL_UAMPS, mock_config.run_name_pv,
     }
     sink.update_beam_state.assert_called_with("TS1", 150.0, "high")
     sink.update_health.assert_any_call("beam", "connected")
@@ -679,13 +692,13 @@ async def test_run_loop_survives_malformed_messages(mock_config, mock_channels, 
     """Bad frames and handler errors are logged and skipped, not a reconnect."""
     sink = MagicMock()
     good = {"type": "update", "pv": mock_config.ts2_beam_current_pv, "value": 40.0}
-    boom = {"type": "update", "pv": mock_config.counts_pv, "text": "1/2"}
+    boom = {"type": "update", "pv": PEARL_UAMPS, "value": 2.0}
     async with FakePVWS(["not json", "[1, 2]", {"type": "other"}, boom, good]) as server:
         m = ws_monitor(mock_config, mock_channels, server.url, sink=sink)
         original = m._handle_update
 
         async def flaky_handle_update(data):
-            if data is not None and data.get("pv") == mock_config.counts_pv:
+            if data is not None and data.get("pv") == PEARL_UAMPS:
                 raise RuntimeError("handler bug")
             await original(data)
 
@@ -808,9 +821,9 @@ async def test_handle_update_run_name_bad_base64_is_ignored(mock_config, mock_ch
 async def test_handle_update_counts_nan_ignored_and_sink_updated(mock_config, mock_channels):
     sink = MagicMock()
     m = make_monitor(mock_config, mock_channels, sink=sink)
-    await m._handle_update({"pv": mock_config.counts_pv, "text": "nan"})
+    await m._handle_update({"pv": PEARL_UAMPS, "value": "NaN"})
     sink.update_counts.assert_not_called()
-    await m._handle_update({"pv": mock_config.counts_pv, "text": "1.5/42"})
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 42.0})
     sink.update_counts.assert_called_once_with("PEARL", 42.0)
 
 
@@ -849,8 +862,8 @@ async def test_close_ws_quietly_logs_instead_of_raising(caplog):
 
 def two_instrument_monitor(mock_config, mock_channels):
     config = replace(mock_config, instruments=[
-        InstrumentConfig("PEARL", "IN:PEARL:COUNTS", 100.0, "TS1"),
-        InstrumentConfig("WISH", "IN:WISH:COUNTS", 50.0, "TS2"),
+        InstrumentConfig("PEARL", 100.0, "TS1"),
+        InstrumentConfig("WISH", 50.0, "TS2"),
     ])
     return BeamMonitor(config, *mock_channels, debounce_seconds=DEBOUNCE_SECONDS)
 
@@ -862,7 +875,7 @@ async def test_updates_are_routed_to_their_own_instrument(mock_config, mock_chan
     pearl, wish = m.instruments["PEARL"], m.instruments["WISH"]
 
     await m._handle_update({"pv": "IN:WISH:DAE:WDTITLE", "b64byt": base64.b64encode(b"Wish run").decode()})
-    await m._handle_update({"pv": "IN:WISH:COUNTS", "text": "1/60"})
+    await m._handle_update({"pv": "IN:WISH:DAE:TOTALUAMPS", "value": 60.0})
 
     assert (wish.state.run_name, wish.state.current_counts) == ("Wish run", 60.0)
     assert (pearl.state.run_name, pearl.state.current_counts) == ("", -1.0)
@@ -879,7 +892,7 @@ async def test_run_loop_subscribes_to_every_instruments_pvs(mock_config, mock_ch
         async with running(m):
             await wait_until(lambda: server.subscriptions)
 
-    assert {"IN:PEARL:COUNTS", "IN:PEARL:DAE:WDTITLE", "IN:WISH:COUNTS", "IN:WISH:DAE:WDTITLE"} <= set(
+    assert {"IN:PEARL:DAE:TOTALUAMPS", "IN:PEARL:DAE:WDTITLE", "IN:WISH:DAE:TOTALUAMPS", "IN:WISH:DAE:WDTITLE"} <= set(
         server.subscriptions[0]["pvs"]
     )
 

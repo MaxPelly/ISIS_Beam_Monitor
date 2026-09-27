@@ -20,7 +20,9 @@ logger = logging.getLogger("isis_monitor.config")
 BEAM_TARGET_KEYS = ("TS1", "TS2", "Muon")
 
 INSTRUMENT_SECTION_PREFIX = "INSTRUMENT:"
-_INSTRUMENT_KEYS = ("counts_pv", "notify_counts", "beam_target")
+_INSTRUMENT_KEYS = ("notify_counts", "beam_target")
+# Keys no longer used in instrument sections, with why, for the load-time warning.
+_RETIRED_INSTRUMENT_KEYS = {"counts_pv": "progress is now read from IN:<NAME>:DAE:TOTALUAMPS"}
 # [NOTIFICATIONS] keys the TUI may edit, mapped to their AppConfig field.
 EDITABLE_NOTIFICATION_KEYS = {
     "fun_mode": "fun_mode",
@@ -53,14 +55,16 @@ def _ini(section: str, default, key: str = ""):
 class InstrumentConfig:
     """One monitored instrument, from an `[INSTRUMENT:<NAME>]` section."""
     name: str
-    counts_pv: str
-    notify_counts: float
+    notify_counts: float  # total µA·h collected at which "run about to finish" is sent
     beam_target: str  # which beam target's state to report in run cards
+    counts_pv: str = ""  # total µA·h collected this run; derived from the name when blank
     run_name_pv: str = ""  # derived from the name when blank
     # The INI section it was read from, for error messages
     section: str = field(default="", compare=False, repr=False)
 
     def __post_init__(self):
+        if not self.counts_pv:
+            self.counts_pv = f"IN:{self.name}:DAE:TOTALUAMPS"
         if not self.run_name_pv:
             self.run_name_pv = f"IN:{self.name}:DAE:WDTITLE"
 
@@ -77,8 +81,9 @@ class AppConfig:
     experiment_teams_url: str = _ini("WEBHOOKS", "")
 
     # Legacy single-instrument settings, used only when there are no
-    # [INSTRUMENT:<NAME>] sections. instrument_target is also the default
-    # beam_target for instrument sections that don't set one.
+    # [INSTRUMENT:<NAME>] sections (counts_pv now only supplies the name).
+    # instrument_target is also the default beam_target for instrument
+    # sections that don't set one.
     counts_pv: str = _ini("PVS", "IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE")
     run_name_pv: str = _ini("PVS", "IN:PEARL:DAE:WDTITLE")
     ts1_beam_current_pv: str = _ini("PVS", "AC:TS1:BEAM:CURR")
@@ -158,7 +163,6 @@ def _read_instruments(
     if not sections:
         return [InstrumentConfig(
             name=_legacy_instrument_name(config),
-            counts_pv=config.counts_pv,
             notify_counts=config.notify_counts,
             beam_target=config.instrument_target,
             run_name_pv=config.run_name_pv,
@@ -176,11 +180,11 @@ def _read_instruments(
             )
         # options() also lists any [DEFAULT] keys, which aren't this section's fault.
         unknown = set(parser.options(section)) - set(_INSTRUMENT_KEYS) - set(parser.defaults())
+        for key in sorted(unknown & set(_RETIRED_INSTRUMENT_KEYS)):
+            logger.warning(f"[{section}] ignoring {key}: {_RETIRED_INSTRUMENT_KEYS[key]}")
+        unknown -= set(_RETIRED_INSTRUMENT_KEYS)
         if unknown:
             logger.warning(f"[{section}] ignoring unknown key(s): {', '.join(sorted(unknown))}")
-        counts_pv = parser.get(section, "counts_pv", fallback="").strip()
-        if not counts_pv:
-            raise ConfigError(f"[{section}] counts_pv is required")
         raw_counts = parser.get(section, "notify_counts", fallback="").strip()
         if not raw_counts:
             raise ConfigError(f"[{section}] notify_counts is required")
@@ -189,7 +193,7 @@ def _read_instruments(
         except ValueError as exc:
             raise ConfigError(f"[{section}] notify_counts: {exc}") from exc
         beam_target = parser.get(section, "beam_target", fallback="").strip() or config.instrument_target
-        instruments.append(InstrumentConfig(name, counts_pv, notify_counts, beam_target, section=section))
+        instruments.append(InstrumentConfig(name, notify_counts, beam_target, section=section))
     return instruments
 
 
@@ -309,7 +313,7 @@ def _format_value(value: Any) -> str:
 
 def editable_settings(config: AppConfig) -> dict:
     """The settings the TUI may edit, as INI strings:
-    {"notifications": {key: value}, "instruments": [{name, counts_pv, notify_counts, beam_target}]}."""
+    {"notifications": {key: value}, "instruments": [{name, notify_counts, beam_target}]}."""
     return {
         "notifications": {
             key: _format_value(getattr(config, attr)) for key, attr in EDITABLE_NOTIFICATION_KEYS.items()
@@ -317,7 +321,6 @@ def editable_settings(config: AppConfig) -> dict:
         "instruments": [
             {
                 "name": inst.name,
-                "counts_pv": inst.counts_pv,
                 "notify_counts": _format_value(inst.notify_counts),
                 "beam_target": inst.beam_target,
             }

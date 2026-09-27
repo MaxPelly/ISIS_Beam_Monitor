@@ -449,7 +449,7 @@ def test_legacy_pvs_become_single_instrument(tmp_path):
         tmp_path, "[PVS]\ncounts_pv = IN:WISH:COUNTS\nrun_name_pv = IN:WISH:TITLE\ninstrument_target = TS2\nnotify_counts = 50\n"
     ))
     assert config.instruments == [
-        InstrumentConfig("WISH", "IN:WISH:COUNTS", 50.0, "TS2", run_name_pv="IN:WISH:TITLE")
+        InstrumentConfig("WISH", 50.0, "TS2", run_name_pv="IN:WISH:TITLE")
     ]
 
 
@@ -470,43 +470,41 @@ def test_instrument_sections(tmp_path):
 instrument_target = TS2
 counts_pv = IGNORED
 [INSTRUMENT:PEARL]
-counts_pv = IN:PEARL:COUNTS
 notify_counts = 200
 beam_target = TS1
 [INSTRUMENT:wish]
-counts_pv = IN:WISH:COUNTS
 notify_counts = 75
 """))
     assert config.instruments == [
-        InstrumentConfig("PEARL", "IN:PEARL:COUNTS", 200.0, "TS1"),
-        InstrumentConfig("WISH", "IN:WISH:COUNTS", 75.0, "TS2"),
+        InstrumentConfig("PEARL", 200.0, "TS1"),
+        InstrumentConfig("WISH", 75.0, "TS2"),
     ]
     assert config.instruments[1].run_name_pv == "IN:WISH:DAE:WDTITLE"
 
 
 def test_instrument_section_prefix_is_case_insensitive(tmp_path):
-    config = load_config(_write(tmp_path, "[instrument:wish]\ncounts_pv = X\nnotify_counts = 5\n"))
+    config = load_config(_write(tmp_path, "[instrument:wish]\nnotify_counts = 5\n"))
     assert [i.name for i in config.instruments] == ["WISH"]
 
 
 def test_instrument_unknown_key_warns(tmp_path, caplog):
-    load_config(_write(tmp_path, "[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 5\nteams_url = http://x\n"))
+    load_config(_write(tmp_path, "[INSTRUMENT:PEARL]\nnotify_counts = 5\nteams_url = http://x\n"))
     assert "ignoring unknown key(s): teams_url" in caplog.text
 
 
 def test_instrument_default_section_keys_not_reported_as_unknown(tmp_path, caplog):
-    load_config(_write(tmp_path, "[DEFAULT]\nfoo = 1\n[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 5\n"))
+    load_config(_write(tmp_path, "[DEFAULT]\nfoo = 1\n[INSTRUMENT:PEARL]\nnotify_counts = 5\n"))
     assert "unknown key" not in caplog.text
 
 
 def test_duplicate_section_raises_config_error(tmp_path):
     with pytest.raises(ConfigError, match="Could not parse"):
-        load_config(_write(tmp_path, "[INSTRUMENT:WISH]\ncounts_pv = X\n[INSTRUMENT:WISH]\ncounts_pv = Y\n"))
+        load_config(_write(tmp_path, "[INSTRUMENT:WISH]\n[INSTRUMENT:WISH]\n"))
 
 
 @pytest.mark.parametrize("extra, match", [
     ("[PVS]\nnotify_counts = 0\n", r"^\[PVS\] notify_counts must be"),
-    ("[PVS]\ncounts_pv = X\nrun_name_pv = X\n", r"^\[PVS\] PV X is already used"),
+    ("[PVS]\nrun_name_pv = AC:TS1:BEAM:CURR\n", r"^\[PVS\] PV AC:TS1:BEAM:CURR is already used by the TS1 beam"),
 ])
 def test_legacy_instrument_errors_name_pvs_section(tmp_path, extra, match):
     with pytest.raises(ConfigError, match=match):
@@ -514,23 +512,19 @@ def test_legacy_instrument_errors_name_pvs_section(tmp_path, extra, match):
 
 
 @pytest.mark.parametrize("extra, match", [
-    ("[INSTRUMENT:]\ncounts_pv = X\n", "needs an instrument name"),
-    ("[INSTRUMENT:PE ARL]\ncounts_pv = X\nnotify_counts = 5\n", "may only contain"),
-    ("[INSTRUMENT:A:B]\ncounts_pv = X\nnotify_counts = 5\n", "may only contain"),
-    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = nan\n", "must be a positive number"),
-    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = inf\n", "must be a positive number"),
-    ("[INSTRUMENT:PEARL]\ncounts_pv = IN:WISH:DAE:WDTITLE\nnotify_counts = 5\n[INSTRUMENT:WISH]\n"
-     "counts_pv = Y\nnotify_counts = 5\n", "already used by instrument PEARL"),
-    ("[INSTRUMENT:PEARL]\ncounts_pv = X\n", "notify_counts is required"),
-    ("[INSTRUMENT:PEARL]\nnotify_counts = 5\n", "counts_pv is required"),
-    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = lots\n", r"\[INSTRUMENT:PEARL\] notify_counts"),
-    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 0\n", "notify_counts must be a positive number"),
-    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 5\nbeam_target = Muons\n", "beam_target must be one of"),
-    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 5\n[INSTRUMENT:pearl]\ncounts_pv = Y\nnotify_counts = 5\n",
+    ("[INSTRUMENT:]\n", "needs an instrument name"),
+    ("[INSTRUMENT:PE ARL]\nnotify_counts = 5\n", "may only contain"),
+    ("[INSTRUMENT:A:B]\nnotify_counts = 5\n", "may only contain"),
+    ("[INSTRUMENT:PEARL]\nnotify_counts = nan\n", "must be a positive number"),
+    ("[INSTRUMENT:PEARL]\nnotify_counts = inf\n", "must be a positive number"),
+    ("[INSTRUMENT:PEARL]\n", "notify_counts is required"),
+    ("[INSTRUMENT:PEARL]\nnotify_counts = lots\n", r"\[INSTRUMENT:PEARL\] notify_counts"),
+    ("[INSTRUMENT:PEARL]\nnotify_counts = 0\n", "notify_counts must be a positive number"),
+    ("[INSTRUMENT:PEARL]\nnotify_counts = 5\nbeam_target = Muons\n", "beam_target must be one of"),
+    ("[INSTRUMENT:PEARL]\nnotify_counts = 5\n[INSTRUMENT:pearl]\nnotify_counts = 5\n",
      "defined more than once"),
-    ("[INSTRUMENT:PEARL]\ncounts_pv = X\nnotify_counts = 5\n[INSTRUMENT:WISH]\ncounts_pv = X\nnotify_counts = 5\n",
-     "already used by instrument PEARL"),
-    ("[INSTRUMENT:PEARL]\ncounts_pv = AC:TS1:BEAM:CURR\nnotify_counts = 5\n", "already used by the TS1 beam"),
+    ("[PVS]\nts1_beam_current_pv = IN:PEARL:DAE:TOTALUAMPS\n[INSTRUMENT:PEARL]\nnotify_counts = 5\n",
+     "already used by the TS1 beam"),
 ])
 def test_invalid_instrument_sections(tmp_path, extra, match):
     with pytest.raises(ConfigError, match=match):
@@ -567,7 +561,6 @@ beam_teams_url = http://secret
 [NOTIFICATIONS]
 stall_minutes = 10
 [INSTRUMENT:PEARL]
-counts_pv = IN:PEARL:COUNTS
 notify_counts = 130
 """
 
@@ -586,12 +579,12 @@ def test_editable_settings_are_ini_strings(tmp_path):
             "fun_mode": "false", "timezone": "Europe/London", "debounce_seconds": "20",
             "stall_minutes": "10", "summary_time": "08:00",
         },
-        "instruments": [{"name": "PEARL", "counts_pv": "IN:PEARL:COUNTS", "notify_counts": "130", "beam_target": "TS1"}],
+        "instruments": [{"name": "PEARL", "notify_counts": "130", "beam_target": "TS1"}],
     }
 
 
 def test_editable_settings_keep_full_precision():
-    config = AppConfig(debounce_seconds=2.5, instruments=[InstrumentConfig("X", "C", 1234567.0, "TS1")])
+    config = AppConfig(debounce_seconds=2.5, instruments=[InstrumentConfig("X", 1234567.0, "TS1")])
     settings = editable_settings(config)
     assert settings["notifications"]["debounce_seconds"] == "2.5"
     assert settings["instruments"][0]["notify_counts"] == "1234567"
@@ -602,7 +595,7 @@ def test_update_config_file_round_trips_and_keeps_other_settings(tmp_path):
     settings = editable_settings(load_config(path))
     settings["notifications"]["fun_mode"] = "true"
     settings["instruments"][0]["notify_counts"] = "200"
-    settings["instruments"].append({"name": "wish", "counts_pv": "IN:WISH:COUNTS", "notify_counts": "50", "beam_target": "TS2"})
+    settings["instruments"].append({"name": "wish", "notify_counts": "50", "beam_target": "TS2"})
 
     returned = update_config_file(path, settings)
 
@@ -620,8 +613,8 @@ def test_update_config_file_round_trips_and_keeps_other_settings(tmp_path):
 
 
 def test_update_config_file_removes_dropped_instruments(tmp_path):
-    path = _editable_file(tmp_path, EDITABLE_BASE + "[Instrument:WISH]\ncounts_pv = W\nnotify_counts = 5\n")
-    update_config_file(path, {"instruments": [{"name": "WISH", "counts_pv": "W", "notify_counts": "5"}]})
+    path = _editable_file(tmp_path, EDITABLE_BASE + "[Instrument:WISH]\nnotify_counts = 5\n")
+    update_config_file(path, {"instruments": [{"name": "WISH", "notify_counts": "5"}]})
     assert [i.name for i in load_config(path).instruments] == ["WISH"]
 
 
@@ -629,7 +622,7 @@ def test_update_config_file_migrates_legacy_pvs_config(tmp_path):
     path = _editable_file(tmp_path, "[DATA]\nmcr_news_url = http://x\n[PVS]\ncounts_pv = IN:WISH:C\nnotify_counts = 40\n")
     update_config_file(path, editable_settings(load_config(path)))
     assert "[INSTRUMENT:WISH]" in path.read_text()
-    assert load_config(path).instruments == [InstrumentConfig("WISH", "IN:WISH:C", 40.0, "TS1")]
+    assert load_config(path).instruments == [InstrumentConfig("WISH", 40.0, "TS1")]
 
 
 def test_update_config_file_only_notifications_leaves_instruments(tmp_path):
@@ -659,11 +652,11 @@ def test_update_config_file_writes_through_symlink(tmp_path):
     ({"instruments": []}, "non-empty list"),
     ({"instruments": ["PEARL"]}, "instrument must be an object"),
     ({"instruments": [{"name": "PEARL", "teams_url": "x"}]}, "'teams_url' can't be edited"),
-    ({"instruments": [{"counts_pv": "C", "notify_counts": "5"}]}, "needs an instrument name"),
-    ({"instruments": [{"name": "A B", "counts_pv": "C", "notify_counts": "5"}]}, "may only contain"),
-    ({"instruments": [{"name": "PEARL", "counts_pv": "C", "notify_counts": "0"}]}, "must be a positive number"),
-    ({"instruments": [{"name": "X", "counts_pv": "C", "notify_counts": "5"},
-                      {"name": "x", "counts_pv": "D", "notify_counts": "5"}]}, "defined more than once"),
+    ({"instruments": [{"notify_counts": "5"}]}, "needs an instrument name"),
+    ({"instruments": [{"name": "A B", "notify_counts": "5"}]}, "may only contain"),
+    ({"instruments": [{"name": "PEARL", "notify_counts": "0"}]}, "must be a positive number"),
+    ({"instruments": [{"name": "X", "notify_counts": "5"},
+                      {"name": "x", "notify_counts": "5"}]}, "defined more than once"),
 ])
 def test_update_config_file_rejects_invalid_settings_without_writing(tmp_path, settings, match):
     path = _editable_file(tmp_path)
@@ -711,3 +704,26 @@ def test_update_config_file_directory_fsync_failure_is_only_a_warning(tmp_path, 
         update_config_file(path, {"notifications": {"fun_mode": "true"}})
     assert load_config(path).fun_mode is True
     assert "Could not fsync" in caplog.text
+
+
+def test_instrument_progress_pv_is_derived_and_old_counts_pv_is_ignored(tmp_path, caplog):
+    config = load_config(_write(
+        tmp_path, "[INSTRUMENT:POLARIS]\ncounts_pv = IN:POLARIS:CS:DASHBOARD:TAB:2:1:VALUE\nnotify_counts = 300\n"
+    ))
+    assert config.instruments[0].counts_pv == "IN:POLARIS:DAE:TOTALUAMPS"
+    assert "[INSTRUMENT:POLARIS] ignoring counts_pv: progress is now read from IN:<NAME>:DAE:TOTALUAMPS" in caplog.text
+    assert "unknown key" not in caplog.text
+
+
+def test_legacy_instrument_also_uses_totaluamps(tmp_path):
+    config = load_config(_write(tmp_path, "[PVS]\ncounts_pv = IN:MARI:CS:DASHBOARD:TAB:2:1:VALUE\n"))
+    assert (config.instruments[0].name, config.instruments[0].counts_pv) == ("MARI", "IN:MARI:DAE:TOTALUAMPS")
+
+
+def test_update_config_file_drops_old_counts_pv_and_rejects_editing_it(tmp_path):
+    path = _editable_file(tmp_path, EDITABLE_BASE + "[INSTRUMENT:WISH]\ncounts_pv = OLD\nnotify_counts = 5\n")
+    update_config_file(path, editable_settings(load_config(path)))
+    assert "counts_pv" not in path.read_text().split("[INSTRUMENT:PEARL]")[1]
+
+    with pytest.raises(ConfigError, match="'counts_pv' can't be edited"):
+        update_config_file(path, {"instruments": [{"name": "WISH", "counts_pv": "X", "notify_counts": "5"}]})

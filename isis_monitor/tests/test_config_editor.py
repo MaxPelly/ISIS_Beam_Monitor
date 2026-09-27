@@ -11,8 +11,8 @@ SETTINGS = {
         "stall_minutes": "15", "summary_time": "08:00",
     },
     "instruments": [
-        {"name": "PEARL", "counts_pv": "IN:PEARL:COUNTS", "notify_counts": "130", "beam_target": "TS1"},
-        {"name": "WISH", "counts_pv": "IN:WISH:COUNTS", "notify_counts": "50", "beam_target": "TS2"},
+        {"name": "PEARL", "notify_counts": "130", "beam_target": "TS1"},
+        {"name": "WISH", "notify_counts": "50", "beam_target": "TS2"},
     ],
 }
 TARGETS = ["TS1", "TS2", "Muon"]
@@ -47,7 +47,7 @@ async def edit(*lines):
 def test_render_menu_numbers_settings_then_instruments():
     menu = render_menu(SETTINGS)
     assert " 1) fun_mode" in menu and " 5) summary_time" in menu
-    assert " 6) PEARL    notify at 130 on TS1  PV IN:PEARL:COUNTS" in menu
+    assert " 6) PEARL    notify at 130 µA·h on TS1" in menu
     assert " 7) WISH" in menu
 
 
@@ -68,20 +68,20 @@ async def test_enter_keeps_current_value():
 
 @pytest.mark.asyncio
 async def test_edit_instrument_reprompts_for_invalid_beam_target():
-    result, term = await edit("7", "", "", "75", "Muons", "Muon", "s", "y")
+    result, term = await edit("7", "", "75", "Muons", "Muon", "s", "y")
     assert result["instruments"][1] == {
-        "name": "WISH", "counts_pv": "IN:WISH:COUNTS", "notify_counts": "75", "beam_target": "Muon",
+        "name": "WISH", "notify_counts": "75", "beam_target": "Muon",
     }
     assert "Beam target must be one of TS1, TS2, Muon." in term.text
 
 
 @pytest.mark.asyncio
 async def test_add_instrument_upper_cases_name():
-    result, term = await edit("a", "emu", "IN:EMU:COUNTS", "10", "Muon", "s", "y")
+    result, term = await edit("a", "emu", "10", "Muon", "s", "y")
     assert result["instruments"][-1] == {
-        "name": "EMU", "counts_pv": "IN:EMU:COUNTS", "notify_counts": "10", "beam_target": "Muon",
+        "name": "EMU", "notify_counts": "10", "beam_target": "Muon",
     }
-    assert "+ EMU (counts_pv=IN:EMU:COUNTS, notify_counts=10, beam_target=Muon)" in term.text
+    assert "+ EMU (notify_counts=10, beam_target=Muon)" in term.text
 
 
 @pytest.mark.asyncio
@@ -154,8 +154,8 @@ async def test_run_config_editor_lets_user_fix_invalid_config():
         {"ok": False, "error": "invalid_config", "detail": "[INSTRUMENT:WISH] notify_counts must be a positive number"},
         {"ok": True, "restarting": True},
     )
-    term = Terminal("7", "", "", "0", "", "s", "y",   # rejected by the daemon
-                    "7", "", "", "5", "", "s", "y",   # fixed; earlier edit still in place
+    term = Terminal("7", "", "0", "", "s", "y",   # rejected by the daemon
+                    "7", "", "5", "", "s", "y",   # fixed; earlier edit still in place
                     "")
     await run_config_editor(request, term.read_line, term.write)
     assert "Save failed (invalid_config): [INSTRUMENT:WISH] notify_counts" in term.text
@@ -208,7 +208,7 @@ async def test_run_config_editor_keeps_edits_when_connection_is_lost_on_save():
 
 @pytest.mark.asyncio
 async def test_beam_target_is_case_insensitive_and_stored_canonically():
-    result, _ = await edit("7", "", "", "", "muon", "s", "y")
+    result, _ = await edit("7", "", "", "muon", "s", "y")
     assert result["instruments"][1]["beam_target"] == "Muon"
 
 

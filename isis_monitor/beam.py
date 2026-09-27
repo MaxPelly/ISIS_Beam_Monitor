@@ -289,8 +289,8 @@ class BeamMonitor:
             case {"pv": pv, "b64byt": b64_data} if pv in self.pv_to_run_name:
                 await self.pv_to_run_name[pv].handle_run_name(b64_data, time_now)
 
-            case {"pv": pv, "text": text_val} if pv in self.pv_to_counts:
-                await self.pv_to_counts[pv].handle_counts(text_val, time_now)
+            case {"pv": pv, "value": raw_val} if pv in self.pv_to_counts:
+                await self.pv_to_counts[pv].handle_counts(raw_val, time_now)
 
     def _beam_power(self, target: str) -> str:
         beam_state = self.state.beams.get(target)

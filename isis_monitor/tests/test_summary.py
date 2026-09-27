@@ -288,8 +288,8 @@ async def test_daily_summary_tolerates_corrupt_persisted_values(tmp_path, caplog
 async def test_daily_summary_counts_runs_only_on_instruments_using_that_target(tmp_path):
     config = make_config(summary_time=datetime.now(get_timezone()).strftime("%H:%M"))
     state = DaemonState(instruments=[
-        InstrumentConfig("PEARL", "IN:PEARL:COUNTS", 130.0, "TS1"),
-        InstrumentConfig("EMU", "IN:EMU:COUNTS", 10.0, "Muon"),
+        InstrumentConfig("PEARL", 130.0, "TS1"),
+        InstrumentConfig("EMU", 10.0, "Muon"),
     ])
     now = datetime.now(timezone.utc)
     state.record_run_completed("PEARL", now)
