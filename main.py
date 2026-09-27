@@ -160,7 +160,8 @@ def build_channels(config, dummy: bool):
 
 
 async def state_persistence_loop(config, state: DaemonState, store: SQLiteStateStore, stop_event: asyncio.Event):
-    """Every sample_interval: sample beam currents into history and persist them."""
+    """Every sample_interval: sample beam currents into history (while the
+    beam feed is connected) and persist them."""
     while True:
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=config.sample_interval)
@@ -169,7 +170,9 @@ async def state_persistence_loop(config, state: DaemonState, store: SQLiteStateS
             pass
 
         ts = datetime.now(timezone.utc)
-        rows = state.sample_all_currents(ts)
+        # While the beam feed is down the values are stale, and sampling them
+        # would count as beam time in the daily summary; leave a gap instead.
+        rows = state.sample_all_currents(ts) if state.health["beam"] == "connected" else []
         cutoff = ts - timedelta(days=config.retention_days)
         state.trim_history_before(cutoff)
         snap = json.dumps(state.snapshot())

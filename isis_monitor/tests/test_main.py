@@ -229,6 +229,7 @@ def test_build_channels_only_configured_webhooks(tmp_path):
 async def test_state_persistence_loop_samples_trims_and_persists(tmp_path):
     config = _config(tmp_path, sample_interval=0.01, retention_days=1)
     state = DaemonState()
+    state.update_health("beam", "connected")
     state.update_beam_state("TS1", 150.0, "high")
     stale = datetime.now(timezone.utc) - timedelta(days=2)
     state.append_beam_sample("TS2", 1.0, "low", ts=stale)
@@ -248,6 +249,31 @@ async def test_state_persistence_loop_samples_trims_and_persists(tmp_path):
     assert all(ts > stale for ts, _, _ in state.history["TS2"])  # stale sample trimmed
     assert json.loads(store.load_snapshot("daemon_state"))["beam_states"]["TS1"]["power"] == "high"
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_state_persistence_loop_samples_only_while_the_beam_feed_is_connected(tmp_path):
+    config = _config(tmp_path, sample_interval=0.01)
+    state = DaemonState()
+    state.update_beam_state("TS1", 150.0, "high")  # e.g. restored, beam health still "unknown"
+    store = SQLiteStateStore(tmp_path / "state.db")
+    stop = asyncio.Event()
+
+    task = asyncio.create_task(main.state_persistence_loop(config, state, store, stop))
+    try:
+        await wait_until(lambda: store.load_snapshot("daemon_state") is not None)
+        assert not state.history["TS1"]
+        state.update_health("beam", "connected")
+        await wait_until(lambda: len(state.history["TS1"]) >= 1)
+        state.update_health("beam", "disconnected")
+        await asyncio.sleep(0.05)  # let any sample already under way finish
+        sampled = len(state.history["TS1"])
+        await asyncio.sleep(0.05)
+        assert len(state.history["TS1"]) == sampled
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, 1)
+        store.close()
 
 
 @pytest.mark.asyncio
