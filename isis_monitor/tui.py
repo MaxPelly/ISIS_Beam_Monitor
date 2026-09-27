@@ -100,7 +100,7 @@ def _fmt_window(seconds: float) -> str:
     """A history window's length, in the unit that suits its size."""
     if seconds < 120:
         return f"{seconds:.0f}s"
-    return f"{seconds / 60:.0f} min" if seconds < 7200 else f"{seconds / 3600:.0f} h"
+    return f"{round(seconds / 60, 1):g} min" if seconds < 3600 else f"{round(seconds / 3600, 1):g} h"
 
 
 class RichTUI:
@@ -279,7 +279,7 @@ class RichTUI:
         def fmt(seconds: float) -> str:  # in the bar interval's own unit
             return f"{seconds:.0f}s" if interval_s < 60 else f"{seconds / 60:.0f} min"
 
-        subtitle = f"{n}/{self.history_maxlen} samples · {fmt(interval_s)}/bar · {fmt(n * interval_s)} history"
+        subtitle = f"{n}/{self.history_maxlen} samples · {fmt(interval_s)}/bar · {_fmt_window(n * interval_s)} history"
         self.layout["beam_graph"].update(
             Panel(
                 content,
@@ -358,12 +358,13 @@ class RichTUI:
         self._update_all()
 
     def _update_logs_panel(self):
-        # Only show the latest logs that fit in the panel (layout size 16, less borders)
-        logs_to_show = list(self._logs)[-14:]
-        log_text = "\n".join(logs_to_show)
+        # The panel has 14 rows (layout size 16, less borders), and a log entry
+        # can span several lines; long lines are cut rather than wrapped, so
+        # the newest lines always fit.
+        log_text = "\n".join("\n".join(self._logs).splitlines()[-14:])
         self.layout["logs"].update(
             Panel(
-                Text(log_text, style="dim", no_wrap=False),
+                Text(log_text, style="dim", no_wrap=True, overflow="ellipsis"),
                 title="System Logs",
                 border_style="cyan",
             )

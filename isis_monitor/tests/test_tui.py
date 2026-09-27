@@ -45,8 +45,8 @@ def test_start_draws_every_panel_and_stop_stops_live():
     assert "Waiting for initial MCR news..." in _panel_text(tui, "mcr")
     assert "TS1" in _panel_text(tui, "beam_table")
     assert "0/60 samples" in _panel_text(tui, "beam_graph")
-    assert "rolling 60 min" in _panel_text(tui, "beam_graph")
-    assert _fmt_window(1800) == "30 min" and _fmt_window(86400) == "24 h"
+    assert "rolling 1 h" in _panel_text(tui, "beam_graph")
+    assert [_fmt_window(s) for s in (150, 1800, 9000, 86400)] == ["2.5 min", "30 min", "2.5 h", "24 h"]
     short = make_tui(history_maxlen=30, sample_interval=3)
     short._update_beam_graph()
     assert "rolling 90s" in _panel_text(short, "beam_graph")
@@ -195,6 +195,18 @@ class TestUpdateLog:
         text = _panel_text(tui, "logs")
         assert "Log 19" in text and "Log 6" in text and "Log 5" not in text  # 14 rows fit
         assert text.index("Log 6") < text.index("Log 19")  # oldest first
+
+    def test_newest_line_stays_visible_with_multiline_and_long_entries(self):
+        from rich.console import Console
+        tui = make_tui()
+        for i in range(12):
+            tui.update_log(f"Log {i}")
+        tui.update_log("State Change: TS1\nPrevious: high\nNow: off")
+        tui.update_log("x" * 500)
+        tui.update_log("NEWEST LINE")
+        console = Console(width=120, height=45, record=True)
+        console.print(tui.layout)
+        assert "NEWEST LINE" in console.export_text()
 
 
 # ---------------------------------------------------------------------------
