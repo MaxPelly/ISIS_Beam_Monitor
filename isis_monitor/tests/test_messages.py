@@ -221,9 +221,12 @@ def test_run_finishing_builder():
     assert n.facts == [
         ("Collected", "150.0 / 130 µA·h"),
         ("Rate", "1800.0 µA"),
-        ("ETA", "0s"),
+        ("ETA", "target reached"),
         ("Instrument beam", "high"),
     ]
+    # Sent ahead of the target: a real ETA (80 µA·h to go at 1 µA·h a minute).
+    n = run_finishing("PEARL", "Run 12345", 50.0, 130.0, 1 / 60, "high", dt)
+    assert dict(n.facts)["ETA"] == "1h 20m"
     # No ETA when the rate isn't positive.
     n = run_finishing("PEARL", "Run 12345", 50.0, 130.0, 0.0, "high", dt)
     assert "ETA" not in [key for key, _ in n.facts]

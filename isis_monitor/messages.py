@@ -220,8 +220,11 @@ def run_finishing(
     facts = [("Collected", f"{counts_collected:.1f} / {counts_target:g} µA·h")]
     # µA·h collected per hour is simply the average beam current, in µA.
     facts.append(("Rate", f"{rate_per_second * 3600:.1f} µA"))
-    if rate_per_second > 0:
-        eta_seconds = max(counts_target - counts_collected, 0) / rate_per_second
+    if counts_collected >= counts_target:
+        # Sent on reaching the target rather than ahead of it (no usable ETA).
+        facts.append(("ETA", "target reached"))
+    elif rate_per_second > 0:
+        eta_seconds = (counts_target - counts_collected) / rate_per_second
         facts.append(("ETA", fmt_duration(timedelta(seconds=eta_seconds))))
     facts.append(("Instrument beam", instrument_state))
 
