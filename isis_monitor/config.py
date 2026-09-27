@@ -28,8 +28,6 @@ CHANNEL_MODES = ("experiment", "instrument")
 
 INSTRUMENT_SECTION_PREFIX = "INSTRUMENT:"
 _INSTRUMENT_KEYS = ("notify_counts", "beam_target", "channel")
-# Keys no longer used in instrument sections, with why, for the load-time warning.
-_RETIRED_INSTRUMENT_KEYS = {"counts_pv": "progress is now read from IN:<NAME>:DAE:TOTALUAMPS"}
 # [NOTIFICATIONS] keys the TUI may edit, mapped to their AppConfig field.
 EDITABLE_NOTIFICATION_KEYS = {
     "fun_mode": "fun_mode",
@@ -208,9 +206,6 @@ def _read_instruments(
             )
         # options() also lists any [DEFAULT] keys, which aren't this section's fault.
         unknown = set(parser.options(section)) - set(_INSTRUMENT_KEYS) - set(parser.defaults())
-        for key in sorted(unknown & set(_RETIRED_INSTRUMENT_KEYS)):
-            logger.warning(f"[{section}] ignoring {key}: {_RETIRED_INSTRUMENT_KEYS[key]}")
-        unknown -= set(_RETIRED_INSTRUMENT_KEYS)
         if unknown:
             logger.warning(f"[{section}] ignoring unknown key(s): {', '.join(sorted(unknown))}")
         raw_counts = parser.get(section, "notify_counts", fallback="").strip()

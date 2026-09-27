@@ -410,13 +410,12 @@ def test_update_config_file_directory_fsync_failure_is_only_a_warning(tmp_path, 
     assert "Could not fsync" in caplog.text
 
 
-def test_instrument_progress_pv_is_derived_and_old_counts_pv_is_ignored(tmp_path, caplog):
+def test_instrument_progress_pv_is_derived_from_the_name(tmp_path, caplog):
     config = load_config(_write(
         tmp_path, "[INSTRUMENT:POLARIS]\ncounts_pv = IN:POLARIS:CS:DASHBOARD:TAB:2:1:VALUE\nnotify_counts = 300\n"
     ))
     assert config.instruments[0].counts_pv == "IN:POLARIS:DAE:TOTALUAMPS"
-    assert "[INSTRUMENT:POLARIS] ignoring counts_pv: progress is now read from IN:<NAME>:DAE:TOTALUAMPS" in caplog.text
-    assert "unknown key" not in caplog.text
+    assert "[INSTRUMENT:POLARIS] ignoring unknown key(s): counts_pv" in caplog.text
 
 
 def test_update_config_file_drops_old_counts_pv_and_rejects_editing_it(tmp_path):
