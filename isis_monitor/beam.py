@@ -451,7 +451,8 @@ class BeamMonitor:
                 backoff = min(max(backoff * 2, interval), BEAM_MAX_BACKOFF)
                 delay = backoff
             if not self._force_reconnect.is_set():
-                self._set_health("disconnected")
+                # "error" flags a problem that likely needs someone to fix it.
+                self._set_health("disconnected" if kind == "transient" else "error")
                 message = f"WebSocket {detail}; reconnecting in {delay:g}s"
                 if kind == last_kind:
                     logger.debug(message)

@@ -776,7 +776,8 @@ async def test_run_loop_bad_url_marks_health_and_retries(mock_config, mock_chann
     m = ws_monitor(mock_config, mock_channels, "not-a-websocket-url", sink=sink, reconnect_interval=0.01)
     async with running(m):
         await wait_until(lambda: "WebSocket invalid URL" in caplog.text)
-        await wait_until(lambda: call("beam", "disconnected") in sink.update_health.call_args_list)
+        await wait_until(lambda: call("beam", "error") in sink.update_health.call_args_list)
+    assert call("beam", "disconnected") not in sink.update_health.call_args_list
 
 
 def test_classify_ws_error():
