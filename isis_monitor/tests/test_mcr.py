@@ -5,7 +5,7 @@ import aiohttp
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from isis_monitor.config import AppConfig
-from isis_monitor.notifiers import NotificationChannel
+from isis_monitor.tests.helpers import fake_channel
 from isis_monitor.mcr import MCRNewsMonitor
 
 
@@ -16,9 +16,7 @@ def mock_config():
 
 @pytest.fixture
 def mock_channel():
-    channel = NotificationChannel("Test")
-    channel.broadcast = AsyncMock()
-    return channel
+    return fake_channel()
 
 
 # ---------------------------------------------------------------------------
@@ -127,8 +125,7 @@ async def test_mcr_run_fun_mode_adds_flavour(mock_config):
     import random
     from dataclasses import replace
 
-    channel = NotificationChannel("Test")
-    channel.broadcast = AsyncMock()
+    channel = fake_channel()
     monitor = MCRNewsMonitor(
         replace(mock_config, fun_mode=True), channel, notify_current=False, rng=random.Random(1)
     )

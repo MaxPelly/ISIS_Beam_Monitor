@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+import json
 import pytest
 from websockets.datastructures import Headers
 from websockets.exceptions import InvalidStatusCode
@@ -9,7 +11,6 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 from isis_monitor.config import AppConfig, InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
-from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.beam import (
     BeamMonitor,
     BEAM_TARGETS,
@@ -17,6 +18,7 @@ from isis_monitor.beam import (
     _PendingChange,
 )
 from isis_monitor.instrument import STALL_CHECK_WINDOW, _fit_rate
+from isis_monitor.tests.helpers import FakePVWS, fake_channel, running, wait_until
 
 
 PEARL_UAMPS = "IN:PEARL:DAE:TOTALUAMPS"
@@ -53,11 +55,7 @@ def mock_config():
 
 @pytest.fixture
 def mock_channels():
-    beam_channel = NotificationChannel("Beam")
-    beam_channel.broadcast = AsyncMock()
-    exp_channel = NotificationChannel("Exp")
-    exp_channel.broadcast = AsyncMock()
-    return beam_channel, exp_channel
+    return fake_channel("Beam"), fake_channel("Exp")
 
 
 def make_monitor(mock_config, mock_channels, counts_target=100, rng=None, sink=None):
@@ -575,62 +573,6 @@ async def test_check_collection_progress_no_active_run_never_warns(mock_config, 
 # _run_loop() against a real local WebSocket server
 # ---------------------------------------------------------------------------
 
-import contextlib
-import json
-
-import websockets
-
-
-class FakePVWS:
-    """A local PVWS stand-in: records subscriptions, pushes scripted messages."""
-
-    def __init__(self, messages=(), close_after_send=False):
-        self.messages = list(messages)
-        self.close_after_send = close_after_send
-        self.connections = 0
-        self.subscriptions = []
-        self.connected = asyncio.Event()
-        self._server = None
-
-    async def _handler(self, ws):
-        self.connections += 1
-        self.subscriptions.append(json.loads(await ws.recv()))
-        self.connected.set()
-        for msg in self.messages:
-            await ws.send(msg if isinstance(msg, str) else json.dumps(msg))
-        if self.close_after_send:
-            return
-        await ws.wait_closed()
-
-    async def __aenter__(self):
-        self._server = await websockets.serve(self._handler, "127.0.0.1", 0)
-        port = self._server.sockets[0].getsockname()[1]
-        self.url = f"ws://127.0.0.1:{port}"
-        return self
-
-    async def __aexit__(self, *exc):
-        self._server.close()
-        await self._server.wait_closed()
-
-
-async def wait_until(predicate, timeout=2.0):
-    async def _poll():
-        while not predicate():
-            await asyncio.sleep(0.01)
-    await asyncio.wait_for(_poll(), timeout)
-
-
-@contextlib.asynccontextmanager
-async def running(monitor):
-    task = asyncio.create_task(monitor.run())
-    try:
-        yield task
-    finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-
-
 def ws_monitor(mock_config, mock_channels, url, sink=None, reconnect_interval=60.0, **kw):
     config = replace(mock_config, isis_websocket_url=url, beam_reconnect_interval=reconnect_interval)
     return make_monitor(config, mock_channels, sink=sink, **kw)
@@ -727,23 +669,17 @@ async def test_request_reconnect_while_disconnected_skips_backoff(mock_config, m
     """A reconnect requested during the backoff wait retries at once, and does
     not linger to tear down the next successful connection."""
     async with FakePVWS() as server:
-        url = server.url
+        url, port = server.url, server.port
     # Server is now closed: the first attempt fails and backs off for 60s.
     sink = MagicMock()
     m = ws_monitor(mock_config, mock_channels, url, sink=sink, reconnect_interval=60.0)
     async with running(m):
         await wait_until(lambda: call("beam", "disconnected") in sink.update_health.call_args_list)
-        port = int(url.rsplit(":", 1)[1])
-        server = FakePVWS()
-        server._server = await websockets.serve(server._handler, "127.0.0.1", port)
-        try:
+        async with FakePVWS(port=port) as server:
             m.request_reconnect()
             await asyncio.wait_for(server.connected.wait(), 2)
             await asyncio.sleep(0.1)
             assert server.connections == 1  # the stale request didn't force a second one
-        finally:
-            server._server.close()
-            await server._server.wait_closed()
 
 
 async def test_run_cancels_promptly_and_cancels_pending_debounce(mock_config, mock_channels):
@@ -888,7 +824,7 @@ async def test_run_loop_backs_off_only_for_persistent_problems(mock_config, mock
 async def test_run_loop_logs_repeated_failures_once(mock_config, mock_channels, caplog):
     import logging
     async with FakePVWS() as server:
-        url = server.url
+        url, port = server.url, server.port
     # Server is now closed, so every attempt is refused.
     m = ws_monitor(mock_config, mock_channels, url, reconnect_interval=0.01)
     def logged(level):
@@ -899,14 +835,8 @@ async def test_run_loop_logs_repeated_failures_once(mock_config, mock_channels, 
             await wait_until(lambda: len(logged(logging.DEBUG)) >= 2)  # repeats
             assert len(logged(logging.WARNING)) == 1
 
-            port = int(url.rsplit(":", 1)[1])
-            server = FakePVWS()
-            server._server = await websockets.serve(server._handler, "127.0.0.1", port)
-            try:
+            async with FakePVWS(port=port):
                 await wait_until(lambda: "WebSocket connected after" in caplog.text)
-            finally:
-                server._server.close()
-                await server._server.wait_closed()
     assert "failed attempt(s) over" in caplog.text
 
 

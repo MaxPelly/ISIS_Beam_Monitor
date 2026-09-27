@@ -2,14 +2,14 @@ import asyncio
 import json
 import random
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from isis_monitor.config import AppConfig, InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.messages import get_timezone
-from isis_monitor.notifiers import NotificationChannel
+from isis_monitor.tests.helpers import fake_channel
 from isis_monitor.storage import SQLiteStateStore
 from isis_monitor.summary import LAST_SENT_KEY, TargetSummary, compute_summary, daily_summary_loop
 
@@ -99,8 +99,7 @@ def test_compute_summary_treats_unknown_as_off():
 async def run_summary(store, state=None, rng=None, **overrides):
     """Run daily_summary_loop briefly (summary_time defaults to now); returns the channel."""
     overrides.setdefault("summary_time", datetime.now(get_timezone()).strftime("%H:%M"))
-    channel = NotificationChannel("Beam")
-    channel.broadcast = AsyncMock()
+    channel = fake_channel("Beam")
     stop_event = asyncio.Event()
 
     async def stop_soon():

@@ -20,7 +20,7 @@ from isis_monitor.daemon_state import DaemonState
 from isis_monitor.ipc import IPCClient, IPCServer
 from isis_monitor.notifiers import DummyNotifier, TeamsNotifier
 from isis_monitor.storage import SQLiteStateStore
-from isis_monitor.tests.test_beam import FakePVWS, wait_until
+from isis_monitor.tests.helpers import FakePVWS, never_answers, wait_until
 from main import SingleInstanceLock, StateLogHandler
 
 
@@ -970,9 +970,6 @@ async def test_sync_tui_subscribes_before_fetching_state():
 
 
 async def test_run_stop_gives_up_on_a_daemon_that_does_not_answer(tmp_path, capsys):
-    async def never_answers(_name):
-        await asyncio.sleep(3600)
-
     config = _config(tmp_path)
     server = IPCServer(Path(config.daemon_socket_path), DaemonState(), never_answers)
     await server.start()
