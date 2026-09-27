@@ -584,48 +584,38 @@ async def run_stop(config) -> None:
         raise SystemExit(1)
 
     try:
-        try:
-            response = await client.request({"method": "command", "name": "shutdown"}, timeout=IPC_REQUEST_TIMEOUT)
-        except TimeoutError:
-            print(f"The daemon didn't answer within {IPC_REQUEST_TIMEOUT:.0f}s; it may be stuck.")
-            raise SystemExit(1)
-        if response.get("ok"):
-            result = response.get("result", {})
-            if result.get("shutdown") == "ok":
-                print("Shutdown signal sent — daemon is stopping cleanly.")
-            else:
-                print(f"Daemon responded: {result}")
-        else:
-            print(f"Daemon returned an error: {response.get('error')}")
-            raise SystemExit(1)
+        response = await client.request({"method": "command", "name": "shutdown"}, timeout=IPC_REQUEST_TIMEOUT)
+    except TimeoutError:
+        print(f"The daemon didn't answer within {IPC_REQUEST_TIMEOUT:.0f}s; it may be stuck.")
+        raise SystemExit(1)
     finally:
         await client.close()
+    if not response.get("ok"):
+        print(f"Daemon returned an error: {response.get('error')}")
+        raise SystemExit(1)
+    result = response.get("result", {})
+    if result.get("shutdown") == "ok":
+        print("Shutdown signal sent — daemon is stopping cleanly.")
+    else:
+        print(f"Daemon responded: {result}")
 
 
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ISIS Beam and MCR News Monitor")
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
-    daemon_parser = subparsers.add_parser("daemon", help="Run the long-lived daemon process")
-    daemon_parser.add_argument("config", type=Path, help="Path to .ini configuration file")
-    daemon_parser.add_argument(
-        "-n",
-        "--notify_current",
-        help="Send a notification for the current news immediately.",
-        action=argparse.BooleanOptionalAction,
-    )
-    daemon_parser.add_argument(
-        "-d",
-        "--dummy",
-        help="Use a dummy notifier that logs to console instead of sending webhooks.",
-        action=argparse.BooleanOptionalAction,
-    )
-
-    tui_parser = subparsers.add_parser("tui", help="Run the TUI client attached to daemon")
-    tui_parser.add_argument("config", type=Path, help="Path to .ini configuration file")
-
-    stop_parser = subparsers.add_parser("stop", help="Gracefully shut down a running daemon")
-    stop_parser.add_argument("config", type=Path, help="Path to .ini configuration file")
+    for mode, help_text in (
+        ("daemon", "Run the long-lived daemon process"),
+        ("tui", "Run the TUI client attached to daemon"),
+        ("stop", "Gracefully shut down a running daemon"),
+    ):
+        subparsers.add_parser(mode, help=help_text).add_argument(
+            "config", type=Path, help="Path to .ini configuration file")
+    daemon_parser = subparsers.choices["daemon"]
+    daemon_parser.add_argument("-n", "--notify_current", action=argparse.BooleanOptionalAction,
+                               help="Send a notification for the current news immediately.")
+    daemon_parser.add_argument("-d", "--dummy", action=argparse.BooleanOptionalAction,
+                               help="Use a dummy notifier that logs to console instead of sending webhooks.")
 
     return parser.parse_args(argv)
 
@@ -644,12 +634,7 @@ def main():
 
     set_timezone(config.notifications_timezone)
 
-    configure_logging(
-        config.log_file,
-        config.log_level,
-        config.log_max_bytes,
-        config.log_backup_count,
-    )
+    configure_logging(config.log_file, config.log_level, config.log_max_bytes, config.log_backup_count)
 
     stop_event = asyncio.Event()
 
