@@ -34,9 +34,12 @@ def _retry_after(value: object) -> Optional[float]:
         seconds = float(value)
     except ValueError:
         try:
-            seconds = (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
+            when = parsedate_to_datetime(value)
         except (TypeError, ValueError):
             return None
+        if when.tzinfo is None:  # e.g. the obsolete asctime form, which means GMT
+            when = when.replace(tzinfo=timezone.utc)
+        seconds = (when - datetime.now(timezone.utc)).total_seconds()
     return min(max(seconds, 0.0), MAX_RETRY_AFTER) if math.isfinite(seconds) else None
 
 
@@ -179,7 +182,10 @@ class TeamsNotifier(Notifier):
             ) as resp:
                 if resp.status < 400:
                     return None, False, None
-                body = await resp.text()
+                try:
+                    body = await resp.text()
+                except aiohttp.ClientError:  # e.g. dropped mid-body; the status still counts
+                    body = ""
                 # 429 (rate limited) and 5xx are temporary; any other 4xx won't
                 # get better by resending the same request.
                 retryable = resp.status == 429 or resp.status >= 500

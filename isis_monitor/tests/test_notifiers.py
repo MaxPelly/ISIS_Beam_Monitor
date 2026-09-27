@@ -63,6 +63,7 @@ def make_status_session(*statuses: int, headers=None):
         ctx.__aexit__ = AsyncMock(return_value=None)
         contexts.append(ctx)
     session.post.side_effect = contexts
+    session.responses = [ctx.__aenter__.return_value for ctx in contexts]
     session.closed = False
     return session
 
@@ -284,6 +285,27 @@ async def test_teams_notifier_retries_only_temporary_http_errors(statuses, attem
 
 
 @pytest.mark.asyncio
+async def test_teams_notifier_retries_a_5xx_whose_body_cannot_be_read(no_retry_delay):
+    notifier = TeamsNotifier("http://example.invalid/hook")
+    notifier._session = make_status_session(503, 200)
+    notifier._session.responses[0].text.side_effect = aiohttp.ClientPayloadError("dropped")
+
+    await notifier.send(Notification(title="t", text="x"))
+    assert notifier._session.post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_teams_notifier_does_not_retry_unexpected_errors(no_retry_delay):
+    notifier = TeamsNotifier("http://example.invalid/hook")
+    session = MagicMock(closed=False)
+    session.post.side_effect = ValueError("bad payload")
+    notifier._session = session
+
+    await notifier.send(Notification(title="t", text="x"))
+    assert session.post.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_teams_notifier_waits_between_retries(caplog):
     import logging
     notifier = TeamsNotifier("http://example.invalid/hook")
@@ -317,6 +339,7 @@ def test_retry_after_parsing():
     assert _retry_after("3600") == 60.0  # capped
     assert 25 <= _retry_after(in_30s) <= 30
     assert _retry_after("Mon, 01 Jan 2001 00:00:00 GMT") == 0.0  # already past
+    assert _retry_after("Sun Nov  6 08:49:37 1994") == 0.0  # asctime form, naive
     for bad in (None, "", "soon", "nan", "inf"):
         assert _retry_after(bad) is None, bad
 
