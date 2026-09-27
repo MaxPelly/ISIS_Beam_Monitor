@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 from isis_monitor.config import AppConfig, InstrumentConfig
+from isis_monitor.daemon_state import DaemonState
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.beam import (
     BeamMonitor,
@@ -636,6 +637,31 @@ async def test_run_loop_reconnects_after_server_closes(mock_config, mock_channel
         async with running(m):
             await wait_until(lambda: server.connections >= 3)
     sink.update_health.assert_any_call("beam", "disconnected")
+
+
+@pytest.mark.asyncio
+async def test_reconnect_repopulates_beam_states_marked_unknown(mock_config, mock_channels):
+    """DaemonState marks beams unknown when the feed drops; PVWS re-sending an
+    unchanged value on reconnect must restore it, without a beam notification."""
+    beam_channel, _ = mock_channels
+    state = DaemonState()
+    events = state.subscribe()
+    update = {"type": "update", "pv": mock_config.ts1_beam_current_pv, "value": 150.0}
+    powers = []
+
+    def ts1_powers():
+        while not events.empty():
+            event = events.get_nowait()
+            if event.event == "beam" and event.payload["beam"] == "TS1":
+                powers.append(event.payload["power"])
+        return powers
+
+    async with FakePVWS([update], close_after_send=True) as server:
+        m = ws_monitor(mock_config, mock_channels, server.url, sink=state, reconnect_interval=0.02)
+        async with running(m):
+            await wait_until(lambda: ts1_powers()[:3] == ["high", "unknown", "high"])
+
+    beam_channel.broadcast.assert_called_once()  # just the startup card
 
 
 @pytest.mark.asyncio
