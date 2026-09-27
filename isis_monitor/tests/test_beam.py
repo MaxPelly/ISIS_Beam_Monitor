@@ -1107,3 +1107,17 @@ async def test_new_run_is_saved_before_the_milestone_card(mock_config, mock_chan
     tracker(m).state.run_started_at = datetime.now(timezone.utc)
     await m._handle_update({"pv": fun_config.run_name_pv, "b64byt": base64.b64encode(b"Run 25").decode()})
     assert order == ["PEARL: New run started", "saved", "PEARL: 25 runs completed"]
+
+
+
+@pytest.mark.asyncio
+async def test_blank_decoded_run_title_is_ignored(mock_config, mock_channels):
+    _, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+    pv = mock_config.run_name_pv
+    await m._handle_update({"pv": pv, "b64byt": base64.b64encode(b"Run 1").decode()})
+    await m._handle_update({"pv": pv, "b64byt": base64.b64encode(b"\x00\x00\x00").decode()})
+    assert tracker(m).state.run_name == "Run 1"
+    exp_channel.broadcast.assert_not_called()
+    await m._handle_update({"pv": pv, "b64byt": base64.b64encode(b"Run 2").decode()})
+    assert exp_channel.broadcast.call_args[0][0].text == "Run 2"

@@ -100,6 +100,8 @@ class InstrumentTracker:
         except Exception as e:
             logger.warning(f"Failed to decode run name b64: {e}")
             return
+        if not name.strip():
+            return  # e.g. all NULs; treating it as a run would hide the next real one
 
         if self.state.run_name and self.state.run_name != name:
             notification = run_started(
