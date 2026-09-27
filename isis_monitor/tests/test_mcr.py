@@ -33,37 +33,21 @@ def mock_channel():
 
 @pytest.mark.asyncio
 async def test_mcr_get_news_success(mock_config, mock_channel):
+    """The news is the text before the "<N> more lines" / old-line footer,
+    whatever the number of digits."""
     monitor = MCRNewsMonitor(mock_config, mock_channel)
+    for text, expected in [
+        ("Current news text\r\n\r\n12 more lines\r\n", "Current news text"),
+        ("News content\r\n123 old line\r\n", "News content"),
+    ]:
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.text = AsyncMock(return_value=text)
+        mock_session = MagicMock()
+        mock_session.get.return_value.__aenter__.return_value = mock_response
+        mock_session.get.return_value.__aexit__ = AsyncMock(return_value=None)
 
-    mock_response = AsyncMock()
-    mock_response.status = 200
-    mock_response.text = AsyncMock(
-        return_value="Current news text\r\n\r\n12 more lines\r\n"
-    )
-    mock_session = MagicMock()
-    mock_session.get.return_value.__aenter__.return_value = mock_response
-    mock_session.get.return_value.__aexit__ = AsyncMock(return_value=None)
-
-    result = await monitor.get_news(mock_session)
-    assert result == "Current news text"
-
-
-@pytest.mark.asyncio
-async def test_mcr_get_news_success_three_digit_line_number(mock_config, mock_channel):
-    """Regex must handle 3-digit line-number prefixes."""
-    monitor = MCRNewsMonitor(mock_config, mock_channel)
-
-    mock_response = AsyncMock()
-    mock_response.status = 200
-    mock_response.text = AsyncMock(
-        return_value="News content\r\n123 old line\r\n"
-    )
-    mock_session = MagicMock()
-    mock_session.get.return_value.__aenter__.return_value = mock_response
-    mock_session.get.return_value.__aexit__ = AsyncMock(return_value=None)
-
-    result = await monitor.get_news(mock_session)
-    assert result == "News content"
+        assert await monitor.get_news(mock_session) == expected
 
 
 @pytest.mark.asyncio
@@ -206,6 +190,9 @@ async def test_mcr_run_baseline_retries_until_news_available(mock_config, mock_c
     assert delays == [base, base, base]  # two baseline retries, then the first poll wait
     sink.update_mcr_news.assert_called_once_with("News A")
     mock_channel.broadcast.assert_not_called()
+    # The failing first fetches show as an error, not stuck at "starting".
+    statuses = [c.args[1] for c in sink.update_health.call_args_list]
+    assert statuses[:4] == ["starting", "error", "error", "connected"]
 
 
 @pytest.mark.asyncio
@@ -262,12 +249,3 @@ async def test_mcr_request_reconnect_polls_immediately(mock_config, mock_channel
 
     assert ("mcr", "reconnecting") in [c.args for c in sink.update_health.call_args_list]
     assert monitor.request_reconnect() is True  # flag was consumed
-
-
-@pytest.mark.asyncio
-async def test_failing_initial_fetch_reports_error_health(mock_config, mock_channel):
-    sink = MagicMock()
-    monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=False, sink=sink)
-    await run_script(monitor, None, None, "News A")
-    statuses = [c.args[1] for c in sink.update_health.call_args_list]
-    assert statuses[:4] == ["starting", "error", "error", "connected"]
