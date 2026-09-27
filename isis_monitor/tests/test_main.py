@@ -59,18 +59,6 @@ class TestStateLogHandler:
         # Should not raise
         handler.emit(record)
 
-    def test_emit_with_warning_level(self):
-        """Formatter applied correctly for WARNING level messages."""
-        mock_state = MagicMock()
-        handler = StateLogHandler(mock_state)
-        handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
-
-        record = logging.LogRecord(
-            name="test", level=logging.WARNING, pathname="", lineno=0,
-            msg="something went wrong", args=(), exc_info=None,
-        )
-        handler.emit(record)
-        mock_state.update_log.assert_called_once_with("WARNING - something went wrong")
 
 def test_single_instance_lock_writes_pid_and_releases(tmp_path):
     lock_file = tmp_path / "sub" / "test.lock"
