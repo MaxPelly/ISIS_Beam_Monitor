@@ -3,7 +3,7 @@ import asyncio
 import contextlib
 from abc import ABC, abstractmethod
 from dataclasses import replace
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import aiohttp
 
@@ -30,7 +30,14 @@ class Notifier(ABC):
 
 
 class TeamsNotifier(Notifier):
-    """Sends notifications to a Microsoft Teams Incoming Webhook."""
+    """Sends notifications to a Microsoft Teams Incoming Webhook.
+
+    Rate limiting (429), server errors and network failures are retried
+    after each of RETRY_DELAYS; the channel's worker waits meanwhile, so
+    this is kept short and bounded.
+    """
+    RETRY_DELAYS = (2.0, 4.0)  # seconds before the 2nd and 3rd attempts
+
     def __init__(self, webhook_url: str, timeout: float = 10.0):
         self.webhook_url = webhook_url
         self.timeout = timeout
@@ -125,6 +132,19 @@ class TeamsNotifier(Notifier):
             return
 
         payload = self._create_payload(notification)
+        for attempt, delay in enumerate((*self.RETRY_DELAYS, None), 1):
+            error, retryable = await self._post(payload)
+            if error is None:
+                return
+            if delay is None or not retryable:
+                suffix = f" (after {attempt} attempts)" if attempt > 1 else ""
+                logger.error(f"{error}{suffix}")
+                return
+            logger.warning(f"{error}; retrying in {delay:g}s")
+            await asyncio.sleep(delay)
+
+    async def _post(self, payload: dict) -> Tuple[Optional[str], bool]:
+        """One attempt: (error message or None on success, whether to retry)."""
         try:
             session = await self._get_session()
             async with session.post(
@@ -132,13 +152,17 @@ class TeamsNotifier(Notifier):
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=self.timeout),
             ) as resp:
-                if resp.status >= 400:
-                    body = await resp.text()
-                    logger.error(
-                        f"Teams webhook returned HTTP {resp.status}: {body[:200]}"
-                    )
+                if resp.status < 400:
+                    return None, False
+                body = await resp.text()
+                # 429 (rate limited) and 5xx are temporary; any other 4xx won't
+                # get better by resending the same request.
+                retryable = resp.status == 429 or resp.status >= 500
+                return f"Teams webhook returned HTTP {resp.status}: {body[:200]}", retryable
+        except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
+            return f"Failed to send Teams webhook: {e}", True
         except Exception as e:
-            logger.error(f"Failed to send Teams webhook: {e}")
+            return f"Failed to send Teams webhook: {e}", False
 
 
 class DummyNotifier(Notifier):

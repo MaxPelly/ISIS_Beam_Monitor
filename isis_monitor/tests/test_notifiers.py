@@ -51,6 +51,27 @@ def make_mock_session(status: int = 200, response_text: str = "OK"):
     return mock_session
 
 
+def make_status_session(*statuses: int):
+    """A session whose successive posts return each of `statuses` in turn."""
+    session = make_mock_session()
+    contexts = []
+    for status in statuses:
+        resp = MagicMock(status=status, headers={})
+        resp.text = AsyncMock(return_value="body")
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=resp)
+        ctx.__aexit__ = AsyncMock(return_value=None)
+        contexts.append(ctx)
+    session.post.side_effect = contexts
+    session.closed = False
+    return session
+
+
+@pytest.fixture
+def no_retry_delay():
+    with patch.object(TeamsNotifier, "RETRY_DELAYS", (0.0, 0.0)):
+        yield
+
 
 # ---------------------------------------------------------------------------
 # TeamsNotifier — send
@@ -234,7 +255,7 @@ async def test_notification_channel_logs_failing_notifier_and_still_delivers(cap
 
 
 @pytest.mark.asyncio
-async def test_teams_notifier_logs_connection_error(caplog):
+async def test_teams_notifier_retries_connection_errors_then_gives_up(caplog, no_retry_delay):
     notifier = TeamsNotifier("http://example.invalid/hook")
     session = MagicMock()
     session.closed = False
@@ -242,7 +263,54 @@ async def test_teams_notifier_logs_connection_error(caplog):
     notifier._session = session
 
     await notifier.send(Notification(title="t", text="x"))
-    assert "Failed to send Teams webhook: refused" in caplog.text
+    assert session.post.call_count == 3
+    assert "Failed to send Teams webhook: refused (after 3 attempts)" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("statuses, attempts", [
+    ((429, 200), 2),
+    ((503, 502, 200), 3),
+    ((500, 500, 500), 3),  # gives up after the last attempt
+    ((400,), 1),  # a bad request won't get better by resending it
+    ((404,), 1),
+])
+async def test_teams_notifier_retries_only_temporary_http_errors(statuses, attempts, no_retry_delay):
+    notifier = TeamsNotifier("http://example.invalid/hook")
+    notifier._session = make_status_session(*statuses)
+
+    await notifier.send(Notification(title="t", text="x"))
+    assert notifier._session.post.call_count == attempts
+
+
+@pytest.mark.asyncio
+async def test_teams_notifier_waits_between_retries(caplog):
+    import logging
+    notifier = TeamsNotifier("http://example.invalid/hook")
+    notifier._session = make_status_session(503, 503, 503)
+
+    with patch("isis_monitor.notifiers.asyncio.sleep", new=AsyncMock()) as sleep:
+        with caplog.at_level(logging.WARNING):
+            await notifier.send(Notification(title="t", text="x"))
+
+    assert [c.args[0] for c in sleep.await_args_list] == [2.0, 4.0]
+    assert "retrying in 2s" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_closing_the_channel_cancels_a_send_waiting_to_retry():
+    notifier = TeamsNotifier("http://example.invalid/hook")
+    notifier._session = make_status_session(503, 200)
+    channel = NotificationChannel("Beam")
+    channel.add_notifier(notifier)
+
+    with patch.object(TeamsNotifier, "RETRY_DELAYS", (60.0, 60.0)), \
+            patch.object(NotificationChannel, "CLOSE_TIMEOUT", 0.05):
+        await channel.broadcast(Notification(title="t", text="x"))
+        await asyncio.sleep(0)  # let the worker make its first attempt
+        await asyncio.wait_for(channel.close(), timeout=2)
+
+    assert notifier._session.post.call_count == 1
 
 
 @pytest.mark.asyncio
