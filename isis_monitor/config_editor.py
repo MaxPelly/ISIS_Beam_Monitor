@@ -6,7 +6,7 @@ Terminal I/O is injected — `read_line(prompt)` returns the line typed, or
 None if input was closed — so the editing logic can be tested without one.
 """
 import copy
-from typing import Awaitable, Callable, List, Optional, Sequence
+from typing import Awaitable, Callable, List, Optional
 
 ReadLine = Callable[[str], Awaitable[Optional[str]]]
 Write = Callable[[str], None]
@@ -83,13 +83,13 @@ def describe_changes(original: dict, edited: dict) -> List[str]:
 
 
 async def _ask_choice(read_line: ReadLine, write: Write, label: str, current: str, choices: List[str]) -> str:
-    """Prompt until the answer is one of `choices` (case-insensitive; any
-    answer if there are none), returning the canonical spelling."""
+    """Prompt until the answer is one of `choices` (case-insensitive),
+    returning the canonical spelling."""
     canonical = {c.lower(): c for c in choices}
     while True:
         answer = await _ask_default(read_line, f"{label} ({'/'.join(choices)})", current)
-        if not choices or answer.lower() in canonical:
-            return canonical.get(answer.lower(), answer)
+        if answer.lower() in canonical:
+            return canonical[answer.lower()]
         write(f"{label} must be one of {', '.join(choices)}.")
 
 
@@ -105,10 +105,9 @@ async def _edit_instrument(
     edited["beam_target"] = await _ask_choice(
         read_line, write, "Beam target", inst.get("beam_target", ""), beam_targets
     )
-    if channel_modes:  # a daemon from before per-instrument channels offers none
-        edited["channel"] = await _ask_choice(
-            read_line, write, "Teams channel", inst.get("channel", "") or "experiment", channel_modes
-        )
+    edited["channel"] = await _ask_choice(
+        read_line, write, "Teams channel", inst.get("channel", "") or "experiment", channel_modes
+    )
     return edited
 
 
@@ -118,7 +117,7 @@ async def edit_settings(
     beam_targets: List[str],
     read_line: ReadLine,
     write: Write,
-    channel_modes: Sequence[str] = (),
+    channel_modes: List[str],
 ) -> Optional[dict]:
     """Let the user edit `settings`. Returns the edited settings once they
     choose to save (and something differs from `original`, the file's
@@ -137,12 +136,12 @@ async def edit_settings(
             elif command.isdecimal() and 0 <= int(command) - len(keys) - 1 < len(instruments):
                 index = int(command) - len(keys) - 1
                 instruments[index] = await _edit_instrument(
-                    instruments[index], beam_targets, list(channel_modes), read_line, write
+                    instruments[index], beam_targets, channel_modes, read_line, write
                 )
             elif command.lower() == "a":
                 write("Adding an instrument (leave the name blank to cancel).")
                 blank = {"name": "", "notify_counts": "", "beam_target": ""}
-                added = await _edit_instrument(blank, beam_targets, list(channel_modes), read_line, write)
+                added = await _edit_instrument(blank, beam_targets, channel_modes, read_line, write)
                 if added is not None:
                     instruments.append(added)
             elif command.lower().startswith("d") and command[1:].strip().isdecimal():
@@ -193,7 +192,7 @@ async def run_config_editor(request: Request, read_line: ReadLine, write: Write)
     settings = original
     while True:
         edited = await edit_settings(
-            settings, original, reply.get("beam_targets", []), read_line, write, reply.get("channel_modes", [])
+            settings, original, reply["beam_targets"], read_line, write, reply["channel_modes"]
         )
         if edited is None:
             return

@@ -178,7 +178,8 @@ async def test_run_config_editor_reports_load_failures(request_mock, message):
 
 async def test_run_config_editor_keeps_edits_when_connection_is_lost_on_save():
     request = AsyncMock(side_effect=[
-        {"ok": True, "config": copy.deepcopy(SETTINGS), "revision": "r", "beam_targets": TARGETS},
+        {"ok": True, "config": copy.deepcopy(SETTINGS), "revision": "r", "beam_targets": TARGETS,
+         "channel_modes": MODES},
         ConnectionError("daemon went away"),
         {"ok": True, "restarting": True},
     ])
@@ -210,14 +211,3 @@ async def test_teams_channel_prompt_validates_and_shows_in_menu():
     assert "Teams channel (experiment/instrument) [experiment]: " in term.prompts
     assert "PEARL channel: experiment → instrument" in term.text
     assert "Teams channel: PEARL" in render_menu(result)
-
-
-async def test_no_channel_prompt_when_daemon_offers_no_modes():
-    """An older daemon has no channel_modes and would reject a channel key."""
-    old_settings = copy.deepcopy(SETTINGS)
-    for inst in old_settings["instruments"]:
-        del inst["channel"]
-    term = Terminal("a", "emu", "10", "Muon", "s", "y")
-    result = await edit_settings(copy.deepcopy(old_settings), old_settings, TARGETS, term.read_line, term.write)
-    assert result["instruments"][-1] == {"name": "EMU", "notify_counts": "10", "beam_target": "Muon"}
-    assert not any("Teams channel" in prompt for prompt in term.prompts)
