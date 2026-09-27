@@ -91,8 +91,8 @@ Defines `MonitorSinkProtocol`, the interface monitors use to report into `Daemon
 Configuration is managed via `config.ini` files, loaded through `isis_monitor/config.py`. Key sections include:
 -   **`[DATA]`**: WebSocket and HTTP URLs for data sources, plus the optional `mcr_page_url` link button.
 -   **`[WEBHOOKS]`**: URLs for Teams integration (should be kept secure). A blank URL disables that channel's Teams notifier.
--   **`[INSTRUMENT:<NAME>]`**: one per instrument — `notify_counts` (required, µA·h), `beam_target` and `channel` (`experiment`/`instrument`, both optional); parsed into `AppConfig.instruments` (`InstrumentConfig`, with `counts_pv` derived as `IN:<NAME>:DAE:TOTALUAMPS` and `run_name_pv` as `IN:<NAME>:DAE:WDTITLE`).
--   **`[PVS]`**: `instrument_target` (the default `beam_target` for instrument sections that don't set one; TS1), the beam-current PVs, and the legacy single-instrument keys (`counts_pv`, now only used to name the instrument, `run_name_pv`, `notify_counts`) used only when there are no instrument sections.
+-   **`[INSTRUMENT:<NAME>]`**: one per instrument — `notify_counts` (required, µA·h), `beam_target` and `channel` (`experiment`/`instrument`, both optional); at least one is required; parsed into `AppConfig.instruments` (`InstrumentConfig`, with `counts_pv` derived as `IN:<NAME>:DAE:TOTALUAMPS` and `run_name_pv` as `IN:<NAME>:DAE:WDTITLE`).
+-   **`[PVS]`**: `instrument_target` (the default `beam_target` for instrument sections that don't set one; TS1) and the beam-current PVs.
 -   **`[DAEMON]`** / **`[TUI_CLIENT]`**: Paths for UNIX sockets, SQLite database, and retention settings.
 -   **`[BEAM_BOUNDARIES]`**: Thresholds for power level classification.
 -   **`[TUI]`**: Display settings like history length and refresh rates.

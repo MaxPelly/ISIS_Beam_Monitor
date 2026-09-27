@@ -73,11 +73,7 @@ Both PVs are derived from the name: progress (total µA·h collected this run) f
 `IN:<NAME>:DAE:TOTALUAMPS`, and the run name from `IN:<NAME>:DAE:WDTITLE`. Names may
 contain letters, digits, `_` and `-`, and are upper-cased. Downstream flows that route on
 the payload's `channel` see "Experiment Updates" unless an instrument sets
-`channel = instrument`.
-
-A config with no `[INSTRUMENT:*]` sections still works: one instrument is built from the
-legacy `[PVS]` keys (`run_name_pv`, and `notify_counts`, default 130), named from `counts_pv`
-(e.g. PEARL); its progress is also read from `IN:<NAME>:DAE:TOTALUAMPS`.
+`channel = instrument`. At least one `[INSTRUMENT:*]` section is required.
 
 ### Optional `[TUI]` section
 
@@ -164,11 +160,8 @@ Things to know:
   version is kept as `config.ini.bak`, and `config.ini.example` documents every setting.
 - If the file changed since the editor opened it (a hand edit, or another TUI saving
   first), the save is refused rather than overwriting those changes; reopen the editor.
-- A legacy `[PVS]`-only config becomes explicit `[INSTRUMENT:*]` sections on the first
-  save; a non-standard `[PVS] run_name_pv` is not kept (the derived
-  `IN:<NAME>:DAE:WDTITLE` is used).
-- Saving drops any old `counts_pv` lines from instrument sections (see Upgrading) and
-  writes an explicit `channel` and `beam_target` for every instrument, so
+- Saving drops unknown keys from instrument sections and writes an explicit `channel`
+  and `beam_target` for every instrument, so
   `[PVS] instrument_target` then only applies to sections added by hand without a
   `beam_target`.
 - Renaming an instrument starts its run count (for milestones) from zero.
@@ -227,33 +220,6 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now isis-beam-monitor.service
 sudo systemctl status isis-beam-monitor.service
 ```
-
-### Upgrading from a single-instrument version
-
-- The `-nc/--notify_counts` option has been removed; remove it from any launch script or
-  systemd unit (the daemon won't start with it). Set `notify_counts` in each
-  `[INSTRUMENT:*]` section, or in `[PVS]` for a legacy config.
-- Existing configs keep working unchanged as a single instrument.
-- The saved run count from before the upgrade is attributed to the first configured
-  instrument.
-
-### Upgrading to TOTALUAMPS progress tracking
-
-- Run progress now comes from `IN:<NAME>:DAE:TOTALUAMPS` (total µA·h this run) instead of
-  a per-instrument dashboard `counts_pv`. Existing `counts_pv` lines in `[INSTRUMENT:*]`
-  sections are ignored with a warning in the log; the next TUI save removes them, or
-  delete them by hand to silence the warning.
-- `notify_counts` keeps its meaning and units (µA·h), so existing thresholds still apply.
-- On the first restart after upgrading, an instrument already past its threshold gets a
-  "run about to finish" card straight away, since older snapshots don't record that it was
-  sent. Later restarts (including TUI config saves) remember it.
-- Run cards keep the "Experiment Updates" channel unless an instrument sets
-  `channel = instrument`.
-- Numeric settings now have limits (see `config.ini.example`). In particular
-  `retention_days` is capped by memory at about 69 days with the default 60s
-  `sample_interval`; a longer retention is rejected at startup with a message saying so.
-- A config without `counts_pv` lines won't load on an older version (which requires
-  them), so keep a copy (e.g. `config.ini.bak`) if you might roll back.
 
 ### Troubleshooting
 
