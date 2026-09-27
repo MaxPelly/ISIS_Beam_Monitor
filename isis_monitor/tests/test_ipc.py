@@ -3,6 +3,7 @@ import contextlib
 import json
 import os
 import stat
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -358,3 +359,74 @@ async def test_socket_is_created_owner_only(tmp_path):
     finally:
         os.umask(old_umask)
     assert modes == [0o600]
+
+
+
+async def _stalled_client(server, requests: int):
+    """A client that sends requests with large replies and never reads them,
+    so the server's socket buffer fills up."""
+    reader, writer = await asyncio.open_unix_connection(str(server.socket_path))
+    for _ in range(requests):
+        writer.write(b'{"method": "get_history"}\n')
+    await writer.drain()
+    return reader, writer
+
+
+def _state_with_big_history() -> DaemonState:
+    state = DaemonState()
+    ts = datetime.now(timezone.utc)
+    for beam in state.history:
+        state.history[beam].extend((ts, float(i), "high") for i in range(5000))
+    return state
+
+
+@pytest.mark.asyncio
+async def test_stop_does_not_hang_on_a_client_that_stopped_reading(tmp_path):
+    server = IPCServer(tmp_path / "d.sock", _state_with_big_history(), AsyncMock())
+    await server.start()
+    _reader, writer = await _stalled_client(server, 20)
+    await asyncio.sleep(0.2)  # let the server fill the socket buffer
+
+    with patch("isis_monitor.ipc.STOP_FLUSH_TIMEOUT", 0.1):
+        await asyncio.wait_for(server.stop(), timeout=3)
+    writer.close()
+
+
+@pytest.mark.asyncio
+async def test_stop_still_delivers_a_reply_already_written(tmp_path):
+    """The reply to the request that triggered a restart must reach a reading client."""
+    stop_task = None
+
+    async def handler(name):
+        nonlocal stop_task
+        stop_task = asyncio.create_task(server.stop())
+        return {"restart": "ok"}
+
+    server = IPCServer(tmp_path / "d.sock", DaemonState(), handler)
+    await server.start()
+    async with connected(server) as client:
+        reply = await client.request({"method": "command", "name": "restart"})
+    await asyncio.wait_for(stop_task, 3)
+    assert reply["result"] == {"restart": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_slow_subscriber_is_aborted_even_if_it_is_not_reading(tmp_path):
+    state = _state_with_big_history()
+    server = IPCServer(tmp_path / "d.sock", state, AsyncMock())
+    await server.start()
+    try:
+        reader, writer = await asyncio.open_unix_connection(str(server.socket_path))
+        writer.write(b'{"method": "subscribe_updates"}\n')
+        await writer.drain()
+        await asyncio.sleep(0.05)
+        for _ in range(3):  # fill the socket buffer, then overflow the event queue
+            state.update_log("x" * 60000)
+        await asyncio.sleep(0.05)
+        for i in range(SUBSCRIBER_QUEUE_SIZE + 10):
+            state.update_log(f"line {i}")
+        # The server drops the connection without the client reading anything.
+        await wait_until(lambda: not server._clients)
+        writer.close()
+    finally:
+        await asyncio.wait_for(server.stop(), 3)

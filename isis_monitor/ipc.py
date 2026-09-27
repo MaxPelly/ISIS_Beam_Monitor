@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 PROTOCOL_VERSION = 1
 # Requests are tiny; replies (the history snapshot) can be large.
 SERVER_LINE_LIMIT = 64 * 1024
+# How long stop() lets clients take already-buffered replies before cutting
+# off any that aren't reading (e.g. a suspended TUI), so shutdown can't hang.
+STOP_FLUSH_TIMEOUT = 1.0
 CLIENT_LINE_LIMIT = 16 * 1024 * 1024
 
 
@@ -65,9 +68,18 @@ class IPCServer:
             self.server.close()
             # Since Python 3.12.1, wait_closed() also waits for every open
             # connection, so a still-attached TUI would block shutdown forever.
-            for writer in list(self._clients):
+            # close() still flushes buffered output first (e.g. the reply to
+            # the update_config that triggered a restart), which never ends
+            # if the client has stopped reading, so those get aborted.
+            writers = list(self._clients)
+            for writer in writers:
                 writer.close()
-            await self.server.wait_closed()
+            try:
+                await asyncio.wait_for(asyncio.shield(self.server.wait_closed()), STOP_FLUSH_TIMEOUT)
+            except asyncio.TimeoutError:
+                for writer in writers:
+                    writer.transport.abort()
+                await self.server.wait_closed()
         self.socket_path.unlink(missing_ok=True)
 
     async def _reply(self, req: dict) -> dict:
@@ -137,9 +149,11 @@ class IPCServer:
                 await writer.drain()
         except ConnectionError:
             pass
-        # Dropped for falling behind, or the peer is gone: closing the
+        # Dropped for falling behind, or the peer is gone: dropping the
         # connection makes the client reconnect and resync from a snapshot.
-        writer.close()
+        # Aborted rather than closed, since close() would first wait to flush
+        # stale events to a client that isn't reading them.
+        writer.transport.abort()
 
 
 class IPCClient:
