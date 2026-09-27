@@ -14,6 +14,7 @@ from isis_monitor.beam import (
     BeamMonitor,
     BEAM_TARGETS,
     _classify_ws_error,
+    _PendingChange,
 )
 from isis_monitor.instrument import STALL_CHECK_WINDOW, _fit_rate
 
@@ -783,7 +784,7 @@ async def test_run_cancels_promptly_and_cancels_pending_debounce(mock_config, mo
         task = asyncio.create_task(m.run())
         await asyncio.wait_for(server.connected.wait(), 2)
         now = datetime.now(timezone.utc)
-        m.change_aggregator.queue_change(BEAM_TARGETS[0], "high", 150, now, "off", 0, 140, now)
+        m.change_aggregator.queue_change(_PendingChange(BEAM_TARGETS[0], "high", 150, now, "off", 0, 140, now))
         pending_task = m.change_aggregator._pending["TS1"].task
         task.cancel()
         with pytest.raises(asyncio.CancelledError):

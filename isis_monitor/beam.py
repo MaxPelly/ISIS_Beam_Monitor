@@ -110,30 +110,18 @@ class BeamChangeAggregator:
         self._pending: Dict[str, _PendingChange] = {}
         self._recent_offs: Dict[str, datetime] = {}
 
-    def queue_change(
-        self,
-        bt: BeamTarget,
-        prev_state: str,
-        prev_val: float,
-        prev_since: datetime,
-        new_state: str,
-        beam_val: float,
-        high_threshold: float,
-        time_now: datetime,
-    ) -> None:
-        existing = self._pending.get(bt.state_key)
+    def queue_change(self, change: _PendingChange) -> None:
+        key = change.bt.state_key
+        existing = self._pending.get(key)
         if existing is not None:
             # Already pending — just update the latest reading; the original
             # timer (and the original prev_state/prev_since) still applies.
-            existing.new_state = new_state
-            existing.beam_val = beam_val
+            existing.new_state = change.new_state
+            existing.beam_val = change.beam_val
             return
 
-        pending = _PendingChange(
-            bt, prev_state, prev_val, prev_since, new_state, beam_val, high_threshold, time_now,
-        )
-        pending.task = asyncio.create_task(self._flush_after_delay(bt.state_key))
-        self._pending[bt.state_key] = pending
+        change.task = asyncio.create_task(self._flush_after_delay(key))
+        self._pending[key] = change
 
     async def _flush_after_delay(self, state_key: str) -> None:
         await asyncio.sleep(self.debounce_seconds)
@@ -284,11 +272,10 @@ class BeamMonitor:
                 beam_state.since = time_now
             else:
                 pending = self.change_aggregator.pending(bt.state_key)
-                high_threshold = self.beam_boundaries[bt.state_key][2]
-                self.change_aggregator.queue_change(
+                self.change_aggregator.queue_change(_PendingChange(
                     bt, prev_state, prev_val, prev_since or time_now,
-                    new_state, beam_val, high_threshold, time_now,
-                )
+                    new_state, beam_val, self.beam_boundaries[bt.state_key][2], time_now,
+                ))
                 if pending is not None and new_state == pending.prev_state:
                     # Back where it was before a flicker the debounce will drop,
                     # so the time in that state carries on rather than restarting.
