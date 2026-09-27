@@ -251,10 +251,8 @@ class DaemonState(MonitorSinkProtocol):
                 }
         self.mcr_news = str(snap.get("mcr_news", self.mcr_news))
         self._restore_instruments(snap)
-        health = snap.get("health", {})
-        if isinstance(health, dict):
-            for k, v in health.items():
-                self.health[str(k)] = str(v)
+        # Health isn't restored: saved values describe connections from before
+        # the restart, and would show "connected" before anything has connected.
 
     def _restore_instruments(self, snap: dict) -> None:
         """Restore run state for instruments still in the config; instruments

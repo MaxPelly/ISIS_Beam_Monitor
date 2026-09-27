@@ -198,13 +198,13 @@ def test_snapshot_is_a_copy():
     assert state.health["daemon"] == "starting"
 
 
-def test_restore_from_snapshot_restores_health_and_ignores_empty():
+def test_restore_from_snapshot_ignores_empty_and_saved_health():
     state = DaemonState()
     state.restore_from_snapshot_json(None)
     state.restore_from_snapshot_json("")
     assert state.health["beam"] == "unknown"
     state.restore_from_snapshot_json(json.dumps({"health": {"beam": "connected"}}))
-    assert state.health["beam"] == "connected"
+    assert state.health["beam"] == "unknown"  # describes the previous run, not this one
 
 
 def test_restore_from_snapshot():
