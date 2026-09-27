@@ -226,6 +226,11 @@ def _read_instruments(
     return instruments
 
 
+def _check_choice(section: str, key: str, value: str, choices) -> None:
+    if value not in choices:
+        raise ConfigError(f"[{section}] {key} must be one of {', '.join(choices)}, got '{value}'")
+
+
 def _validate_instruments(config: AppConfig) -> None:
     names = set()
     pv_owners = {
@@ -238,15 +243,8 @@ def _validate_instruments(config: AppConfig) -> None:
         if inst.name in names:
             raise ConfigError(f"Instrument {inst.name} is defined more than once")
         names.add(inst.name)
-        if inst.beam_target not in BEAM_TARGET_KEYS:
-            raise ConfigError(
-                f"[{section}] beam_target must be one of {', '.join(BEAM_TARGET_KEYS)}, "
-                f"got '{inst.beam_target}'"
-            )
-        if inst.channel not in CHANNEL_MODES:
-            raise ConfigError(
-                f"[{section}] channel must be one of {', '.join(CHANNEL_MODES)}, got '{inst.channel}'"
-            )
+        _check_choice(section, "beam_target", inst.beam_target, BEAM_TARGET_KEYS)
+        _check_choice(section, "channel", inst.channel, CHANNEL_MODES)
         # Also rejects nan and inf, which would never be reached.
         if not (math.isfinite(inst.notify_counts) and inst.notify_counts > 0):
             raise ConfigError(f"[{section}] notify_counts must be a positive number")
@@ -265,11 +263,7 @@ def _validate(config: AppConfig, config_path: Path) -> None:
             "isis_websocket_url is empty — BeamMonitor will not run. "
             "Please set [DATA] isis_websocket_url in your config file."
         )
-    if config.instrument_target not in BEAM_TARGET_KEYS:
-        raise ConfigError(
-            f"[PVS] instrument_target must be one of {', '.join(BEAM_TARGET_KEYS)}, "
-            f"got '{config.instrument_target}'"
-        )
+    _check_choice("PVS", "instrument_target", config.instrument_target, BEAM_TARGET_KEYS)
     try:
         hour, minute = (int(x) for x in config.summary_time.split(":"))
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
@@ -309,13 +303,12 @@ def _validate(config: AppConfig, config_path: Path) -> None:
 
 
 def load_config(config_path: Path) -> AppConfig:
-    if not config_path.exists():
-        raise ConfigError(f"Config file not found: {config_path}")
-
     return parse_config(_read_parser(config_path), config_path)
 
 
 def _read_parser(config_path: Path) -> configparser.ConfigParser:
+    if not config_path.exists():
+        raise ConfigError(f"Config file not found: {config_path}")
     parser = configparser.ConfigParser(interpolation=None)
     try:
         parser.read(config_path)
@@ -466,8 +459,6 @@ def update_config_file(config_path: Path, settings: Any, revision: Optional[str]
     configparser can't round-trip comments, so the rewritten file has none;
     config.ini.example documents every setting.
     """
-    if not config_path.exists():
-        raise ConfigError(f"Config file not found: {config_path}")
     parser = _read_parser(config_path)
     _apply_settings(parser, settings)
     config = parse_config(parser, config_path)
