@@ -454,3 +454,20 @@ async def test_request_timeout_closes_the_client(tmp_path):
         with pytest.raises(RuntimeError, match="not connected"):
             await client.request({"method": "get_snapshot"})
         await client.close()  # idempotent
+
+
+
+@pytest.mark.asyncio
+async def test_timeout_raises_builtin_timeout_and_wakes_other_waiters(tmp_path):
+    async def never_answers(_name):
+        await asyncio.sleep(3600)
+
+    async with serving(tmp_path, command_handler=never_answers) as server:
+        client = IPCClient(server.socket_path)
+        await client.connect()
+        events = asyncio.ensure_future(client.iter_events().__anext__())
+        with pytest.raises(OSError) as exc:  # the built-in TimeoutError on every Python version
+            await client.request({"method": "command", "name": "x"}, timeout=0.05)
+        assert type(exc.value) is TimeoutError
+        with pytest.raises(ConnectionError):
+            await asyncio.wait_for(events, 1)

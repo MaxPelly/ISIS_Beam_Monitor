@@ -42,8 +42,8 @@ logger = logging.getLogger("MAIN")
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 # Set in the environment of a daemon that re-exec'd itself (see restart_process).
 RESTARTED_ENV = "ISIS_MONITOR_RESTARTED"
-LOOP_STOP_TIMEOUT = 5.0
-IPC_REQUEST_TIMEOUT = 10.0  # for the TUI's sync and `stop`; a stuck daemon mustn't hang them  # seconds run_daemon's loops get to exit after stop_event
+LOOP_STOP_TIMEOUT = 5.0  # seconds run_daemon's loops get to exit after stop_event
+IPC_REQUEST_TIMEOUT = 10.0  # for the TUI's sync and `stop`; a stuck daemon mustn't hang them
 
 
 class StateLogHandler(logging.Handler):
@@ -578,7 +578,7 @@ async def run_stop(config) -> None:
     client = IPCClient(Path(config.daemon_socket_path))
     try:
         await asyncio.wait_for(client.connect(), IPC_REQUEST_TIMEOUT)
-    except OSError as exc:  # includes TimeoutError
+    except (OSError, asyncio.TimeoutError) as exc:  # distinct classes before Python 3.11
         print(f"Could not connect to daemon at {config.daemon_socket_path}: {exc!r}")
         raise SystemExit(1)
 

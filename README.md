@@ -236,6 +236,9 @@ sudo systemctl status isis-beam-monitor.service
   sent. Later restarts (including TUI config saves) remember it.
 - Run cards keep the "Experiment Updates" channel unless an instrument sets
   `channel = instrument`.
+- Numeric settings now have limits (see `config.ini.example`). In particular
+  `retention_days` is capped by memory at about 69 days with the default 60s
+  `sample_interval`; a longer retention is rejected at startup with a message saying so.
 - A config without `counts_pv` lines won't load on an older version (which requires
   them), so keep a copy (e.g. `config.ini.bak`) if you might roll back.
 

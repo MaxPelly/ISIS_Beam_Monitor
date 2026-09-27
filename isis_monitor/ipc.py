@@ -197,6 +197,11 @@ class IPCClient:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._read_task
             self._read_task = None
+            # Cancelled, the read loop didn't post its end marker: wake anyone
+            # else still waiting on this client rather than leave them hanging.
+            end = ConnectionError("IPC client closed")
+            self._responses.put_nowait(end)
+            self._events.put_nowait(end)
         if self.writer is not None:
             self.writer.close()
             with contextlib.suppress(ConnectionError):
@@ -212,17 +217,18 @@ class IPCClient:
         return msg
 
     async def request(self, payload: dict, timeout: Optional[float] = None) -> dict:
-        """Send `payload` and return its reply. On timeout (TimeoutError, an
-        OSError) the client is closed: a late reply would otherwise be taken
-        as the answer to the next request."""
+        """Send `payload` and return its reply. On timeout the client is
+        closed, since a late reply would otherwise be taken as the answer to
+        the next request, and the built-in TimeoutError (an OSError, so it
+        counts as a lost connection) is raised."""
         if self.writer is None:
             raise RuntimeError("IPC client is not connected")
         self.writer.write(_encode(payload))
         try:
             return await asyncio.wait_for(self._send_and_take(), timeout)
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError:  # not the built-in TimeoutError before Python 3.11
             await self.close()
-            raise
+            raise TimeoutError(f"No reply to {payload.get('method')!r} within {timeout}s") from None
 
     async def _send_and_take(self) -> dict:
         await self.writer.drain()
