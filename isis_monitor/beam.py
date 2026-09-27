@@ -4,6 +4,8 @@ import json
 import logging
 import math
 import random
+import socket
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -19,6 +21,28 @@ from isis_monitor.protocols import MonitorSinkProtocol
 logger = logging.getLogger(__name__)
 
 COLLECTION_CHECK_INTERVAL = 60.0
+BEAM_MAX_BACKOFF = 300.0  # longest wait between retries of a persistent connection problem
+
+
+def _classify_ws_error(exc: BaseException) -> Tuple[str, str]:
+    """(kind, description) of a failed or lost beam connection. Only
+    "transient" problems are likely to clear by themselves within seconds."""
+    # InvalidStatusCode (websockets' legacy client) / InvalidStatus (the new one)
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(status, int):
+        if status >= 500:
+            return "transient", f"PVWS server error (HTTP {status})"
+        return "rejected", f"PVWS rejected the connection (HTTP {status}); check [DATA] isis_websocket_url"
+    if isinstance(exc, websockets.InvalidURI):
+        return "config", f"invalid URL ({exc}); check [DATA] isis_websocket_url"
+    # Both are OSErrors, so they're checked first.
+    if isinstance(exc, ssl.SSLError):
+        return "tls", f"TLS error: {exc}"
+    if isinstance(exc, socket.gaierror):
+        return "dns", f"can't resolve the PVWS host ({exc}); network down or wrong URL?"
+    if isinstance(exc, (websockets.ConnectionClosed, OSError, asyncio.TimeoutError)):
+        return "transient", f"connection lost: {str(exc) or repr(exc)}"
+    return "unexpected", f"unexpected error: {exc!r}"
 
 
 @dataclass
@@ -384,7 +408,9 @@ class BeamMonitor:
         logger.info(f"Beam Monitor started. Connecting to {self.data_url}...")
         interval = self.config.beam_reconnect_interval
 
+        backoff = 0.0  # grows while a persistent (not "transient") problem lasts
         while True:
+            kind = "transient"
             try:
                 async with websockets.connect(self.data_url) as ws:
                     self._current_ws = ws
@@ -393,23 +419,33 @@ class BeamMonitor:
                     # requests no-ops until the connection next dropped.
                     self._force_reconnect.clear()
                     logger.info("WebSocket connected.")
+                    backoff = 0.0
                     self._set_health("connected")
                     await ws.send(subscribe_msg)
                     async for raw in ws:
                         await self._handle_message(raw)
                 logger.warning("WebSocket closed.")
-            except (websockets.ConnectionClosed, OSError) as exc:
-                logger.warning(f"WebSocket connection lost: {exc}")
             except Exception as exc:
-                logger.error(f"Unexpected error in BeamMonitor: {exc!r}")
+                kind, detail = _classify_ws_error(exc)
+                if kind == "transient":
+                    logger.warning(f"WebSocket {detail}")
+                else:
+                    logger.error(f"WebSocket {detail}", exc_info=kind == "unexpected")
             finally:
                 self._current_ws = None
 
+            # Retrying something that won't fix itself soon every few seconds
+            # just spams the log, so those waits double up to BEAM_MAX_BACKOFF.
+            if kind == "transient":
+                delay = interval
+            else:
+                backoff = min(max(backoff * 2, interval), BEAM_MAX_BACKOFF)
+                delay = backoff
             if not self._force_reconnect.is_set():
                 self._set_health("disconnected")
-                logger.warning(f"Reconnecting in {interval}s...")
+                logger.warning(f"Reconnecting in {delay:g}s...")
                 with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(self._force_reconnect.wait(), timeout=interval)
+                    await asyncio.wait_for(self._force_reconnect.wait(), timeout=delay)
             if self._force_reconnect.is_set():
                 self._force_reconnect.clear()
                 logger.info("Beam reconnect requested by operator.")

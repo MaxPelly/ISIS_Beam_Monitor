@@ -1,5 +1,7 @@
 import asyncio
 import pytest
+from websockets.datastructures import Headers
+from websockets.exceptions import InvalidStatusCode
 import base64
 import random
 from dataclasses import replace
@@ -11,6 +13,7 @@ from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.beam import (
     BeamMonitor,
     BEAM_TARGETS,
+    _classify_ws_error,
 )
 from isis_monitor.instrument import STALL_CHECK_WINDOW, _fit_rate
 
@@ -768,12 +771,82 @@ def test_prune_collected_samples_drops_samples_outside_window(mock_config, mock_
 
 
 @pytest.mark.asyncio
-async def test_run_loop_unexpected_error_marks_health_and_retries(mock_config, mock_channels, caplog):
+async def test_run_loop_bad_url_marks_health_and_retries(mock_config, mock_channels, caplog):
     sink = MagicMock()
     m = ws_monitor(mock_config, mock_channels, "not-a-websocket-url", sink=sink, reconnect_interval=0.01)
     async with running(m):
-        await wait_until(lambda: "Unexpected error in BeamMonitor" in caplog.text)
+        await wait_until(lambda: "WebSocket invalid URL" in caplog.text)
         await wait_until(lambda: call("beam", "disconnected") in sink.update_health.call_args_list)
+
+
+def test_classify_ws_error():
+    import socket
+    import ssl
+    from websockets.exceptions import ConnectionClosedError, InvalidStatus, InvalidURI
+    from websockets.http11 import Response
+
+    cases = {
+        InvalidStatusCode(403, Headers()): "rejected",
+        InvalidStatusCode(404, Headers()): "rejected",
+        InvalidStatusCode(503, Headers()): "transient",
+        InvalidStatus(Response(401, "Unauthorized", Headers())): "rejected",
+        InvalidURI("nope", "not a ws URL"): "config",
+        ssl.SSLCertVerificationError("certificate verify failed"): "tls",
+        socket.gaierror(-2, "Name or service not known"): "dns",
+        ConnectionClosedError(None, None): "transient",
+        ConnectionRefusedError(111, "refused"): "transient",
+        asyncio.TimeoutError(): "transient",
+        RuntimeError("bug"): "unexpected",
+    }
+    for exc, kind in cases.items():
+        assert _classify_ws_error(exc)[0] == kind, exc
+    assert "HTTP 403" in _classify_ws_error(InvalidStatusCode(403, Headers()))[1]
+
+
+@pytest.mark.asyncio
+async def test_run_loop_backs_off_only_for_persistent_problems(mock_config, mock_channels):
+    """Transient failures retry after reconnect_interval; persistent ones
+    double the wait each time up to BEAM_MAX_BACKOFF, resetting on connect."""
+    m = ws_monitor(mock_config, mock_channels, "ws://pvws.invalid", reconnect_interval=5.0)
+    rejected = InvalidStatusCode(403, Headers())
+    failures = [rejected] * 8 + [None, rejected, OSError("reset"), rejected]
+    waits = []
+
+    class Connected:  # stands in for a connection the server closes at once
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def send(self, _msg):
+            pass
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    def connect(_url):
+        exc = failures.pop(0)
+        if exc is None:
+            return Connected()
+        raise exc
+
+    async def fake_wait_for(aw, timeout):
+        aw.close()  # the un-awaited Event.wait() coroutine
+        waits.append(timeout)
+        if not failures:
+            raise asyncio.CancelledError
+        raise asyncio.TimeoutError
+
+    with patch("isis_monitor.beam.websockets.connect", side_effect=connect), \
+            patch("isis_monitor.beam.asyncio.wait_for", side_effect=fake_wait_for):
+        with pytest.raises(asyncio.CancelledError):
+            await m._run_loop()
+
+    assert waits == [5, 10, 20, 40, 80, 160, 300, 300, 5, 5, 5, 10]
 
 
 @pytest.mark.asyncio
