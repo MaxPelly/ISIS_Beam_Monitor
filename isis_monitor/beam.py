@@ -14,7 +14,7 @@ import websockets
 
 from isis_monitor.config import AppConfig
 from isis_monitor.instrument import InstrumentTracker
-from isis_monitor.messages import beam_change, startup_status
+from isis_monitor.messages import beam_change, fmt_duration, startup_status
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.protocols import MonitorSinkProtocol
 
@@ -409,30 +409,39 @@ class BeamMonitor:
         interval = self.config.beam_reconnect_interval
 
         backoff = 0.0  # grows while a persistent (not "transient") problem lasts
+        # Repeats of the last logged kind of failure are only logged at debug,
+        # with one summary line once the connection is back.
+        last_kind = ""
+        failed_attempts, down_since = 0, None
         while True:
-            kind = "transient"
+            connected = False
+            kind, detail, error = "transient", "closed", None
             try:
                 async with websockets.connect(self.data_url) as ws:
+                    connected = True
                     self._current_ws = ws
                     # A reconnect requested during the handshake is satisfied by
                     # this new connection; left set, it would make later
                     # requests no-ops until the connection next dropped.
                     self._force_reconnect.clear()
-                    logger.info("WebSocket connected.")
-                    backoff = 0.0
+                    if failed_attempts:
+                        down_for = fmt_duration(datetime.now(timezone.utc) - down_since)
+                        logger.info(f"WebSocket connected after {failed_attempts} failed attempt(s) over {down_for}.")
+                    else:
+                        logger.info("WebSocket connected.")
+                    backoff, last_kind, failed_attempts, down_since = 0.0, "", 0, None
                     self._set_health("connected")
                     await ws.send(subscribe_msg)
                     async for raw in ws:
                         await self._handle_message(raw)
-                logger.warning("WebSocket closed.")
             except Exception as exc:
                 kind, detail = _classify_ws_error(exc)
-                if kind == "transient":
-                    logger.warning(f"WebSocket {detail}")
-                else:
-                    logger.error(f"WebSocket {detail}", exc_info=kind == "unexpected")
+                error = exc if kind == "unexpected" else None  # log its traceback
             finally:
                 self._current_ws = None
+            if not connected:
+                failed_attempts += 1
+            down_since = down_since or datetime.now(timezone.utc)
 
             # Retrying something that won't fix itself soon every few seconds
             # just spams the log, so those waits double up to BEAM_MAX_BACKOFF.
@@ -443,7 +452,14 @@ class BeamMonitor:
                 delay = backoff
             if not self._force_reconnect.is_set():
                 self._set_health("disconnected")
-                logger.warning(f"Reconnecting in {delay:g}s...")
+                message = f"WebSocket {detail}; reconnecting in {delay:g}s"
+                if kind == last_kind:
+                    logger.debug(message)
+                elif kind == "transient":
+                    logger.warning(message)
+                else:
+                    logger.error(message, exc_info=error)
+                last_kind = kind
                 with contextlib.suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(self._force_reconnect.wait(), timeout=delay)
             if self._force_reconnect.is_set():

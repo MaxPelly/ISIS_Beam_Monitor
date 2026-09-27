@@ -850,6 +850,30 @@ async def test_run_loop_backs_off_only_for_persistent_problems(mock_config, mock
 
 
 @pytest.mark.asyncio
+async def test_run_loop_logs_repeated_failures_once(mock_config, mock_channels, caplog):
+    import logging
+    async with FakePVWS() as server:
+        url = server.url
+    # Server is now closed, so every attempt is refused.
+    m = ws_monitor(mock_config, mock_channels, url, reconnect_interval=0.01)
+    with caplog.at_level(logging.INFO, logger="isis_monitor.beam"):
+        async with running(m):
+            await wait_until(lambda: "reconnecting in" in caplog.text)
+            await asyncio.sleep(0.1)  # several more refused attempts
+            assert caplog.text.count("reconnecting in") == 1
+
+            port = int(url.rsplit(":", 1)[1])
+            server = FakePVWS()
+            server._server = await websockets.serve(server._handler, "127.0.0.1", port)
+            try:
+                await wait_until(lambda: "WebSocket connected after" in caplog.text)
+            finally:
+                server._server.close()
+                await server._server.wait_closed()
+    assert "failed attempt(s) over" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_close_ws_quietly_logs_instead_of_raising(caplog):
     ws = MagicMock()
     ws.close = AsyncMock(side_effect=RuntimeError("socket gone"))
