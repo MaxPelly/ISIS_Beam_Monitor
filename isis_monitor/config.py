@@ -19,8 +19,13 @@ logger = logging.getLogger("isis_monitor.config")
 # imported directly to avoid a circular import (beam.py imports config.py).
 BEAM_TARGET_KEYS = ("TS1", "TS2", "Muon")
 
+# Teams payload channel for an instrument's run cards: "experiment" sends the
+# experiment NotificationChannel's name ("Experiment Updates"), "instrument"
+# sends the instrument's own name.
+CHANNEL_MODES = ("experiment", "instrument")
+
 INSTRUMENT_SECTION_PREFIX = "INSTRUMENT:"
-_INSTRUMENT_KEYS = ("notify_counts", "beam_target")
+_INSTRUMENT_KEYS = ("notify_counts", "beam_target", "channel")
 # Keys no longer used in instrument sections, with why, for the load-time warning.
 _RETIRED_INSTRUMENT_KEYS = {"counts_pv": "progress is now read from IN:<NAME>:DAE:TOTALUAMPS"}
 # [NOTIFICATIONS] keys the TUI may edit, mapped to their AppConfig field.
@@ -59,6 +64,7 @@ class InstrumentConfig:
     beam_target: str  # which beam target's state to report in run cards
     counts_pv: str = ""  # total µA·h collected this run; derived from the name when blank
     run_name_pv: str = ""  # derived from the name when blank
+    channel: str = "experiment"  # one of CHANNEL_MODES
     # The INI section it was read from, for error messages
     section: str = field(default="", compare=False, repr=False)
 
@@ -193,7 +199,8 @@ def _read_instruments(
         except ValueError as exc:
             raise ConfigError(f"[{section}] notify_counts: {exc}") from exc
         beam_target = parser.get(section, "beam_target", fallback="").strip() or config.instrument_target
-        instruments.append(InstrumentConfig(name, notify_counts, beam_target, section=section))
+        channel = parser.get(section, "channel", fallback="").strip().lower() or "experiment"
+        instruments.append(InstrumentConfig(name, notify_counts, beam_target, channel=channel, section=section))
     return instruments
 
 
@@ -213,6 +220,10 @@ def _validate_instruments(config: AppConfig) -> None:
             raise ConfigError(
                 f"[{section}] beam_target must be one of {', '.join(BEAM_TARGET_KEYS)}, "
                 f"got '{inst.beam_target}'"
+            )
+        if inst.channel not in CHANNEL_MODES:
+            raise ConfigError(
+                f"[{section}] channel must be one of {', '.join(CHANNEL_MODES)}, got '{inst.channel}'"
             )
         # Also rejects nan and inf, which would never be reached.
         if not (math.isfinite(inst.notify_counts) and inst.notify_counts > 0):
@@ -313,7 +324,7 @@ def _format_value(value: Any) -> str:
 
 def editable_settings(config: AppConfig) -> dict:
     """The settings the TUI may edit, as INI strings:
-    {"notifications": {key: value}, "instruments": [{name, notify_counts, beam_target}]}."""
+    {"notifications": {key: value}, "instruments": [{name, notify_counts, beam_target, channel}]}."""
     return {
         "notifications": {
             key: _format_value(getattr(config, attr)) for key, attr in EDITABLE_NOTIFICATION_KEYS.items()
@@ -323,6 +334,7 @@ def editable_settings(config: AppConfig) -> dict:
                 "name": inst.name,
                 "notify_counts": _format_value(inst.notify_counts),
                 "beam_target": inst.beam_target,
+                "channel": inst.channel,
             }
             for inst in config.instruments
         ],

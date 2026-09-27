@@ -579,7 +579,7 @@ def test_editable_settings_are_ini_strings(tmp_path):
             "fun_mode": "false", "timezone": "Europe/London", "debounce_seconds": "20",
             "stall_minutes": "10", "summary_time": "08:00",
         },
-        "instruments": [{"name": "PEARL", "notify_counts": "130", "beam_target": "TS1"}],
+        "instruments": [{"name": "PEARL", "notify_counts": "130", "beam_target": "TS1", "channel": "experiment"}],
     }
 
 
@@ -727,3 +727,29 @@ def test_update_config_file_drops_old_counts_pv_and_rejects_editing_it(tmp_path)
 
     with pytest.raises(ConfigError, match="'counts_pv' can't be edited"):
         update_config_file(path, {"instruments": [{"name": "WISH", "counts_pv": "X", "notify_counts": "5"}]})
+
+
+def test_instrument_channel_defaults_to_experiment_and_can_be_instrument(tmp_path):
+    config = load_config(_write(tmp_path, """\
+[INSTRUMENT:PEARL]
+notify_counts = 130
+[INSTRUMENT:WISH]
+notify_counts = 50
+channel = Instrument
+"""))
+    assert [(i.name, i.channel) for i in config.instruments] == [("PEARL", "experiment"), ("WISH", "instrument")]
+    assert load_config(_write(tmp_path, "")).instruments[0].channel == "experiment"  # legacy
+
+
+def test_invalid_instrument_channel(tmp_path):
+    with pytest.raises(ConfigError, match=r"\[INSTRUMENT:PEARL\] channel must be one of experiment, instrument"):
+        load_config(_write(tmp_path, "[INSTRUMENT:PEARL]\nnotify_counts = 5\nchannel = teams\n"))
+
+
+def test_update_config_file_writes_channel(tmp_path):
+    path = _editable_file(tmp_path)
+    settings = editable_settings(load_config(path))
+    settings["instruments"][0]["channel"] = "instrument"
+    update_config_file(path, settings)
+    assert load_config(path).instruments[0].channel == "instrument"
+    assert "channel = instrument" in path.read_text()

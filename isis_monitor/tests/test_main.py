@@ -643,6 +643,7 @@ async def test_daemon_get_config_reads_the_file(tmp_path):
         reply = await client.request({"method": "get_config"})
     assert reply["config"]["instruments"][0]["name"] == "PEARL"
     assert reply["beam_targets"] == ["TS1", "TS2", "Muon"]
+    assert reply["channel_modes"] == ["experiment", "instrument"]
     assert len(reply["revision"]) == 64
     assert task.result() is False  # plain stop, no restart
 

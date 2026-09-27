@@ -20,6 +20,7 @@ from isis_monitor.beam import BeamMonitor, CHANNEL_LABELS
 from isis_monitor.config_editor import run_config_editor
 from isis_monitor.config import (
     BEAM_TARGET_KEYS,
+    CHANNEL_MODES,
     ConfigChangedError,
     ConfigError,
     config_revision,
@@ -254,6 +255,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             "config": editable_settings(load_config(args.config)),
             "revision": config_revision(args.config),
             "beam_targets": list(BEAM_TARGET_KEYS),
+            "channel_modes": list(CHANNEL_MODES),
         }
 
     config_lock = asyncio.Lock()  # one read or edit of the file at a time
