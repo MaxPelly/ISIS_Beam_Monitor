@@ -101,14 +101,12 @@ class BeamChangeAggregator:
     def __init__(
         self,
         beam_channel: NotificationChannel,
-        debounce_seconds: float = 20.0,
-        fun_mode: bool = False,
-        rng: Optional[random.Random] = None,
+        debounce_seconds: float,
+        flavour_rng: Optional[random.Random] = None,  # set only with fun_mode
     ):
         self.beam_channel = beam_channel
         self.debounce_seconds = debounce_seconds
-        self.fun_mode = fun_mode
-        self.rng = rng or random.Random()
+        self.flavour_rng = flavour_rng
         self._pending: Dict[str, _PendingChange] = {}
         self._recent_offs: Dict[str, datetime] = {}
 
@@ -180,7 +178,7 @@ class BeamChangeAggregator:
             pending.started_at - pending.prev_since,
             pending.started_at,
             trip_note=trip_note,
-            rng=self.rng if self.fun_mode else None,
+            rng=self.flavour_rng,
             channel=pending.bt.channel_label,
         )
         logger.info(f"State Change: {notification.to_plain_text()}")
@@ -213,19 +211,16 @@ class BeamMonitor:
         beam_channel: NotificationChannel,
         experiment_channel: NotificationChannel,
         sink: Optional[MonitorSinkProtocol] = None,
-        debounce_seconds: float = 20.0,
         rng: Optional[random.Random] = None,
     ):
         self.config = config
         self.data_url = config.isis_websocket_url
         self.beam_channel = beam_channel
-        self.experiment_channel = experiment_channel
         self.sink = sink
         self.state = MonitorState()
-        self._rng = rng or random.Random()
-        self.change_aggregator = BeamChangeAggregator(
-            beam_channel, debounce_seconds, fun_mode=config.fun_mode, rng=self._rng,
-        )
+        # Flavour lines are only picked with fun_mode on; None turns them off.
+        self._flavour_rng = (rng or random.Random()) if config.fun_mode else None
+        self.change_aggregator = BeamChangeAggregator(beam_channel, config.debounce_seconds, self._flavour_rng)
         self._force_reconnect = asyncio.Event()
         self._current_ws = None
         self._close_task: Optional[asyncio.Task] = None
@@ -247,7 +242,7 @@ class BeamMonitor:
             inst.name: InstrumentTracker(
                 inst, experiment_channel, self._beam_power, config.stall_minutes,
                 finish_warning_minutes=config.finish_warning_minutes,
-                fun_mode=config.fun_mode, rng=self._rng, sink=sink,
+                flavour_rng=self._flavour_rng, sink=sink,
             )
             for inst in config.instruments
         }
@@ -288,10 +283,9 @@ class BeamMonitor:
         if new_state != prev_state:
             if prev_state == "":
                 # First reading for this target — always send immediately, never debounced.
-                rng = self._rng if self.config.fun_mode else None
                 notification = startup_status(
                     bt.state_key, new_state, beam_val, time_now,
-                    rng=rng, channel=bt.channel_label,
+                    rng=self._flavour_rng, channel=bt.channel_label,
                 )
                 logger.info(f"Startup: {notification.to_plain_text()}")
                 await self.beam_channel.broadcast(notification)

@@ -63,8 +63,8 @@ def make_monitor(mock_config, mock_channels, counts_target=100, rng=None, sink=N
     beam_channel, exp_channel = mock_channels
     instruments = [replace(i, notify_counts=counts_target) for i in mock_config.instruments]
     return BeamMonitor(
-        replace(mock_config, instruments=instruments), beam_channel, exp_channel,
-        debounce_seconds=DEBOUNCE_SECONDS, rng=rng, sink=sink,
+        replace(mock_config, instruments=instruments, debounce_seconds=DEBOUNCE_SECONDS),
+        beam_channel, exp_channel, rng=rng, sink=sink,
     )
 
 
@@ -965,7 +965,7 @@ def two_instrument_monitor(mock_config, mock_channels):
         InstrumentConfig("PEARL", 100.0, "TS1"),
         InstrumentConfig("WISH", 50.0, "TS2"),
     ])
-    return BeamMonitor(config, *mock_channels, debounce_seconds=DEBOUNCE_SECONDS)
+    return BeamMonitor(replace(config, debounce_seconds=DEBOUNCE_SECONDS), *mock_channels)
 
 
 @pytest.mark.asyncio

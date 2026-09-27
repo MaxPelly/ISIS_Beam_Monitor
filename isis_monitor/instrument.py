@@ -74,8 +74,7 @@ class InstrumentTracker:
         beam_power: Callable[[str], str],
         stall_minutes: float,
         finish_warning_minutes: float = 15.0,
-        fun_mode: bool = False,
-        rng: Optional[random.Random] = None,
+        flavour_rng: Optional[random.Random] = None,  # set only with fun_mode
         sink: Optional[MonitorSinkProtocol] = None,
     ):
         self.instrument = instrument
@@ -83,13 +82,9 @@ class InstrumentTracker:
         self.beam_power = beam_power
         self.stall_minutes = stall_minutes
         self.finish_warning_minutes = finish_warning_minutes
-        self.fun_mode = fun_mode
-        self._rng = rng or random.Random()
+        self.flavour_rng = flavour_rng
         self.sink = sink
         self.state = InstrumentState()
-
-    def _flavour_rng(self) -> Optional[random.Random]:
-        return self._rng if self.fun_mode else None
 
     def _card_channel(self) -> str:
         """Teams channel for this instrument's cards; blank means the
@@ -118,7 +113,7 @@ class InstrumentTracker:
                 time_now - self.state.run_started_at,
                 self.state.current_counts,
                 time_now,
-                rng=self._flavour_rng(),
+                rng=self.flavour_rng,
                 channel=self._card_channel(),
             )
             logger.info(f"New Run: {notification.to_plain_text()}")
@@ -146,9 +141,9 @@ class InstrumentTracker:
             self.sink.update_run_name(self.instrument.name, name)
         self._save_progress()
 
-        if self.fun_mode and total_runs and total_runs % RUN_MILESTONE_INTERVAL == 0:
+        if self.flavour_rng and total_runs and total_runs % RUN_MILESTONE_INTERVAL == 0:
             milestone = run_milestone(
-                self.instrument.name, total_runs, time_now, rng=self._rng, channel=self._card_channel()
+                self.instrument.name, total_runs, time_now, rng=self.flavour_rng, channel=self._card_channel()
             )
             logger.info(f"Milestone: {milestone.to_plain_text()}")
             await self.experiment_channel.broadcast(milestone)
@@ -204,7 +199,7 @@ class InstrumentTracker:
                 rate,
                 self._beam_state(),
                 time_now,
-                rng=self._flavour_rng(),
+                rng=self.flavour_rng,
                 channel=self._card_channel(),
             )
             logger.info(f"Run finishing: {notification.to_plain_text()}")
