@@ -55,8 +55,8 @@ class DaemonState(MonitorSinkProtocol):
         }
         self.mcr_news = "Waiting for initial MCR news..."
         self.logs: Deque[str] = deque(maxlen=logs_maxlen)
-        # notify_counts and beam_target come from the config and are only
-        # carried here so clients can display them.
+        # notify_counts and beam_target come from the config, for clients to
+        # display; the saved notify_counts is also checked on restore.
         self.instruments: Dict[str, Dict[str, object]] = {
             inst.name: {
                 "run_name": "",

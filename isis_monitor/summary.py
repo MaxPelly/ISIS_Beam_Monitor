@@ -1,4 +1,4 @@
-"""Daily beam-uptime summary cards, and fun_mode-only milestones."""
+"""Daily beam-uptime summary cards, with fun_mode-only uptime records."""
 import asyncio
 import json
 import logging
