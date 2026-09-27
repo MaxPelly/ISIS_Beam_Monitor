@@ -119,8 +119,8 @@ In `RichTUI._make_layout()`, sections are defined using `split_column` and `spli
 
 ## Advice for Future Changes
 
-### Technical Debt & Improvements
--   **Performance**: If the SQLite persistence overhead grows, consider migrating `storage.py` to use `aiosqlite` for native async database access instead of its single-thread executor.
+### Future Considerations
+-   **aiosqlite (deliberately deferred)**: `storage.py` runs every SQLite call on one worker thread via `store.run()`. The load is tiny (three beam rows and one snapshot per `sample_interval`, plus the daily summary), and the single thread already solves the connection's thread-safety problem, so moving to `aiosqlite` would add a dependency and a rewrite of `storage.py`, both loops and their tests for no measurable gain. Revisit it only if persistence becomes measurably slow, e.g. `state_persistence_loop` ticks overrunning `sample_interval`.
 
 ### Potential Features
 -   **Prometheus Exporter**: Add a lightweight HTTP endpoint to export beam metrics and health status for ingestion by Prometheus/Grafana.
