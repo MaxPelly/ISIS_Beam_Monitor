@@ -58,27 +58,8 @@ def make_mock_session(status: int = 200, response_text: str = "OK"):
 
 @pytest.mark.asyncio
 async def test_teams_notifier_sends_request():
-    notifier = TeamsNotifier("http://fake.webhook.url")
-    mock_session = make_mock_session(status=200)
-    notification = Notification(title="Test title", text="Test message")
-
-    with patch("isis_monitor.notifiers.aiohttp.ClientSession", return_value=mock_session):
-        await notifier.send(notification)
-
-    mock_session.post.assert_called_once()
-    args, kwargs = mock_session.post.call_args
-    assert args[0] == "http://fake.webhook.url"
-    assert kwargs["json"]["summary"] == "Test title | Test message"
-    card = kwargs["json"]["attachments"][0]["content"]
-    assert card["type"] == "AdaptiveCard"
-    body_texts = [item["text"] for item in card["body"] if "text" in item]
-    assert "Test message" in body_texts
-
-
-@pytest.mark.asyncio
-async def test_teams_notifier_payload_includes_channel_and_content_summary():
-    """Downstream routing (e.g. Power Automate) reads these two fields from
-    inside `content`, not just the top-level `summary` — both must be present."""
+    """Downstream routing (e.g. Power Automate) reads `channel` and `summary`
+    from inside `content`, not just the top-level `summary` — both must be present."""
     notifier = TeamsNotifier("http://fake.webhook.url")
     mock_session = make_mock_session(status=200)
     notification = Notification(title="Test title", text="Test message", channel="TS1")
@@ -86,8 +67,15 @@ async def test_teams_notifier_payload_includes_channel_and_content_summary():
     with patch("isis_monitor.notifiers.aiohttp.ClientSession", return_value=mock_session):
         await notifier.send(notification)
 
-    payload = mock_session.post.call_args.kwargs["json"]
+    mock_session.post.assert_called_once()
+    args, kwargs = mock_session.post.call_args
+    assert args[0] == "http://fake.webhook.url"
+    payload = kwargs["json"]
+    assert payload["summary"] == "Test title | Test message"
     card = payload["attachments"][0]["content"]
+    assert card["type"] == "AdaptiveCard"
+    body_texts = [item["text"] for item in card["body"] if "text" in item]
+    assert "Test message" in body_texts
     assert card["channel"] == "TS1"
     assert card["summary"] == payload["summary"]
 
@@ -184,7 +172,7 @@ def test_create_payload_url_action_only_when_url_given():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_notification_channel():
+async def test_notification_channel_fills_in_only_a_blank_channel():
     channel = NotificationChannel("TestChannel")
 
     mock_notifier1 = MagicMock()
@@ -205,19 +193,10 @@ async def test_notification_channel():
     mock_notifier1.send.assert_called_once_with(expected)
     mock_notifier2.send.assert_called_once_with(expected)
 
-
-@pytest.mark.asyncio
-async def test_notification_channel_does_not_override_explicit_channel():
-    channel = NotificationChannel("TestChannel")
-    mock_notifier = MagicMock()
-    mock_notifier.send = AsyncMock()
-    channel.add_notifier(mock_notifier)
-
-    notification = Notification(title="Title", text="Text", channel="TS1")
-    await channel.broadcast(notification)
+    explicit = Notification(title="Title", text="Text", channel="TS1")
+    await channel.broadcast(explicit)
     await channel.flush()
-
-    mock_notifier.send.assert_called_once_with(notification)
+    mock_notifier1.send.assert_called_with(explicit)
 
 
 @pytest.mark.asyncio
