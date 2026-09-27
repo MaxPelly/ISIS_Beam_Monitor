@@ -86,16 +86,11 @@ def _render_sparkline(
 
     The bar chart is min-max normalised against the current data in the deque.
     """
-    text = Text()
-    if not history_data:
-        text.append(" " * width)
-        return text
-
     tail = history_data[-width:]
     pad_len = width - len(tail)
 
     chars = sparkline_chars([v for v, _ in tail], width)
-    text.append(chars[:pad_len])
+    text = Text(chars[:pad_len])
     for char, (_, power) in zip(chars[pad_len:], tail):
         text.append(char, style=_get_state_colour(power))
 
@@ -112,8 +107,6 @@ class RichTUI:
     ):
         self.history_maxlen = history_maxlen
         self.sample_interval = sample_interval
-        self.refresh_per_second = refresh_per_second
-        self.logs_maxlen = logs_maxlen
 
         self.beam_states: dict[str, dict] = {
             beam: {"current": 0.0, "power": "unknown"} for beam in CHANNEL_LABELS
@@ -128,12 +121,12 @@ class RichTUI:
         self.instruments: dict[str, dict] = {}
 
         self.mcr_news = "Waiting for initial MCR news..."
-        self._logs: Deque[str] = deque(maxlen=self.logs_maxlen)
+        self._logs: Deque[str] = deque(maxlen=logs_maxlen)
         self.last_update = datetime.now(timezone.utc)
         self.connection_state = "DISCONNECTED"
 
         self.layout = self._make_layout()
-        self.live = Live(self.layout, refresh_per_second=self.refresh_per_second, screen=True)
+        self.live = Live(self.layout, refresh_per_second=refresh_per_second, screen=True)
 
     # ------------------------------------------------------------------
     # Layout
@@ -268,31 +261,19 @@ class RichTUI:
 
         content = Text()
         for i, (beam, state) in enumerate(self.beam_states.items()):
-            # Extract both current and historical power state
-            history_data = [(v, p) for _, v, p in self._history[beam]]
-            latest = f"{state['current']:6.1f} μA"
-
-            label = Text(f"{beam:<{LABEL_W}}", style="bold")
-            spark = _render_sparkline(history_data, SPARK_WIDTH)
-            val   = Text(f" {latest}", style="dim")
-
-            content.append_text(label)
-            content.append_text(spark)
-            content.append_text(val)
-            if i < len(self.beam_states) - 1:
+            if i:
                 content.append("\n")
+            content.append(f"{beam:<{LABEL_W}}", style="bold")
+            content.append_text(_render_sparkline([(v, p) for _, v, p in self._history[beam]], SPARK_WIDTH))
+            content.append(f" {state['current']:6.1f} μA", style="dim")
 
         n = len(next(iter(self._history.values())))
         interval_s = self.sample_interval
-        bar_label = (
-            f"{interval_s:.0f}s/bar" if interval_s < 60
-            else f"{interval_s / 60:.0f} min/bar"
-        )
-        history_label = (
-            f"{n * interval_s:.0f}s history" if interval_s < 60
-            else f"{n * interval_s / 60:.0f} min history"
-        )
-        subtitle = f"{n}/{self.history_maxlen} samples · {bar_label} · {history_label}"
+
+        def fmt(seconds: float) -> str:  # in the bar interval's own unit
+            return f"{seconds:.0f}s" if interval_s < 60 else f"{seconds / 60:.0f} min"
+
+        subtitle = f"{n}/{self.history_maxlen} samples · {fmt(interval_s)}/bar · {fmt(n * interval_s)} history"
         self.layout["beam_graph"].update(
             Panel(
                 content,
@@ -356,15 +337,13 @@ class RichTUI:
         self._update_beam_graph()
 
     def set_history_snapshot(self, history: dict[str, list[dict]]) -> None:
-        for beam in self._history.keys():
-            self._history[beam].clear()
+        for samples in self._history.values():
+            samples.clear()
         for beam, rows in history.items():
-            if beam not in self._history:
-                continue
-            for row in rows:
-                ts = datetime.fromisoformat(str(row["timestamp"]))
-                self._history[beam].append(
-                    (ts, float(row["current"]), str(row["power"]))
+            if (samples := self._history.get(beam)) is not None:
+                samples.extend(
+                    (datetime.fromisoformat(str(row["timestamp"])), float(row["current"]), str(row["power"]))
+                    for row in rows
                 )
         self._update_beam_graph()
 
@@ -373,7 +352,7 @@ class RichTUI:
         self._update_all()
 
     def _update_logs_panel(self):
-        # Only show the latest few logs that fit in the panel height (split size 8)
+        # Only show the latest logs that fit in the panel (layout size 16, less borders)
         logs_to_show = list(self._logs)[-15:]
         log_text = "\n".join(logs_to_show)
         self.layout["logs"].update(
