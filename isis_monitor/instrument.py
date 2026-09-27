@@ -20,6 +20,7 @@ STALL_CHECK_WINDOW = timedelta(minutes=5)
 # How much counts history the rate needs before an early finishing card is
 # sent on its ETA; until then the card waits for notify_counts itself.
 ETA_MIN_HISTORY = timedelta(minutes=3)
+ETA_CHECK_INTERVAL = timedelta(seconds=30)  # at most one rate fit per this, per instrument
 RUN_MILESTONE_INTERVAL = 25
 
 
@@ -53,6 +54,7 @@ class InstrumentState:
     current_counts: float = -1.0  # total current collected so far this experiment
     collected_samples: Deque[Tuple[datetime, float]] = field(default_factory=deque)  # (time, current_counts)
     end_notified: bool = False
+    eta_checked_at: Optional[datetime] = None
 
     # Periodic collection-progress check (InstrumentTracker.check_collection_progress)
     collection_stalled_since: Optional[datetime] = None
@@ -175,16 +177,23 @@ class InstrumentTracker:
         if self.state.end_notified:
             # Counts only fall when the DAE resets them, e.g. a new run that
             # kept the old title; then the next finish needs a card too.
-            if total_collected < previous and total_collected < counts_target - 25:
+            if total_collected < previous - 1 and total_collected < counts_target - 25:
                 self.state.end_notified = False
                 self._save_progress()
             return
 
         remaining = counts_target - total_collected
-        if remaining >= 0 and (
-            self.finish_warning_minutes <= 0 or samples[-1][0] - samples[0][0] < ETA_MIN_HISTORY
-        ):
-            return  # can't be due yet; skips the rate fit on most updates
+        if remaining >= 0:
+            # Only an ETA can make the card due before the target; the fit is
+            # rate-limited, as counts can update every few seconds.
+            checked = self.state.eta_checked_at
+            if (
+                self.finish_warning_minutes <= 0
+                or samples[-1][0] - samples[0][0] < ETA_MIN_HISTORY
+                or (checked is not None and time_now - checked < ETA_CHECK_INTERVAL)
+            ):
+                return
+            self.state.eta_checked_at = time_now
         rate = _fit_rate(samples)
         if remaining < 0 or (rate > 0 and remaining / rate <= self.finish_warning_minutes * 60):
             notification = run_finishing(

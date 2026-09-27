@@ -416,6 +416,17 @@ async def test_finishing_card_waits_for_the_target_without_a_near_eta(mock_confi
 
 
 @pytest.mark.asyncio
+async def test_eta_rate_fit_is_rate_limited(mock_config, mock_channels):
+    m = make_monitor(mock_config, mock_channels, counts_target=1000)
+    tracker(m).state.run_name = "Run 1"
+    readings = [(i / 12, i * 0.1) for i in range(12 * 6)]  # every 5s for 6 minutes, far from the target
+
+    with patch("isis_monitor.instrument._fit_rate", wraps=_fit_rate) as fit:
+        await _feed_counts(m, readings)
+    assert fit.call_count == 6  # every 30s once there are 3 minutes of history
+
+
+@pytest.mark.asyncio
 async def test_finish_warning_minutes_zero_only_sends_at_the_target(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = make_monitor(replace(mock_config, finish_warning_minutes=0), mock_channels, counts_target=100)

@@ -105,7 +105,7 @@ legacy `[PVS]` keys (`run_name_pv`, and `notify_counts`, default 130), named fro
 # beam is on, before a stall warning is sent (at most 7 days; default = 15).
 # stall_minutes = 15
 # How many minutes before a run is expected to reach its notify_counts the
-# "run about to finish" card is sent (0 = only once it's reached; default = 15).
+# "run about to finish" card is sent (0 = only once it's passed; default = 15).
 # finish_warning_minutes = 15
 # Time (HH:MM, in the timezone above) the daily beam-uptime summary is sent at (default = 08:00).
 # summary_time = 08:00
@@ -149,8 +149,8 @@ In TUI mode, single keys (no Enter needed) control the client:
 ### Editing the configuration from the TUI
 
 Press `c` to pause the display and open a numbered menu of the notification settings
-(`fun_mode`, `timezone`, `debounce_seconds`, `stall_minutes`, `finish_warning_minutes`,
-`summary_time`) and the
+(`fun_mode`, `timezone`, `debounce_seconds`, `stall_minutes`,
+`finish_warning_minutes`, `summary_time`) and the
 instruments (name, notify threshold, beam target, Teams channel). Type a number to edit
 that entry (Enter keeps the current value), `a` to add an instrument, `d <number>` to
 delete one, `s` to review the changes and save, or `q` to leave without saving.
