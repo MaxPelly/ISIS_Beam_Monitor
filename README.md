@@ -15,7 +15,7 @@ This is a Python application that monitors the status of the ISIS beam, experime
 - **Dummy Notifier**: Includes a logging-based dummy notifier for testing and development without sending actual webhooks.
 - **Concurrent Execution**: Uses `asyncio` to run beam and news monitors concurrently for real-time responsiveness.
 - **Live TUI Graph View**: Displays a rolling 1-hour sparkline graph of beam current (μA) for TS1, TS2, and Muons directly in the terminal. The graph is sampled on its own fixed 1-minute timer, fully decoupled from the beam WebSocket update rate — a silent beam produces a flat line at the last-known value.
-- **TUI Instruments Panel and Config Editor**: Shows each instrument's run and progress towards its notify count, and lets you edit instruments and notification settings from the TUI; the daemon validates, saves and restarts itself to apply them.
+- **TUI Instruments Panel and Config Editor**: Shows each instrument's run and progress towards its notify threshold (µA·h), and lets you edit instruments and notification settings from the TUI; the daemon validates, saves and restarts itself to apply them.
 
 ## Requirements
 
@@ -92,7 +92,7 @@ legacy `[PVS]` keys (`run_name_pv`, and `notify_counts`, default 130), named fro
 # How long a beam state change must persist, in seconds (0-3600), before a
 # card is sent — filters out brief flickers (default = 20).
 # debounce_seconds = 20
-# How many minutes counts collected can stay flat, while the instrument's
+# How many minutes the µA·h collected can stay flat, while the instrument's
 # beam is on, before a stall warning is sent (at most 7 days; default = 15).
 # stall_minutes = 15
 # Time (HH:MM, in the timezone above) the daily beam-uptime summary is sent at (default = 08:00).
@@ -138,9 +138,9 @@ In TUI mode, single keys (no Enter needed) control the client:
 
 Press `c` to pause the display and open a numbered menu of the notification settings
 (`fun_mode`, `timezone`, `debounce_seconds`, `stall_minutes`, `summary_time`) and the
-instruments (name, notify threshold, beam target, Teams channel). Type a number to edit that entry (Enter keeps the current value), `a` to add
-an instrument, `d <number>` to delete one, `s` to review the changes and save, or `q` to
-leave without saving.
+instruments (name, notify threshold, beam target, Teams channel). Type a number to edit
+that entry (Enter keeps the current value), `a` to add an instrument, `d <number>` to
+delete one, `s` to review the changes and save, or `q` to leave without saving.
 
 On save the daemon validates the new settings (nothing is written if they're invalid, and
 you return to the menu to fix them), writes `config.ini`, and restarts itself in place (same
@@ -155,8 +155,9 @@ Things to know:
   save; a non-standard `[PVS] run_name_pv` is not kept (the derived
   `IN:<NAME>:DAE:WDTITLE` is used).
 - Saving drops any old `counts_pv` lines from instrument sections (see Upgrading) and
-  writes an explicit `channel`, plus a `beam_target`, for every instrument, so `[PVS] instrument_target`
-  then only applies to sections added by hand without one.
+  writes an explicit `channel` and `beam_target` for every instrument, so
+  `[PVS] instrument_target` then only applies to sections added by hand without a
+  `beam_target`.
 - Renaming an instrument starts its run count (for milestones) from zero.
 - The daemon's user needs write access to `config.ini` and its directory (for the temporary
   file and `config.ini.bak`); otherwise saving fails with a write error.
@@ -227,10 +228,15 @@ sudo systemctl status isis-beam-monitor.service
 
 - Run progress now comes from `IN:<NAME>:DAE:TOTALUAMPS` (total µA·h this run) instead of
   a per-instrument dashboard `counts_pv`. Existing `counts_pv` lines in `[INSTRUMENT:*]`
-  sections are ignored with a warning in the log, and the next TUI save removes them.
+  sections are ignored with a warning in the log; the next TUI save removes them, or
+  delete them by hand to silence the warning.
 - `notify_counts` keeps its meaning and units (µA·h), so existing thresholds still apply.
 - After the daemon restarts, an instrument that is already past its threshold gets a
   "run about to finish" card straight away, as after any restart.
+- Run cards keep the "Experiment Updates" channel unless an instrument sets
+  `channel = instrument`.
+- A config without `counts_pv` lines (or with `channel` keys) won't load on an older
+  version, so keep a copy (e.g. `config.ini.bak`) if you might roll back.
 
 ### Troubleshooting
 
