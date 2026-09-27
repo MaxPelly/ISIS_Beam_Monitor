@@ -7,7 +7,7 @@ This is a Python application that monitors the status of the ISIS beam, experime
 ## Features
 
 - **Beam Updates**: Monitors the ISIS beam status and sends debounced state-change cards (with severity colour, emoji, current/previous readings and time-in-state) based on configurable thresholds. Correlated multi-target trips are called out in the same card.
-- **Experiment Updates**: Tracks run starts/finishes on any number of instruments, each with its own notify count, including previous-run stats, counts collected, a collection-rate ETA, and a warning if data collection stalls while that instrument's beam is on.
+- **Experiment Updates**: Tracks run starts/finishes on any number of instruments, each with its own notify threshold, using each instrument's total µA·h collected (`IN:<NAME>:DAE:TOTALUAMPS`): previous-run stats, collection rate and ETA, and a warning if data collection stalls while that instrument's beam is on.
 - **MCR News**: Fetches the latest Main Control Room (MCR) news and classifies each update's severity (good/attention/warning) by keyword, with an optional "Open MCR news" link.
 - **Daily Summary**: Sends a per-target uptime/trip/sparkline summary card once a day at a configurable time.
 - **`fun_mode`**: Optional personality lines, longest-uptime records, run-count milestones and a daily fact, on top of the always-on severity/emoji information.
@@ -46,26 +46,29 @@ The application requires an INI configuration file to set up the Teams webhook U
 ### Instruments
 
 Each instrument gets its own section. Run notifications for every instrument go to
-`experiment_teams_url`, with the instrument name in the card title (e.g. "PEARL: New run started");
-the payload's `channel` field stays "Experiment Updates" for downstream routing.
+`experiment_teams_url`, with the instrument name in the card title (e.g. "PEARL: New run started").
 
 ```ini
 [INSTRUMENT:PEARL]
-# Required: dashboard PV whose text is "live_current/total_collected".
-counts_pv = IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE
-# Required: total collected at which "run about to finish" is sent.
+# Required: total µA·h collected this run at which "run about to finish" is sent.
 notify_counts = 130
 # Optional: TS1, TS2 or Muon — the beam reported on run cards and checked
 # before stall warnings (default = [PVS] instrument_target, itself TS1 by default).
 # beam_target = TS1
+# Optional: the Teams payload `channel` for this instrument's cards —
+# experiment (default) sends "Experiment Updates", instrument sends "PEARL".
+# channel = experiment
 ```
 
-The run-name PV is derived from the name as `IN:<NAME>:DAE:WDTITLE`. Names may contain
-letters, digits, `_` and `-`, and are upper-cased.
+Both PVs are derived from the name: progress (total µA·h collected this run) from
+`IN:<NAME>:DAE:TOTALUAMPS`, and the run name from `IN:<NAME>:DAE:WDTITLE`. Names may
+contain letters, digits, `_` and `-`, and are upper-cased. Downstream flows that route on
+the payload's `channel` see "Experiment Updates" unless an instrument sets
+`channel = instrument`.
 
 A config with no `[INSTRUMENT:*]` sections still works: one instrument is built from the
-legacy `[PVS]` keys (`counts_pv`, `run_name_pv`, and `notify_counts`, default 130), named
-from the PV (e.g. PEARL).
+legacy `[PVS]` keys (`run_name_pv`, and `notify_counts`, default 130), named from `counts_pv`
+(e.g. PEARL); its progress is also read from `IN:<NAME>:DAE:TOTALUAMPS`.
 
 ### Optional `[TUI]` section
 
@@ -135,7 +138,7 @@ In TUI mode, single keys (no Enter needed) control the client:
 
 Press `c` to pause the display and open a numbered menu of the notification settings
 (`fun_mode`, `timezone`, `debounce_seconds`, `stall_minutes`, `summary_time`) and the
-instruments. Type a number to edit that entry (Enter keeps the current value), `a` to add
+instruments (name, notify threshold, beam target, Teams channel). Type a number to edit that entry (Enter keeps the current value), `a` to add
 an instrument, `d <number>` to delete one, `s` to review the changes and save, or `q` to
 leave without saving.
 
@@ -151,7 +154,8 @@ Things to know:
 - A legacy `[PVS]`-only config becomes explicit `[INSTRUMENT:*]` sections on the first
   save; a non-standard `[PVS] run_name_pv` is not kept (the derived
   `IN:<NAME>:DAE:WDTITLE` is used).
-- Saving writes an explicit `beam_target` for every instrument, so `[PVS] instrument_target`
+- Saving drops any old `counts_pv` lines from instrument sections (see Upgrading) and
+  writes an explicit `channel`, plus a `beam_target`, for every instrument, so `[PVS] instrument_target`
   then only applies to sections added by hand without one.
 - Renaming an instrument starts its run count (for milestones) from zero.
 - The daemon's user needs write access to `config.ini` and its directory (for the temporary
@@ -218,6 +222,15 @@ sudo systemctl status isis-beam-monitor.service
 - Existing configs keep working unchanged as a single instrument.
 - The saved run count from before the upgrade is attributed to the first configured
   instrument.
+
+### Upgrading to TOTALUAMPS progress tracking
+
+- Run progress now comes from `IN:<NAME>:DAE:TOTALUAMPS` (total µA·h this run) instead of
+  a per-instrument dashboard `counts_pv`. Existing `counts_pv` lines in `[INSTRUMENT:*]`
+  sections are ignored with a warning in the log, and the next TUI save removes them.
+- `notify_counts` keeps its meaning and units (µA·h), so existing thresholds still apply.
+- After the daemon restarts, an instrument that is already past its threshold gets a
+  "run about to finish" card straight away, as after any restart.
 
 ### Troubleshooting
 
