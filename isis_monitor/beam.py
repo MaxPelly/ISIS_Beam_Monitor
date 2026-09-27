@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import websockets
 
-from isis_monitor.config import AppConfig
+from isis_monitor.config import TARGET_LABELS, AppConfig
 from isis_monitor.instrument import InstrumentTracker
 from isis_monitor.messages import beam_change, fmt_duration, startup_status
 from isis_monitor.notifiers import NotificationChannel
@@ -56,16 +56,8 @@ class BeamTarget:
     channel_label: str  # Passed to the sink and notifications as the channel name
 
 
-BEAM_TARGETS: List[BeamTarget] = [
-    BeamTarget("TS1", "TS1"),
-    BeamTarget("TS2", "TS2"),
-    BeamTarget("Muon", "Muons"),
-]
-
-# The channel labels ("TS1", "TS2", "Muons") that beam.py passes to the TUI
-# and sink — the single source of truth for the three target names used
-# elsewhere (daemon_state.py, tui.py, main.py) instead of re-spelling them.
-CHANNEL_LABELS: Tuple[str, ...] = tuple(bt.channel_label for bt in BEAM_TARGETS)
+BEAM_TARGETS: List[BeamTarget] = [BeamTarget(key, label) for key, label in TARGET_LABELS.items()]
+CHANNEL_LABELS: Tuple[str, ...] = tuple(TARGET_LABELS.values())  # "TS1", "TS2", "Muons"
 
 
 @dataclass

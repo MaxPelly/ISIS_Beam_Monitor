@@ -15,9 +15,11 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("isis_monitor.config")
 
-# Must match the state_key values of isis_monitor.beam.BEAM_TARGETS — not
-# imported directly to avoid a circular import (beam.py imports config.py).
-BEAM_TARGET_KEYS = ("TS1", "TS2", "Muon")
+# The single source of truth for the three beam targets: each one's state key
+# (used in config, e.g. beam_target, and in messages) and its channel label
+# (used by the sink, TUI and notification routing).
+TARGET_LABELS = {"TS1": "TS1", "TS2": "TS2", "Muon": "Muons"}
+BEAM_TARGET_KEYS = tuple(TARGET_LABELS)
 
 # Teams payload channel for an instrument's run cards: "experiment" sends the
 # experiment NotificationChannel's name ("Experiment Updates"), "instrument"

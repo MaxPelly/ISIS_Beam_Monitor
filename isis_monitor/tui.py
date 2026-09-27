@@ -10,7 +10,8 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.table import Table
 
-from isis_monitor.beam import BEAM_TARGETS, CHANNEL_LABELS
+from isis_monitor.beam import CHANNEL_LABELS
+from isis_monitor.config import TARGET_LABELS
 
 
 _STATE_COLOURS = {
@@ -24,8 +25,6 @@ _STATE_COLOURS = {
 def _get_state_colour(state):
     return _STATE_COLOURS.get(state, "purple")
 
-# Instruments name their beam target by state_key ("Muon"), beam_states by label ("Muons").
-_TARGET_LABELS = {bt.state_key: bt.channel_label for bt in BEAM_TARGETS}
 _PROGRESS_WIDTH = 8
 # Beyond this the panel shows "+N more", so the MCR news panel keeps its space.
 _MAX_INSTRUMENT_ROWS = 8
@@ -323,7 +322,7 @@ class RichTUI:
         shown = list(self.instruments.items())[:_MAX_INSTRUMENT_ROWS]
         for name, info in shown:
             target = str(info.get("beam_target", ""))
-            beam = self.beam_states.get(_TARGET_LABELS.get(target, target), {})
+            beam = self.beam_states.get(TARGET_LABELS.get(target, target), {})
             table.add_row(
                 name,
                 Text(target, style=_get_state_colour(beam.get("power", "unknown"))),
