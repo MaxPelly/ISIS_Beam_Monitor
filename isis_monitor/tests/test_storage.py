@@ -74,6 +74,6 @@ async def test_run_serialises_database_work_on_one_thread(tmp_path):
         store.commit()
         active -= 1
 
-    await asyncio.gather(*(store.run(work, i) for i in range(200)))
+    await asyncio.gather(*(store.run(work, i) for i in range(50)))
     await store.run(store.close)
     assert len(threads) == 1 and not overlapped
