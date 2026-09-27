@@ -531,34 +531,6 @@ def test_main_daemon_refuses_second_instance(tmp_path, capsys):
     assert "Lock file already held" in capsys.readouterr().out
 
 
-@pytest.mark.asyncio
-async def test_run_tui_quits_on_q_and_restores_terminal(tmp_path):
-    """No daemon running: the TUI keeps retrying, and 'q' still quits cleanly."""
-    read_fd, write_fd = os.pipe()
-    stdin = os.fdopen(read_fd, "r")
-    tui = MagicMock()
-    try:
-        with patch.object(main.sys, "stdin", stdin), \
-             patch("main.termios") as termios_mock, \
-             patch("main.tty") as tty_mock, \
-             patch("main.RichTUI", return_value=tui), \
-             patch("main.install_signal_handlers"):
-            termios_mock.tcgetattr.return_value = "saved"
-            config = _config(tmp_path, tui_reconnect_initial=0.01, tui_reconnect_max=0.01)
-            task = asyncio.create_task(main.run_tui(config, asyncio.Event()))
-            await wait_until(lambda: call("disconnected") in tui.update_connection_state.call_args_list)
-            os.write(write_fd, b"q")
-            await asyncio.wait_for(task, 2)
-    finally:
-        os.close(write_fd)
-        stdin.close()
-
-    tty_mock.setcbreak.assert_called_once_with(read_fd)
-    termios_mock.tcsetattr.assert_called_once_with(read_fd, termios_mock.TCSADRAIN, "saved")
-    tui.start.assert_called_once()
-    tui.stop.assert_called_once()
-
-
 def test_configure_logging_resolves_relative_path_next_to_main(tmp_path):
     with patch("main.RotatingFileHandler") as handler_cls, patch("main.logging.basicConfig") as basic:
         main.configure_logging("rel.log", "debug", 10, 2)
@@ -836,7 +808,9 @@ async def test_quitting_the_tui_cancels_an_open_config_editor(tmp_path, capsys):
 
 @pytest.mark.asyncio
 async def test_run_tui_handles_several_keys_in_one_read_and_quits_on_eof(tmp_path):
-    with tui_terminal() as (tui, keys, _termios, _tty):
+    """No daemon running: the TUI keeps retrying, still handles keys, and
+    restores the terminal when it quits."""
+    with tui_terminal() as (tui, keys, termios_mock, tty_mock):
         stop = asyncio.Event()
         config = _config(tmp_path, tui_reconnect_initial=0.01, tui_reconnect_max=0.01)
         task = asyncio.create_task(main.run_tui(config, stop))
@@ -850,6 +824,10 @@ async def test_run_tui_handles_several_keys_in_one_read_and_quits_on_eof(tmp_pat
         os.close(null)
         await asyncio.wait_for(task, 2)
     assert stop.is_set()
+    tty_mock.setcbreak.assert_called_once()
+    termios_mock.tcsetattr.assert_called_once_with(ANY, termios_mock.TCSADRAIN, "saved")
+    tui.start.assert_called_once()
+    tui.stop.assert_called_once()
 
 
 @pytest.mark.asyncio
