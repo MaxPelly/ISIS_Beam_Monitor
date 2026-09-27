@@ -45,6 +45,8 @@ def test_start_draws_every_panel_and_stop_stops_live():
     assert "Waiting for initial MCR news..." in _panel_text(tui, "mcr")
     assert "TS1" in _panel_text(tui, "beam_table")
     assert "0/60 samples" in _panel_text(tui, "beam_graph")
+    assert "rolling 60 min" in _panel_text(tui, "beam_graph")
+    assert "rolling 90s" in _panel_text(make_tui(history_maxlen=30, sample_interval=3), "beam_graph")
     with patch.object(tui.live, "stop") as mock_stop:
         tui.stop()
     mock_stop.assert_called_once()
@@ -188,8 +190,8 @@ class TestUpdateLog:
         for i in range(20):
             tui.update_log(f"Log {i}")
         text = _panel_text(tui, "logs")
-        assert "Log 19" in text and "Log 5" in text and "Log 4" not in text
-        assert text.index("Log 5") < text.index("Log 19")  # oldest first
+        assert "Log 19" in text and "Log 6" in text and "Log 5" not in text  # 14 rows fit
+        assert text.index("Log 6") < text.index("Log 19")  # oldest first
 
 
 # ---------------------------------------------------------------------------

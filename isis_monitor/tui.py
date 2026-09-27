@@ -276,7 +276,7 @@ class RichTUI:
         self.layout["beam_graph"].update(
             Panel(
                 content,
-                title="Beam Current -- rolling 1 h",
+                title=f"Beam Current -- rolling {fmt(self.history_maxlen * interval_s)}",
                 subtitle=subtitle,
                 border_style="cyan",
             )
@@ -352,7 +352,7 @@ class RichTUI:
 
     def _update_logs_panel(self):
         # Only show the latest logs that fit in the panel (layout size 16, less borders)
-        logs_to_show = list(self._logs)[-15:]
+        logs_to_show = list(self._logs)[-14:]
         log_text = "\n".join(logs_to_show)
         self.layout["logs"].update(
             Panel(
