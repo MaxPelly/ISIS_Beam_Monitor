@@ -96,7 +96,11 @@ def test_compute_summary_treats_unknown_as_off():
 # daily_summary_loop
 # ---------------------------------------------------------------------------
 
-async def _run_summary_loop_briefly(config, state, store, channel, **kw):
+async def run_summary(store, state=None, rng=None, **overrides):
+    """Run daily_summary_loop briefly (summary_time defaults to now); returns the channel."""
+    overrides.setdefault("summary_time", datetime.now(get_timezone()).strftime("%H:%M"))
+    channel = NotificationChannel("Beam")
+    channel.broadcast = AsyncMock()
     stop_event = asyncio.Event()
 
     async def stop_soon():
@@ -105,154 +109,78 @@ async def _run_summary_loop_briefly(config, state, store, channel, **kw):
 
     with patch("isis_monitor.summary.SUMMARY_CHECK_INTERVAL", 0.01):
         asyncio.create_task(stop_soon())
-        await daily_summary_loop(config, state, store, channel, stop_event, **kw)
+        await daily_summary_loop(make_config(**overrides), state or DaemonState(), store, channel, stop_event, rng=rng)
+    return channel
 
 
-async def test_daily_summary_loop_sends_one_card_per_target_at_summary_time(tmp_path):
-    now_local = datetime.now(get_timezone())
-    config = make_config(summary_time=now_local.strftime("%H:%M"))
+@pytest.fixture
+def store(tmp_path):
+    store = SQLiteStateStore(tmp_path / "summary.db")
+    yield store
+    store.close()
 
+
+def ts1_card(channel):
+    return next(c.args[0] for c in channel.broadcast.call_args_list if c.args[0].title.startswith("TS1"))
+
+
+async def test_daily_summary_loop_sends_one_card_per_target_at_summary_time(store):
     state = DaemonState()
     t0 = datetime.now(timezone.utc) - timedelta(hours=1)
     for beam in state.history:
         state.history[beam].append((t0, 10.0, "high"))
-
-    store = SQLiteStateStore(tmp_path / "summary_test.db")
-    beam_channel = NotificationChannel("Beam")
-    beam_channel.broadcast = AsyncMock()
-    await _run_summary_loop_briefly(config, state, store, beam_channel)
-
-    # One card per target (TS1, TS2, Muons), even though multiple ticks
-    # elapsed before stop_event fired — last_sent_date dedupes to once/day.
-    assert beam_channel.broadcast.call_count == 3
-    sent_channels = {call.args[0].channel for call in beam_channel.broadcast.call_args_list}
-    assert sent_channels == {"TS1", "TS2", "Muons"}
-    store.close()
+    channel = await run_summary(store, state)
+    # One card per target, even though multiple ticks elapsed — last_sent_date dedupes to once/day.
+    assert {c.args[0].channel for c in channel.broadcast.call_args_list} == {"TS1", "TS2", "Muons"}
+    assert channel.broadcast.call_count == 3
 
 
-async def test_daily_summary_loop_fires_even_if_the_exact_minute_was_missed(tmp_path):
+async def test_daily_summary_loop_fires_even_if_the_exact_minute_was_missed(store):
     """A slow tick that steps past the target minute must still send today's
     summary rather than silently waiting for tomorrow (regression guard)."""
     now_local = datetime.now(get_timezone())
     just_passed = now_local.replace(minute=max(now_local.minute - 1, 0)).strftime("%H:%M")
-    config = make_config(summary_time=just_passed)
-
-    state = DaemonState()
-    store = SQLiteStateStore(tmp_path / "summary_test_missed_minute.db")
-    beam_channel = NotificationChannel("Beam")
-    beam_channel.broadcast = AsyncMock()
-    await _run_summary_loop_briefly(config, state, store, beam_channel)
-
-    assert beam_channel.broadcast.call_count == 3
-    store.close()
+    assert (await run_summary(store, summary_time=just_passed)).broadcast.call_count == 3
 
 
-async def test_daily_summary_loop_does_not_fire_outside_summary_time(tmp_path):
-    # 23:59 is guaranteed later today without the hour-wraparound that
-    # `now + timedelta(hours=6)` could hit (e.g. run at 22:00 -> 04:00,
-    # which is numerically "earlier" and would wrongly look already-past).
-    now_local = datetime.now(get_timezone())
-    off_time = "23:58" if now_local.strftime("%H:%M") == "23:59" else "23:59"
-    config = make_config(summary_time=off_time)
-
-    state = DaemonState()
-    store = SQLiteStateStore(tmp_path / "summary_test2.db")
-    beam_channel = NotificationChannel("Beam")
-    beam_channel.broadcast = AsyncMock()
-    await _run_summary_loop_briefly(config, state, store, beam_channel)
-
-    beam_channel.broadcast.assert_not_called()
-    store.close()
+async def test_daily_summary_loop_does_not_fire_outside_summary_time(store):
+    # 23:59 is guaranteed later today without an hour wraparound.
+    off_time = "23:58" if datetime.now(get_timezone()).strftime("%H:%M") == "23:59" else "23:59"
+    (await run_summary(store, summary_time=off_time)).broadcast.assert_not_called()
 
 
-async def test_daily_summary_loop_flags_and_persists_new_record(tmp_path):
-    now_local = datetime.now(get_timezone())
-    config = make_config(summary_time=now_local.strftime("%H:%M"), fun_mode=True)
-
+@pytest.mark.parametrize("fun_mode", [True, False])
+async def test_daily_summary_loop_tracks_records_only_in_fun_mode(store, fun_mode):
     state = DaemonState()
     t0 = datetime.now(timezone.utc) - timedelta(hours=2)
     for minute in range(121):
         state.history["TS1"].append((t0 + timedelta(minutes=minute), 10.0, "high"))
-
-    store = SQLiteStateStore(tmp_path / "summary_test3.db")
-    beam_channel = NotificationChannel("Beam")
-    beam_channel.broadcast = AsyncMock()
-    await _run_summary_loop_briefly(config, state, store, beam_channel, rng=random.Random(1))
-
-    ts1_notification = next(
-        call.args[0] for call in beam_channel.broadcast.call_args_list
-        if call.args[0].title.startswith("TS1")
-    )
-    assert "New record" in ts1_notification.text
-
-    saved = json.loads(store.load_snapshot("records"))
-    assert saved["TS1"] > 0
-    store.close()
-
-
-async def test_daily_summary_loop_no_record_tracking_without_fun_mode(tmp_path):
-    now_local = datetime.now(get_timezone())
-    config = make_config(summary_time=now_local.strftime("%H:%M"), fun_mode=False)
-
-    state = DaemonState()
-    t0 = datetime.now(timezone.utc) - timedelta(hours=2)
-    state.history["TS1"].append((t0, 10.0, "high"))
-    state.history["TS1"].append((t0 + timedelta(hours=2), 10.0, "high"))
-
-    store = SQLiteStateStore(tmp_path / "summary_test4.db")
-    beam_channel = NotificationChannel("Beam")
-    beam_channel.broadcast = AsyncMock()
-    await _run_summary_loop_briefly(config, state, store, beam_channel)
-
-    ts1_notification = next(
-        call.args[0] for call in beam_channel.broadcast.call_args_list
-        if call.args[0].title.startswith("TS1")
-    )
-    assert "New record" not in ts1_notification.text
-    assert store.load_snapshot("records") is None
-    store.close()
+    channel = await run_summary(store, state, rng=random.Random(1), fun_mode=fun_mode)
+    assert ("New record" in ts1_card(channel).text) is fun_mode
+    saved = store.load_snapshot("records")
+    assert (json.loads(saved)["TS1"] > 0) if fun_mode else saved is None
 
 
 async def test_daily_summary_not_resent_after_restart_same_day(tmp_path):
     """The last-sent date is persisted, so restarting the daemon after
     summary_time doesn't send the day's cards a second time."""
-    config = make_config(summary_time=datetime.now(get_timezone()).strftime("%H:%M"))
-    db = tmp_path / "summary_restart.db"
-
-    store = SQLiteStateStore(db)
-    first = NotificationChannel("Beam")
-    first.broadcast = AsyncMock()
-    await _run_summary_loop_briefly(config, DaemonState(), store, first)
-    store.close()
-    assert first.broadcast.call_count == 3
-
-    store = SQLiteStateStore(db)
-    after_restart = NotificationChannel("Beam")
-    after_restart.broadcast = AsyncMock()
-    await _run_summary_loop_briefly(config, DaemonState(), store, after_restart)
-    store.close()
-    after_restart.broadcast.assert_not_called()
+    for expected in (3, 0):
+        store = SQLiteStateStore(tmp_path / "summary.db")
+        assert (await run_summary(store)).broadcast.call_count == expected
+        store.close()
 
 
-async def test_daily_summary_tolerates_corrupt_persisted_values(tmp_path, caplog):
-    config = make_config(summary_time=datetime.now(get_timezone()).strftime("%H:%M"), fun_mode=True)
-    store = SQLiteStateStore(tmp_path / "summary_corrupt.db")
+async def test_daily_summary_tolerates_corrupt_persisted_values(store, caplog):
     store.upsert_snapshot("records", "{not json")
     store.upsert_snapshot(LAST_SENT_KEY, "yesterday-ish")
     store.commit()
-    channel = NotificationChannel("Beam")
-    channel.broadcast = AsyncMock()
-
-    await _run_summary_loop_briefly(config, DaemonState(), store, channel, rng=random.Random(1))
-
+    channel = await run_summary(store, rng=random.Random(1), fun_mode=True)
     assert "Corrupt records snapshot" in caplog.text
     assert channel.broadcast.call_count == 3
     assert store.load_snapshot(LAST_SENT_KEY) == datetime.now(get_timezone()).date().isoformat()
-    store.close()
 
 
-async def test_daily_summary_counts_runs_only_on_instruments_using_that_target(tmp_path):
-    config = make_config(summary_time=datetime.now(get_timezone()).strftime("%H:%M"))
+async def test_daily_summary_counts_runs_only_on_instruments_using_that_target(store):
     state = DaemonState(instruments=[
         InstrumentConfig("PEARL", 130.0, "TS1"),
         InstrumentConfig("EMU", 10.0, "Muon"),
@@ -262,25 +190,14 @@ async def test_daily_summary_counts_runs_only_on_instruments_using_that_target(t
     state.record_run_completed("PEARL", now)
     state.record_run_completed("EMU", now)
     state.record_run_completed("EMU", now - timedelta(hours=30))  # outside the window
-
-    store = SQLiteStateStore(tmp_path / "summary_runs.db")
-    channel = NotificationChannel("Beam")
-    channel.broadcast = AsyncMock()
-    await _run_summary_loop_briefly(config, state, store, channel)
-
-    runs = {
-        call.args[0].channel: dict(call.args[0].facts)["Runs in last 24h"]
-        for call in channel.broadcast.call_args_list
-    }
+    channel = await run_summary(store, state)
+    runs = {c.args[0].channel: dict(c.args[0].facts)["Runs in last 24h"] for c in channel.broadcast.call_args_list}
     assert runs == {"TS1": "2", "TS2": "0", "Muons": "1"}
-    store.close()
 
 
-async def test_daily_summary_loop_survives_database_errors(tmp_path, caplog):
+async def test_daily_summary_loop_survives_database_errors(store, caplog):
     """A transient SQLite error at load or save time is logged, not fatal."""
     import sqlite3
-    config = make_config(summary_time=datetime.now(get_timezone()).strftime("%H:%M"))
-    store = SQLiteStateStore(tmp_path / "summary_errors.db")
     real_run = store.run
 
     async def failing_run(fn, *args):
@@ -289,11 +206,7 @@ async def test_daily_summary_loop_survives_database_errors(tmp_path, caplog):
         return await real_run(fn, *args)
 
     store.run = failing_run
-    channel = NotificationChannel("Beam")
-    channel.broadcast = AsyncMock()
-    await _run_summary_loop_briefly(config, DaemonState(), store, channel)
-
+    channel = await run_summary(store)
     assert channel.broadcast.call_count == 3  # still sent, and only once
     assert "Failed to load daily summary state" in caplog.text
     assert "Failed to save daily summary state" in caplog.text
-    store.close()
