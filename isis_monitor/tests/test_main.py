@@ -17,10 +17,10 @@ import pytest
 import main
 from isis_monitor.config import AppConfig, InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
-from isis_monitor.ipc import IPCClient, IPCServer
+from isis_monitor.ipc import IPCClient
 from isis_monitor.notifiers import DummyNotifier, TeamsNotifier
 from isis_monitor.storage import SQLiteStateStore
-from isis_monitor.tests.helpers import FakePVWS, never_answers, wait_until
+from isis_monitor.tests.helpers import FakePVWS, never_answers, serving, wait_until
 from main import SingleInstanceLock, StateLogHandler
 
 
@@ -56,8 +56,9 @@ class TestStateLogHandler:
             name="test", level=logging.INFO, pathname="", lineno=0,
             msg="test", args=(), exc_info=None,
         )
-        # Should not raise
-        handler.emit(record)
+        with patch.object(handler, "handleError") as handle_error:
+            handler.emit(record)  # does not raise
+        handle_error.assert_called_once_with(record)
 
 
 def test_single_instance_lock_writes_pid_and_releases(tmp_path):
@@ -299,10 +300,10 @@ DAEMON_ARGS = argparse.Namespace(dummy=True, notify_current=False)
 
 
 @contextlib.asynccontextmanager
-async def daemon(config):
+async def daemon(config, args=DAEMON_ARGS):
     stop = asyncio.Event()
     with patch("main.install_signal_handlers"):
-        task = asyncio.create_task(main.run_daemon(config, DAEMON_ARGS, stop))
+        task = asyncio.create_task(main.run_daemon(config, args, stop))
         try:
             await wait_until(lambda: os.path.exists(config.daemon_socket_path))
             yield task, stop
@@ -415,31 +416,28 @@ async def test_tui_connection_loop_syncs_streams_and_reconnects(tmp_path):
     tui = MagicMock()
     clients = []
 
-    server = IPCServer(tmp_path / "d.sock", state, AsyncMock(return_value={}))
-    await server.start()
     task = asyncio.create_task(main.tui_connection_loop(config, tui, clients.append))
     try:
-        await wait_until(lambda: any(c is not None for c in clients))
-        tui.update_mcr_news.assert_called_with("hello")
-        history = tui.set_history_snapshot.call_args[0][0]
-        assert [r["current"] for r in history["TS1"]] == [3.0, 4.0]  # limited to history_maxlen
-        assert call("old log") in tui.update_log.call_args_list
+        async with serving(tmp_path, state):
+            await wait_until(lambda: any(c is not None for c in clients))
+            tui.update_mcr_news.assert_called_with("hello")
+            history = tui.set_history_snapshot.call_args[0][0]
+            assert [r["current"] for r in history["TS1"]] == [3.0, 4.0]  # limited to history_maxlen
+            assert call("old log") in tui.update_log.call_args_list
 
-        state.update_beam_state("TS2", 40.0, "high")
-        await wait_until(lambda: call("TS2", 40.0, "high") in tui.update_beam_state.call_args_list)
+            state.update_beam_state("TS2", 40.0, "high")
+            await wait_until(lambda: call("TS2", 40.0, "high") in tui.update_beam_state.call_args_list)
 
-        await server.stop()  # daemon goes away: TUI shows it and retries
+        # The daemon has gone away: the TUI shows it and retries.
         await wait_until(lambda: call("disconnected") in tui.update_connection_state.call_args_list)
         assert clients[-1] is None
 
-        server = IPCServer(tmp_path / "d.sock", state, AsyncMock(return_value={}))
-        await server.start()
-        await wait_until(lambda: sum(c is not None for c in clients) >= 2)
+        async with serving(tmp_path, state):
+            await wait_until(lambda: sum(c is not None for c in clients) >= 2)
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
-        await server.stop()
 
 
 async def test_handle_tui_key():
@@ -493,23 +491,15 @@ async def test_run_stop_without_daemon_exits_1(tmp_path, capsys):
     ({"something": "else"}, "Daemon responded"),
 ])
 async def test_run_stop_reports_daemon_reply(tmp_path, capsys, result, expected):
-    server = IPCServer(tmp_path / "d.sock", DaemonState(), AsyncMock(return_value=result))
-    await server.start()
-    try:
+    async with serving(tmp_path, command_handler=AsyncMock(return_value=result)):
         await main.run_stop(_config(tmp_path))
-    finally:
-        await server.stop()
     assert expected in capsys.readouterr().out
 
 
 async def test_run_stop_error_reply_exits_1(tmp_path, capsys):
-    server = IPCServer(tmp_path / "d.sock", DaemonState(), AsyncMock(side_effect=RuntimeError("x")))
-    await server.start()
-    try:
+    async with serving(tmp_path, command_handler=AsyncMock(side_effect=RuntimeError("x"))):
         with pytest.raises(SystemExit):
             await main.run_stop(_config(tmp_path))
-    finally:
-        await server.stop()
     assert "internal_error" in capsys.readouterr().out
 
 
@@ -522,22 +512,28 @@ def test_parse_args_modes():
         main.parse_args([])
 
 
+def _ini(tmp_path) -> str:
+    ini = tmp_path / "c.ini"
+    ini.write_text(f"[DATA]\nmcr_news_url = http://x\n[DAEMON]\nlock_file = {tmp_path / 'd.lock'}\n")
+    return str(ini)
+
+
+def run_main(*argv):
+    """main.main() with the given command line, and logging setup stubbed out."""
+    with patch.object(main.sys, "argv", ["main.py", *argv]), patch("main.configure_logging"):
+        main.main()
+
+
 def test_main_reports_config_error(tmp_path, capsys):
-    with patch.object(main.sys, "argv", ["main.py", "stop", str(tmp_path / "missing.ini")]):
-        with pytest.raises(SystemExit):
-            main.main()
+    with pytest.raises(SystemExit):
+        run_main("stop", str(tmp_path / "missing.ini"))
     assert "Configuration error" in capsys.readouterr().out
 
 
 def test_main_daemon_refuses_second_instance(tmp_path, capsys):
-    ini = tmp_path / "c.ini"
-    ini.write_text(f"[DATA]\nmcr_news_url = http://x\n[DAEMON]\nlock_file = {tmp_path / 'd.lock'}\n")
-    with SingleInstanceLock(tmp_path / "d.lock"), \
-         patch.object(main.sys, "argv", ["main.py", "daemon", str(ini)]), \
-         patch("main.configure_logging"), \
-         patch("main.run_daemon") as run_daemon:
+    with SingleInstanceLock(tmp_path / "d.lock"), patch("main.run_daemon") as run_daemon:
         with pytest.raises(SystemExit):
-            main.main()
+            run_main("daemon", _ini(tmp_path))
     run_daemon.assert_not_called()
     assert "Lock file already held" in capsys.readouterr().out
 
@@ -551,26 +547,16 @@ def test_configure_logging_resolves_relative_path_next_to_main(tmp_path):
     assert [c.kwargs["level"] for c in basic.call_args_list] == [logging.DEBUG, logging.WARNING]
 
 
-def _ini(tmp_path) -> str:
-    ini = tmp_path / "c.ini"
-    ini.write_text(f"[DATA]\nmcr_news_url = http://x\n[DAEMON]\nlock_file = {tmp_path / 'd.lock'}\n")
-    return str(ini)
-
-
 @pytest.mark.parametrize("mode, target", [("daemon", "run_daemon"), ("tui", "run_tui"), ("stop", "run_stop")])
 def test_main_dispatches_each_mode(tmp_path, mode, target):
-    with patch.object(main.sys, "argv", ["main.py", mode, _ini(tmp_path)]), \
-         patch("main.configure_logging"), \
-         patch(f"main.{target}", new_callable=AsyncMock, return_value=False) as runner:
-        main.main()
+    with patch(f"main.{target}", new_callable=AsyncMock, return_value=False) as runner:
+        run_main(mode, _ini(tmp_path))
     runner.assert_awaited_once()
 
 
 def test_main_keyboard_interrupt_exits_quietly(tmp_path, capsys):
-    with patch.object(main.sys, "argv", ["main.py", "stop", _ini(tmp_path)]), \
-         patch("main.configure_logging"), \
-         patch("main.run_stop", new_callable=AsyncMock, side_effect=KeyboardInterrupt):
-        main.main()
+    with patch("main.run_stop", new_callable=AsyncMock, side_effect=KeyboardInterrupt):
+        run_main("stop", _ini(tmp_path))
     assert "Stopping monitors" in capsys.readouterr().out
 
 
@@ -587,22 +573,20 @@ def _daemon_ini(tmp_path) -> Path:
     return ini
 
 
+def _file_args(tmp_path):
+    return argparse.Namespace(dummy=True, notify_current=False, config=_daemon_ini(tmp_path))
+
+
 @contextlib.asynccontextmanager
 async def daemon_with_file(tmp_path):
-    config = _config(tmp_path)
-    args = argparse.Namespace(dummy=True, notify_current=False, config=_daemon_ini(tmp_path))
-    stop = asyncio.Event()
-    with patch("main.install_signal_handlers"):
-        task = asyncio.create_task(main.run_daemon(config, args, stop))
-        await wait_until(lambda: os.path.exists(config.daemon_socket_path))
-        client = IPCClient(config.daemon_socket_path)
+    args = _file_args(tmp_path)
+    async with daemon(_config(tmp_path), args) as (task, _stop):
+        client = IPCClient(tmp_path / "d.sock")
         await client.connect()
         try:
             yield task, client, args.config
         finally:
             await client.close()
-            stop.set()
-            await asyncio.wait_for(task, 5)
 
 
 async def _revision(client) -> str:
@@ -715,11 +699,9 @@ def test_main_restarts_after_lock_is_released(tmp_path, no_exec):
             lock_free.append(True)
 
     no_exec.side_effect = fake_exec
-    with patch.object(main.sys, "argv", ["main.py", "daemon", ini]), \
-         patch.object(main.sys, "orig_argv", ["python3", "-u", "main.py", "daemon", ini]), \
-         patch("main.configure_logging"), \
+    with patch.object(main.sys, "orig_argv", ["python3", "-u", "main.py", "daemon", ini]), \
          patch("main.run_daemon", new_callable=AsyncMock, return_value=True):
-        main.main()
+        run_main("daemon", ini)
 
     exe, argv, env = no_exec.call_args.args
     assert (exe, argv) == (main.sys.executable, [main.sys.executable, "-u", "main.py", "daemon", ini])
@@ -729,11 +711,9 @@ def test_main_restarts_after_lock_is_released(tmp_path, no_exec):
 
 def test_main_reports_failed_restart(tmp_path, no_exec, capsys):
     no_exec.side_effect = FileNotFoundError("no such interpreter")
-    with patch.object(main.sys, "argv", ["main.py", "daemon", _ini(tmp_path)]), \
-         patch("main.configure_logging"), \
-         patch("main.run_daemon", new_callable=AsyncMock, return_value=True):
-        with pytest.raises(SystemExit) as exc_info:
-            main.main()
+    with patch("main.run_daemon", new_callable=AsyncMock, return_value=True), \
+         pytest.raises(SystemExit) as exc_info:
+        run_main("daemon", _ini(tmp_path))
     assert exc_info.value.code == 1
     assert "Failed to restart daemon: no such interpreter" in capsys.readouterr().err
 
@@ -742,10 +722,8 @@ def test_main_reports_failed_restart(tmp_path, no_exec, capsys):
 def test_restarted_daemon_does_not_replay_notify_current(tmp_path, monkeypatch, restarted, expected):
     if restarted:
         monkeypatch.setenv(main.RESTARTED_ENV, "1")
-    with patch.object(main.sys, "argv", ["main.py", "daemon", _ini(tmp_path), "-n"]), \
-         patch("main.configure_logging"), \
-         patch("main.run_daemon", new_callable=AsyncMock, return_value=False) as run_daemon:
-        main.main()
+    with patch("main.run_daemon", new_callable=AsyncMock, return_value=False) as run_daemon:
+        run_main("daemon", _ini(tmp_path), "-n")
     assert run_daemon.await_args.args[1].notify_current is expected
     assert main.RESTARTED_ENV not in os.environ
 
@@ -769,12 +747,21 @@ def tui_terminal():
         stdin.close()
 
 
+SUBSCRIBED = call("Subscribed to daemon updates.")
+
+
+async def start_tui(tui, config, stop):
+    """Start run_tui and wait until it has subscribed to the daemon."""
+    task = asyncio.create_task(main.run_tui(config, stop))
+    await wait_until(lambda: SUBSCRIBED in tui.update_log.call_args_list)
+    return task
+
+
 async def test_run_tui_c_hands_the_terminal_to_the_config_editor_and_back(tmp_path, capsys):
     async with daemon_with_file(tmp_path) as (_task, _client, _ini):
         with tui_terminal() as (tui, keys, termios_mock, tty_mock):
             stop = asyncio.Event()
-            task = asyncio.create_task(main.run_tui(_config(tmp_path), stop))
-            await wait_until(lambda: call("Subscribed to daemon updates.") in tui.update_log.call_args_list)
+            task = await start_tui(tui, _config(tmp_path), stop)
 
             os.write(keys, b"c")
             await wait_until(lambda: tui.stop.called)
@@ -794,8 +781,7 @@ async def test_quitting_the_tui_cancels_an_open_config_editor(tmp_path, capsys):
     async with daemon_with_file(tmp_path) as (_task, _client, _ini):
         with tui_terminal() as (tui, keys, termios_mock, tty_mock):
             stop = asyncio.Event()
-            task = asyncio.create_task(main.run_tui(_config(tmp_path), stop))
-            await wait_until(lambda: call("Subscribed to daemon updates.") in tui.update_log.call_args_list)
+            task = await start_tui(tui, _config(tmp_path), stop)
             os.write(keys, b"c")
             await wait_until(lambda: "> " in capsys.readouterr().out)
 
@@ -840,16 +826,14 @@ async def test_config_editor_saves_over_the_new_connection_after_reconnecting(tm
 
     async with daemon_with_file(tmp_path) as (_task, _client, ini):
         with tui_terminal() as (tui, keys, _termios, _tty), patch("main.IPCClient", side_effect=recording_client):
-            task = asyncio.create_task(main.run_tui(config, asyncio.Event()))
-            subscribed = call("Subscribed to daemon updates.")
-            await wait_until(lambda: subscribed in tui.update_log.call_args_list)
+            task = await start_tui(tui, config, asyncio.Event())
             os.write(keys, b"c")
             await wait_until(lambda: "> " in capsys.readouterr().out)
 
             # The connection the editor started on drops; the TUI reconnects.
             tui.update_log.reset_mock()
             clients[-1].writer.transport.abort()
-            await wait_until(lambda: subscribed in tui.update_log.call_args_list)
+            await wait_until(lambda: SUBSCRIBED in tui.update_log.call_args_list)
             assert len(clients) == 2
 
             for line in (b"1\n", b"true\n", b"s\n", b"y\n"):
@@ -875,8 +859,7 @@ async def test_failed_tui_action_is_logged(caplog):
 async def test_keys_typed_ahead_of_the_editor_are_passed_to_it(tmp_path, capsys):
     async with daemon_with_file(tmp_path) as (_task, _client, _ini):
         with tui_terminal() as (tui, keys, _termios, _tty):
-            task = asyncio.create_task(main.run_tui(_config(tmp_path), asyncio.Event()))
-            await wait_until(lambda: call("Subscribed to daemon updates.") in tui.update_log.call_args_list)
+            task = await start_tui(tui, _config(tmp_path), asyncio.Event())
             os.write(keys, b"c1\nx")  # one read: open editor, choose 1, then a partial line
             await wait_until(lambda: "fun_mode [false]: " in capsys.readouterr().out)
             os.write(keys, b"true\n")  # the hidden partial "x" was dropped
@@ -889,7 +872,6 @@ async def test_keys_typed_ahead_of_the_editor_are_passed_to_it(tmp_path, capsys)
             await wait_until(lambda: tui.start.call_count == 2)
             os.write(keys, b"q")
             await asyncio.wait_for(task, 2)
-
 
 
 async def test_run_daemon_stops_other_loops_when_one_crashes(tmp_path):
@@ -936,27 +918,21 @@ async def test_run_daemon_seeds_trackers_from_the_restored_snapshot(tmp_path):
     assert seeded["PEARL"]["run_name"] == "Run 9" and seeded["PEARL"]["end_notified"] is True
 
 
-
 async def test_config_save_is_refused_once_shutdown_has_started(tmp_path):
     """A save accepted after SIGTERM or a shutdown command would re-exec the daemon."""
-    config = _config(tmp_path)
-    args = argparse.Namespace(dummy=True, notify_current=False, config=_daemon_ini(tmp_path))
-    stop = asyncio.Event()
     handlers = {}
     real_ipc = main.IPCServer
 
     def capture(*a):
-        server = real_ipc(*a)
         handlers["config"] = a[3]
-        return server
+        return real_ipc(*a)
 
-    with patch("main.install_signal_handlers"), patch("main.IPCServer", side_effect=capture):
-        task = asyncio.create_task(main.run_daemon(config, args, stop))
-        await wait_until(lambda: "config" in handlers)
-        revision = (await handlers["config"]("get_config", {}))["revision"]
-        stop.set()
-        reply = await handlers["config"]("update_config", {"revision": revision, "settings": {}})
-        assert await asyncio.wait_for(task, 5) is False
+    with patch("main.IPCServer", side_effect=capture):
+        async with daemon(_config(tmp_path), _file_args(tmp_path)) as (task, stop):
+            revision = (await handlers["config"]("get_config", {}))["revision"]
+            stop.set()
+            reply = await handlers["config"]("update_config", {"revision": revision, "settings": {}})
+            assert await asyncio.wait_for(task, 5) is False
     assert (reply["ok"], reply["error"]) == (False, "restart_pending")
 
 
@@ -970,14 +946,9 @@ async def test_sync_tui_subscribes_before_fetching_state():
 
 
 async def test_run_stop_gives_up_on_a_daemon_that_does_not_answer(tmp_path, capsys):
-    config = _config(tmp_path)
-    server = IPCServer(Path(config.daemon_socket_path), DaemonState(), never_answers)
-    await server.start()
-    try:
-        with patch("main.IPC_REQUEST_TIMEOUT", 0.05), pytest.raises(SystemExit) as exc:
-            await main.run_stop(config)
-    finally:
-        with patch("isis_monitor.ipc.STOP_FLUSH_TIMEOUT", 0.05):
-            await server.stop()
+    with patch("isis_monitor.ipc.STOP_FLUSH_TIMEOUT", 0.05), patch("main.IPC_REQUEST_TIMEOUT", 0.05):
+        async with serving(tmp_path, command_handler=never_answers):
+            with pytest.raises(SystemExit) as exc:
+                await main.run_stop(_config(tmp_path))
     assert exc.value.code == 1
     assert "didn't answer" in capsys.readouterr().out
