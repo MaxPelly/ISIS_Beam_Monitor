@@ -14,112 +14,12 @@ from isis_monitor.ipc import SERVER_LINE_LIMIT, IPCClient, IPCServer
 from isis_monitor.tests.test_beam import wait_until
 
 
-async def test_ipc_snapshot_and_command(tmp_path):
-    socket_path = tmp_path / "daemon.sock"
-    state = DaemonState()
-    state.update_mcr_news("hello")
-
-    async def command_handler(name: str):
-        if name == "force_reconnect_all":
-            return {"beam": True, "mcr": True}
-        return {"error": "unknown"}
-
-    server = IPCServer(socket_path, state, command_handler)
-    await server.start()
-
-    client = IPCClient(socket_path)
-    await client.connect()
-
-    snap = await client.request({"method": "get_snapshot"})
-    assert snap["ok"] is True
-    assert snap["snapshot"]["mcr_news"] == "hello"
-
-    cmd = await client.request({"method": "command", "name": "force_reconnect_all"})
-    assert cmd["ok"] is True
-    assert cmd["result"] == {"beam": True, "mcr": True}
-
-    await client.close()
-    await server.stop()
-
-
-async def test_ipc_request_and_events_do_not_race(tmp_path):
-    """A command sent while the event stream is being consumed must not
-    raise — request() and iter_events() no longer share a bare readline()."""
-    socket_path = tmp_path / "daemon.sock"
-    state = DaemonState()
-
-    async def command_handler(name: str):
-        return {"handled": name}
-
-    server = IPCServer(socket_path, state, command_handler)
-    await server.start()
-
-    client = IPCClient(socket_path)
-    await client.connect()
-    await client.request({"method": "subscribe_updates"})
-
-    received_events = []
-
-    async def consume_events():
-        async for ev in client.iter_events():
-            received_events.append(ev)
-
-    consumer_task = asyncio.create_task(consume_events())
-    await asyncio.sleep(0.05)  # let the consumer start awaiting the queue
-
-    state.update_beam_state("TS1", 1.0, "low")
-    cmd = await client.request({"method": "command", "name": "force_reconnect_all"})
-    assert cmd["ok"] is True
-    assert cmd["result"] == {"handled": "force_reconnect_all"}
-
-    await asyncio.sleep(0.05)
-    consumer_task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await consumer_task
-
-    assert any(ev["event"] == "beam" and ev["payload"]["beam"] == "TS1" for ev in received_events)
-
-    await client.close()
-    await server.stop()
-
-async def test_ipc_malformed_json_and_oversized_payload(tmp_path):
-    socket_path = tmp_path / "daemon.sock"
-    state = DaemonState()
-
-    async def command_handler(_name: str):
-        return {}
-
-    server = IPCServer(socket_path, state, command_handler)
-    await server.start()
-
-    # Manual socket connection to send raw bad bytes
-    reader, writer = await asyncio.open_unix_connection(str(socket_path))
-    
-    # 1. Malformed JSON
-    writer.write(b"{bad_json\n")
-    await writer.drain()
-    
-    resp_line = await reader.readline()
-    resp = json.loads(resp_line.decode())
-    assert resp["ok"] is False
-    assert resp["error"] == "invalid_json"
-
-    # 2. A request line over SERVER_LINE_LIMIT closes that connection.
-    writer.write(b'{"padding": "' + b"A" * (SERVER_LINE_LIMIT + 10) + b'"}\n')
-    await writer.drain()
-    assert await asyncio.wait_for(reader.read(), timeout=1.0) == b""
-
-    writer.close()
-    await writer.wait_closed()
-    await server.stop()
-
-
 @contextlib.asynccontextmanager
-async def serving(tmp_path, state=None, command_handler=None):
+async def serving(tmp_path, state=None, command_handler=None, config_handler=None):
     async def default_handler(name):
         return {"handled": name}
 
-    server = IPCServer(tmp_path / "d.sock", state or DaemonState(), command_handler or default_handler)
+    server = IPCServer(tmp_path / "d.sock", state or DaemonState(), command_handler or default_handler, config_handler)
     await server.start()
     try:
         yield server
@@ -145,6 +45,56 @@ async def raw_request(server, line: bytes) -> dict:
     writer.close()
     await writer.wait_closed()
     return reply
+
+
+async def never_answers(_name):
+    await asyncio.sleep(3600)
+
+
+async def test_ipc_snapshot_and_command(tmp_path):
+    state = DaemonState()
+    state.update_mcr_news("hello")
+    async with serving(tmp_path, state) as server, connected(server) as client:
+        snap = await client.request({"method": "get_snapshot"})
+        cmd = await client.request({"method": "command", "name": "force_reconnect_all"})
+    assert snap["ok"] is True and snap["snapshot"]["mcr_news"] == "hello"
+    assert cmd["ok"] is True and cmd["result"] == {"handled": "force_reconnect_all"}
+
+
+async def test_ipc_request_and_events_do_not_race(tmp_path):
+    """A command sent while the event stream is being consumed must not
+    raise — request() and iter_events() no longer share a bare readline()."""
+    state = DaemonState()
+    async with serving(tmp_path, state) as server, connected(server) as client:
+        await client.request({"method": "subscribe_updates"})
+        received_events = []
+
+        async def consume_events():
+            async for ev in client.iter_events():
+                received_events.append(ev)
+
+        consumer_task = asyncio.create_task(consume_events())
+        await asyncio.sleep(0.05)  # let the consumer start awaiting the queue
+        state.update_beam_state("TS1", 1.0, "low")
+        cmd = await client.request({"method": "command", "name": "force_reconnect_all"})
+        assert cmd["ok"] is True and cmd["result"] == {"handled": "force_reconnect_all"}
+        await wait_until(lambda: received_events)
+        consumer_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await consumer_task
+    assert any(ev["event"] == "beam" and ev["payload"]["beam"] == "TS1" for ev in received_events)
+
+
+async def test_ipc_malformed_json_and_oversized_payload(tmp_path):
+    async with serving(tmp_path) as server:
+        assert (await raw_request(server, b"{bad_json\n"))["error"] == "invalid_json"
+        # A request line over SERVER_LINE_LIMIT closes that connection.
+        reader, writer = await asyncio.open_unix_connection(str(server.socket_path))
+        writer.write(b'{"padding": "' + b"A" * (SERVER_LINE_LIMIT + 10) + b'"}\n')
+        await writer.drain()
+        assert await asyncio.wait_for(reader.read(), timeout=1.0) == b""
+        writer.close()
+        await writer.wait_closed()
 
 
 async def test_stop_returns_promptly_with_subscribed_client(tmp_path):
@@ -277,14 +227,9 @@ async def test_client_surfaces_garbage_from_server(tmp_path):
 
 async def test_config_methods_are_routed_to_config_handler(tmp_path):
     config_handler = AsyncMock(return_value={"config": {"x": 1}})
-    server = IPCServer(tmp_path / "d.sock", DaemonState(), AsyncMock(), config_handler)
-    await server.start()
-    try:
-        async with connected(server) as client:
-            get = await client.request({"method": "get_config"})
-            update = await client.request({"method": "update_config", "settings": {"a": "b"}})
-    finally:
-        await server.stop()
+    async with serving(tmp_path, config_handler=config_handler) as server, connected(server) as client:
+        get = await client.request({"method": "get_config"})
+        update = await client.request({"method": "update_config", "settings": {"a": "b"}})
     assert get["config"] == {"x": 1} and get["ok"] is True
     assert config_handler.await_args_list[0].args == ("get_config", {"method": "get_config"})
     assert config_handler.await_args_list[1].args[1]["settings"] == {"a": "b"}
@@ -393,26 +338,8 @@ async def test_subscriber_that_stops_reading_is_disconnected(tmp_path):
         await asyncio.wait_for(server.stop(), 3)
 
 
-async def test_request_timeout_closes_the_client(tmp_path):
+async def test_request_timeout_closes_the_client_and_wakes_other_waiters(tmp_path):
     """A late reply would otherwise be read as the next request's answer."""
-    async def never_answers(_name):
-        await asyncio.sleep(3600)
-
-    async with serving(tmp_path, command_handler=never_answers) as server:
-        client = IPCClient(server.socket_path)
-        await client.connect()
-        with pytest.raises(TimeoutError):
-            await client.request({"method": "command", "name": "x"}, timeout=0.05)
-        with pytest.raises(RuntimeError, match="not connected"):
-            await client.request({"method": "get_snapshot"})
-        await client.close()  # idempotent
-
-
-
-async def test_timeout_raises_builtin_timeout_and_wakes_other_waiters(tmp_path):
-    async def never_answers(_name):
-        await asyncio.sleep(3600)
-
     async with serving(tmp_path, command_handler=never_answers) as server:
         client = IPCClient(server.socket_path)
         await client.connect()
@@ -422,3 +349,6 @@ async def test_timeout_raises_builtin_timeout_and_wakes_other_waiters(tmp_path):
         assert type(exc.value) is TimeoutError
         with pytest.raises(ConnectionError):
             await asyncio.wait_for(events, 1)
+        with pytest.raises(RuntimeError, match="not connected"):
+            await client.request({"method": "get_snapshot"})
+        await client.close()  # idempotent
