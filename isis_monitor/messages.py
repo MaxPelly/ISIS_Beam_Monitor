@@ -74,16 +74,15 @@ class Notification:
     channel: str = ""  # e.g. "TS1" or an instrument name; falls back to the NotificationChannel's
                         # name in NotificationChannel.broadcast() when left blank
 
+    def _parts(self, with_flavour: bool) -> List[str]:
+        parts = [f"{self.emoji} {self.title}".strip(), self.text]
+        parts.extend(f"{key}: {value}" for key, value in self.facts)
+        parts += [self.flavour if with_flavour else "", fmt_time(self.timestamp) if self.timestamp else ""]
+        return [part for part in parts if part]
+
     def to_plain_text(self) -> str:
         """Render as plain text, e.g. for log lines or the dummy notifier."""
-        header = f"{self.emoji} {self.title}".strip()
-        lines = [header, self.text]
-        lines.extend(f"{key}: {value}" for key, value in self.facts)
-        if self.flavour:
-            lines.append(self.flavour)
-        if self.timestamp:
-            lines.append(fmt_time(self.timestamp))
-        return "\n".join(line for line in lines if line)
+        return "\n".join(self._parts(with_flavour=True))
 
     def to_summary(self) -> str:
         """Render as a single line for the Teams `summary` field.
@@ -92,12 +91,7 @@ class Notification:
         instead, so it carries the key details: title, text, facts and time.
         Flavour is left out to keep it short.
         """
-        header = f"{self.emoji} {self.title}".strip()
-        parts = [header, self.text]
-        parts.extend(f"{key}: {value}" for key, value in self.facts)
-        if self.timestamp:
-            parts.append(fmt_time(self.timestamp))
-        return " | ".join(" ".join(part.split()) for part in parts if part)
+        return " | ".join(" ".join(part.split()) for part in self._parts(with_flavour=False))
 
 
 # ---------------------------------------------------------------------------
