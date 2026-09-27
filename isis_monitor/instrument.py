@@ -217,13 +217,8 @@ class InstrumentTracker:
         self.state.run_name = str(saved["run_name"])
         self.state.run_started_at = datetime.fromisoformat(saved["run_started_at"])
         self.state.current_counts = float(saved.get("counts", -1.0))
-        # Only if still past the *current* threshold: notify_counts may have
-        # been raised by the config save that caused this restart, and the
-        # card for the new threshold hasn't been sent.
-        self.state.end_notified = (
-            bool(saved.get("end_notified", False))
-            and self.state.current_counts > self.instrument.notify_counts
-        )
+        # DaemonState has already cleared this if notify_counts has changed.
+        self.state.end_notified = bool(saved.get("end_notified", False))
 
     def reset_stall_clock(self) -> None:
         self.state.collection_stalled_since = None

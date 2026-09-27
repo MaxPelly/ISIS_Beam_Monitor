@@ -299,7 +299,11 @@ class DaemonState(MonitorSinkProtocol):
                     "total_runs": int(info.get("total_runs", current["total_runs"])),
                     # Validated here (raises ValueError) but kept as ISO text.
                     "run_started_at": _aware_iso(started) if started else None,
-                    "end_notified": bool(info.get("end_notified", False)),
+                    # A finishing card sent for another notify_counts (changed
+                    # by the config save behind this restart) doesn't cover
+                    # the new one, which may still be ahead.
+                    "end_notified": bool(info.get("end_notified", False))
+                    and float(info.get("notify_counts", current["notify_counts"])) == current["notify_counts"],
                 }
             except (TypeError, ValueError):
                 logger.warning(f"Skipping malformed snapshot state for instrument {name}")

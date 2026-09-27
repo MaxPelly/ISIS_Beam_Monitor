@@ -1163,18 +1163,24 @@ async def test_finishing_card_state_is_saved_to_the_sink(mock_config, mock_chann
 
 
 @pytest.mark.asyncio
-async def test_raised_threshold_after_restart_still_gets_its_finishing_card(mock_config, mock_channels):
-    """The card was sent at 101 with a target of 100; the config save that
-    raised the target to 120 restarted the daemon. Passing 120 must notify."""
+@pytest.mark.parametrize("saved_target, renotified", [(100.0, False), (120.0, True), (80.0, True)])
+async def test_finishing_card_after_restart_depends_on_the_threshold_it_was_sent_for(
+    mock_config, mock_channels, saved_target, renotified,
+):
+    """The card was sent (maybe early, at 101) for saved_target; the daemon
+    restarted with a target of 100. A plain restart mustn't resend it, but a
+    card for a changed target is still due."""
     _, exp_channel = mock_channels
-    m = make_monitor(mock_config, mock_channels, counts_target=120)
-    m.restore_instruments({"PEARL": {
+    m = make_monitor(mock_config, mock_channels, counts_target=100)
+    state = DaemonState(instruments=[i for i in m.config.instruments])
+    state.restore_from_snapshot_json(json.dumps({"instruments": {"PEARL": {
         "run_name": "Run 1", "run_started_at": datetime.now(timezone.utc).isoformat(),
-        "counts": 101.0, "end_notified": True,
-    }})
-    assert tracker(m).state.end_notified is False
-    await m._handle_update({"pv": PEARL_UAMPS, "value": 121.0})
-    assert exp_channel.broadcast.call_args[0][0].title == "PEARL: Run about to finish"
+        "counts": 101.0, "end_notified": True, "notify_counts": saved_target,
+    }}}))
+    m.restore_instruments(state.instruments)
+    assert tracker(m).state.end_notified is not renotified
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 102.0})
+    assert exp_channel.broadcast.called is renotified
 
 
 @pytest.mark.asyncio
