@@ -2,7 +2,7 @@ import asyncio
 import json
 import random
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -96,9 +96,13 @@ def test_compute_summary_treats_unknown_as_off():
 # daily_summary_loop
 # ---------------------------------------------------------------------------
 
-async def run_summary(store, state=None, rng=None, **overrides):
-    """Run daily_summary_loop briefly (summary_time defaults to now); returns the channel."""
-    overrides.setdefault("summary_time", datetime.now(get_timezone()).strftime("%H:%M"))
+async def run_summary(store, state=None, rng=None, now=None, **overrides):
+    """Run daily_summary_loop briefly with its clock stopped at `now` (default: the
+    real time), so a run can't straddle midnight; summary_time defaults to that minute.
+    Returns the channel."""
+    now = now or datetime.now(timezone.utc)
+    overrides.setdefault("summary_time", now.astimezone(get_timezone()).strftime("%H:%M"))
+    clock = MagicMock(now=lambda tz: now.astimezone(tz))
     channel = fake_channel("Beam")
     stop_event = asyncio.Event()
 
@@ -106,7 +110,7 @@ async def run_summary(store, state=None, rng=None, **overrides):
         await asyncio.sleep(0.05)
         stop_event.set()
 
-    with patch("isis_monitor.summary.SUMMARY_CHECK_INTERVAL", 0.01):
+    with patch("isis_monitor.summary.SUMMARY_CHECK_INTERVAL", 0.01), patch("isis_monitor.summary.datetime", clock):
         asyncio.create_task(stop_soon())
         await daily_summary_loop(make_config(**overrides), state or DaemonState(), store, channel, stop_event, rng=rng)
     return channel
@@ -117,6 +121,11 @@ def store(tmp_path):
     store = SQLiteStateStore(tmp_path / "summary.db")
     yield store
     store.close()
+
+
+def noon():
+    """Midday local time, in whatever display timezone is current."""
+    return datetime(2026, 6, 1, 12, 0, tzinfo=get_timezone())
 
 
 def ts1_card(channel):
@@ -137,15 +146,12 @@ async def test_daily_summary_loop_sends_one_card_per_target_at_summary_time(stor
 async def test_daily_summary_loop_fires_even_if_the_exact_minute_was_missed(store):
     """A slow tick that steps past the target minute must still send today's
     summary rather than silently waiting for tomorrow (regression guard)."""
-    now_local = datetime.now(get_timezone())
-    just_passed = now_local.replace(minute=max(now_local.minute - 1, 0)).strftime("%H:%M")
-    assert (await run_summary(store, summary_time=just_passed)).broadcast.call_count == 3
+    channel = await run_summary(store, now=noon(), summary_time="11:59")
+    assert channel.broadcast.call_count == 3
 
 
-async def test_daily_summary_loop_does_not_fire_outside_summary_time(store):
-    # 23:59 is guaranteed later today without an hour wraparound.
-    off_time = "23:58" if datetime.now(get_timezone()).strftime("%H:%M") == "23:59" else "23:59"
-    (await run_summary(store, summary_time=off_time)).broadcast.assert_not_called()
+async def test_daily_summary_loop_does_not_fire_before_summary_time(store):
+    (await run_summary(store, now=noon(), summary_time="12:01")).broadcast.assert_not_called()
 
 
 @pytest.mark.parametrize("fun_mode", [True, False])
@@ -163,9 +169,10 @@ async def test_daily_summary_loop_tracks_records_only_in_fun_mode(store, fun_mod
 async def test_daily_summary_not_resent_after_restart_same_day(tmp_path):
     """The last-sent date is persisted, so restarting the daemon after
     summary_time doesn't send the day's cards a second time."""
+    now = datetime.now(timezone.utc)
     for expected in (3, 0):
         store = SQLiteStateStore(tmp_path / "summary.db")
-        assert (await run_summary(store)).broadcast.call_count == expected
+        assert (await run_summary(store, now=now)).broadcast.call_count == expected
         store.close()
 
 
@@ -173,10 +180,11 @@ async def test_daily_summary_tolerates_corrupt_persisted_values(store, caplog):
     store.upsert_snapshot("records", "{not json")
     store.upsert_snapshot(LAST_SENT_KEY, "yesterday-ish")
     store.commit()
-    channel = await run_summary(store, rng=random.Random(1), fun_mode=True)
+    now = datetime.now(timezone.utc)
+    channel = await run_summary(store, rng=random.Random(1), now=now, fun_mode=True)
     assert "Corrupt records snapshot" in caplog.text
     assert channel.broadcast.call_count == 3
-    assert store.load_snapshot(LAST_SENT_KEY) == datetime.now(get_timezone()).date().isoformat()
+    assert store.load_snapshot(LAST_SENT_KEY) == now.astimezone(get_timezone()).date().isoformat()
 
 
 async def test_daily_summary_counts_runs_only_on_instruments_using_that_target(store):
