@@ -44,7 +44,7 @@ Builds the structured, channel-agnostic notifications used everywhere else.
 
 ### `isis_monitor/flavour.py`
 Optional personality content shown only when `fun_mode = true`.
--   **`pick(key, rng)`**: line pools keyed by `(beam target or "*", transition)`, falling back to the `"*"` pool when there's no target-specific one.
+-   **`pick(key, rng)`**: a random line from the pool for a transition or event (e.g. `"off"`, `"new_run"`), or `""` if there is none.
 -   **`fact_of_the_day(rng)`**: a small pool of neutron/ISIS trivia shown once per day on the daily summary card.
 
 ### `isis_monitor/summary.py`

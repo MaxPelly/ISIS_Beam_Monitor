@@ -145,7 +145,7 @@ def beam_change(
             ("% of high threshold", pct_of_high),
             (f"Was {prev_state} for", fmt_duration(time_in_prev_state)),
         ],
-        flavour=flavour.pick((display_name, transition), rng) if rng else "",
+        flavour=flavour.pick(transition, rng) if rng else "",
         timestamp=time_now,
         channel=channel,
     )
@@ -163,7 +163,7 @@ def startup_status(
         title=f"Monitor online: {display_name} is {state}",
         text=f"Current: {beam_val:.3f} uA",
         emoji="🛰️",
-        flavour=flavour.pick((display_name, "startup"), rng) if rng else "",
+        flavour=flavour.pick("startup", rng) if rng else "",
         timestamp=time_now,
         channel=channel,
     )
@@ -194,7 +194,7 @@ def run_started(
             # Negative means no reading ever arrived for that run.
             ("Final total collected", f"{prev_counts:.1f} µA·h" if prev_counts >= 0 else "unknown"),
         ],
-        flavour=flavour.pick(("*", "new_run"), rng) if rng else "",
+        flavour=flavour.pick("new_run", rng) if rng else "",
         timestamp=time_now,
         channel=channel,
     )
@@ -227,7 +227,7 @@ def run_finishing(
         text=run_name,
         emoji=FINISHING_EMOJI,
         facts=facts,
-        flavour=flavour.pick(("*", "finishing"), rng) if rng else "",
+        flavour=flavour.pick("finishing", rng) if rng else "",
         timestamp=time_now,
         channel=channel,
     )
@@ -277,7 +277,7 @@ def mcr_news(
         text=news_text,
         severity=severity,
         emoji=emoji,
-        flavour=flavour.pick(("*", "mcr_news"), rng) if rng else "",
+        flavour=flavour.pick("mcr_news", rng) if rng else "",
         url=url,
         url_label="Open MCR news",
         timestamp=time_now,
@@ -336,7 +336,7 @@ def run_milestone(
         text=f"That's {run_count} runs since records began.",
         severity=Severity.GOOD,
         emoji="🏆",
-        flavour=flavour.pick(("*", "milestone"), rng) if rng else "",
+        flavour=flavour.pick("milestone", rng) if rng else "",
         timestamp=time_now,
         channel=channel,
     )
