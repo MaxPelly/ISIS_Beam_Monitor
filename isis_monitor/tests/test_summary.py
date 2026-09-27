@@ -32,7 +32,7 @@ def make_config(**overrides):
 
 def test_compute_summary_empty_history_returns_zeroed_summary():
     result = compute_summary({"TS1": []}, since=datetime.now(timezone.utc))
-    assert result["TS1"] == TargetSummary(0.0, 0, timedelta(0), "")
+    assert result["TS1"] == TargetSummary(0.0, 0, timedelta(0), "", coverage_pct=0.0)
 
 
 def test_compute_summary_counts_trips_and_longest_streak():
@@ -54,6 +54,23 @@ def test_compute_summary_filters_by_since():
     ]
     summary = compute_summary({"TS1": samples}, since=t0 + timedelta(hours=24))["TS1"]
     assert summary.uptime_pct == 100.0  # only the second sample is within the window
+
+
+def test_compute_summary_coverage_counts_missing_samples():
+    t0 = datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc)
+    # 6 samples at 1-minute intervals over a 10-minute window: the feed was
+    # down for the rest, which counts against coverage but not uptime.
+    samples = [(t0 + timedelta(minutes=i), 150.0, "high") for i in range(6)]
+    summary = compute_summary({"TS1": samples}, since=t0, until=t0 + timedelta(minutes=10))["TS1"]
+    assert summary.uptime_pct == 100.0
+    assert summary.coverage_pct == 60.0
+
+    full = compute_summary({"TS1": samples}, since=t0, until=t0 + timedelta(minutes=5))["TS1"]
+    assert full.coverage_pct == 100.0  # capped
+    fast = compute_summary(
+        {"TS1": samples}, since=t0, until=t0 + timedelta(minutes=10), sample_interval=30.0
+    )["TS1"]
+    assert fast.coverage_pct == 30.0
 
 
 def test_compute_summary_treats_unknown_as_off():

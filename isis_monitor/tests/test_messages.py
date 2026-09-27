@@ -315,6 +315,14 @@ def test_daily_summary_builder():
     assert n.severity == Severity.INFO  # below 90% uptime
 
 
+def test_daily_summary_shows_data_coverage_only_when_samples_are_missing():
+    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
+    args = ("TS1", 95.0, 0, timedelta(hours=10), "▇", 3, dt)
+    assert "Data coverage" not in dict(daily_summary(*args, coverage_pct=99.5).facts)
+    facts = daily_summary(*args, coverage_pct=62.4).facts
+    assert facts[:2] == [("Uptime", "95%"), ("Data coverage", "62%")]
+
+
 def test_daily_summary_builder_new_record_note_and_fact_of_the_day():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = daily_summary(

@@ -33,18 +33,27 @@ class TargetSummary:
     trips: int
     longest_on_streak: timedelta
     sparkline: str
+    coverage_pct: float = 100.0  # share of the expected samples actually recorded
 
 
 def compute_summary(
     history: Dict[str, Deque[Tuple[datetime, float, str]]],
     since: datetime,
+    until: Optional[datetime] = None,
+    sample_interval: float = 60.0,
 ) -> Dict[str, TargetSummary]:
-    """Summarise each target's 1-minute samples at or after `since`."""
+    """Summarise each target's samples at or after `since`.
+
+    Samples aren't recorded while the beam feed is down, so uptime covers
+    only the time the beam could be seen; coverage_pct says how much that was.
+    """
+    until = until or datetime.now(timezone.utc)
+    expected_samples = max((until - since).total_seconds() / sample_interval, 1.0)
     summaries: Dict[str, TargetSummary] = {}
     for beam, samples in history.items():
         recent = [s for s in samples if s[0] >= since]
         if not recent:
-            summaries[beam] = TargetSummary(0.0, 0, timedelta(0), "")
+            summaries[beam] = TargetSummary(0.0, 0, timedelta(0), "", coverage_pct=0.0)
             continue
 
         on_count = sum(1 for _, _, power in recent if power not in _OFF_LIKE)
@@ -74,6 +83,7 @@ def compute_summary(
             trips=trips,
             longest_on_streak=longest_on_streak,
             sparkline=sparkline_chars(values, SPARKLINE_WIDTH),
+            coverage_pct=min(len(recent) / expected_samples * 100, 100.0),
         )
     return summaries
 
@@ -152,7 +162,7 @@ async def daily_summary_loop(
 
         last_sent_date = now_local.date()
         since = now_utc - SUMMARY_WINDOW
-        summaries = compute_summary(state.history, since)
+        summaries = compute_summary(state.history, since, now_utc, config.sample_interval)
         instruments_by_channel = _instruments_by_channel(state)
         todays_fact = fact_of_the_day(rng) if (config.fun_mode and rng) else ""
 
@@ -173,6 +183,7 @@ async def daily_summary_loop(
                 now_utc,
                 is_new_record=is_new_record,
                 fact_of_the_day=todays_fact,
+                coverage_pct=target_summary.coverage_pct,
             )
             await beam_channel.broadcast(notification)
 

@@ -297,23 +297,30 @@ def daily_summary(
     time_now: datetime,
     is_new_record: bool = False,
     fact_of_the_day: str = "",
+    coverage_pct: float = 100.0,
 ) -> Notification:
     text = f"{display_name}: {uptime_pct:.0f}% uptime over the last 24h."
     if is_new_record:
         text = f"{text} 🏆 New record!"
+
+    facts = [("Uptime", f"{uptime_pct:.0f}%")]
+    # Uptime only covers the time the beam feed was connected; say so when
+    # that wasn't (nearly) all of it. The slack allows for timer jitter.
+    if coverage_pct < 99:
+        facts.append(("Data coverage", f"{coverage_pct:.0f}%"))
+    facts += [
+        ("Trips", str(trips)),
+        ("Longest continuous on", fmt_duration(longest_on_streak)),
+        ("Sparkline", sparkline),
+        ("Runs in last 24h", str(runs_last_24h)),
+    ]
 
     return Notification(
         title=f"{display_name} daily summary",
         text=text,
         severity=Severity.GOOD if uptime_pct >= 90 else Severity.INFO,
         emoji="📊",
-        facts=[
-            ("Uptime", f"{uptime_pct:.0f}%"),
-            ("Trips", str(trips)),
-            ("Longest continuous on", fmt_duration(longest_on_streak)),
-            ("Sparkline", sparkline),
-            ("Runs in last 24h", str(runs_last_24h)),
-        ],
+        facts=facts,
         flavour=fact_of_the_day,
         timestamp=time_now,
         channel=display_name,  # already the beam target's channel label (e.g. "TS1")
