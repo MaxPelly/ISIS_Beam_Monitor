@@ -246,6 +246,7 @@ class BeamMonitor:
         self.instruments: Dict[str, InstrumentTracker] = {
             inst.name: InstrumentTracker(
                 inst, experiment_channel, self._beam_power, config.stall_minutes,
+                finish_warning_minutes=config.finish_warning_minutes,
                 fun_mode=config.fun_mode, rng=self._rng, sink=sink,
             )
             for inst in config.instruments

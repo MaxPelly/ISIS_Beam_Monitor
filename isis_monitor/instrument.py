@@ -6,7 +6,7 @@ import random
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Callable, Deque, List, Optional, Tuple
+from typing import Any, Callable, Deque, Optional, Sequence, Tuple
 
 from isis_monitor.config import InstrumentConfig
 from isis_monitor.messages import collection_stalled, run_finishing, run_milestone, run_started
@@ -17,10 +17,13 @@ logger = logging.getLogger(__name__)
 
 COUNTS_SAMPLE_WINDOW = timedelta(minutes=15)
 STALL_CHECK_WINDOW = timedelta(minutes=5)
+# How much counts history the rate needs before an early finishing card is
+# sent on its ETA; until then the card waits for notify_counts itself.
+ETA_MIN_HISTORY = timedelta(minutes=3)
 RUN_MILESTONE_INTERVAL = 25
 
 
-def _fit_rate(samples: List[Tuple[datetime, float]]) -> float:
+def _fit_rate(samples: Sequence[Tuple[datetime, float]]) -> float:
     """Least-squares slope (value per second) through (time, value) samples."""
     if len(samples) < 2:
         return 0.0
@@ -68,6 +71,7 @@ class InstrumentTracker:
         experiment_channel: NotificationChannel,
         beam_power: Callable[[str], str],
         stall_minutes: float,
+        finish_warning_minutes: float = 0.0,
         fun_mode: bool = False,
         rng: Optional[random.Random] = None,
         sink: Optional[MonitorSinkProtocol] = None,
@@ -76,6 +80,7 @@ class InstrumentTracker:
         self.experiment_channel = experiment_channel
         self.beam_power = beam_power
         self.stall_minutes = stall_minutes
+        self.finish_warning_minutes = finish_warning_minutes
         self.fun_mode = fun_mode
         self._rng = rng or random.Random()
         self.sink = sink
@@ -157,20 +162,31 @@ class InstrumentTracker:
         if not math.isfinite(total_collected):
             return  # PVWS sends NaN for a PV with no value yet
 
+        previous = self.state.current_counts
         self.state.current_counts = total_collected
-        self.state.collected_samples.append((time_now, total_collected))
+        samples = self.state.collected_samples
+        samples.append((time_now, total_collected))
         self._prune_collected_samples(time_now)
 
         if self.sink:
             self.sink.update_counts(self.instrument.name, total_collected)
 
         counts_target = self.instrument.notify_counts
-        if self.state.end_notified and total_collected < (counts_target - 25):
-            self.state.end_notified = False
-            self._save_progress()
+        if self.state.end_notified:
+            # Counts only fall when the DAE resets them, e.g. a new run that
+            # kept the old title; then the next finish needs a card too.
+            if total_collected < previous and total_collected < counts_target - 25:
+                self.state.end_notified = False
+                self._save_progress()
+            return
 
-        if total_collected > counts_target and not self.state.end_notified:
-            rate = _fit_rate(list(self.state.collected_samples))
+        remaining = counts_target - total_collected
+        if remaining >= 0 and (
+            self.finish_warning_minutes <= 0 or samples[-1][0] - samples[0][0] < ETA_MIN_HISTORY
+        ):
+            return  # can't be due yet; skips the rate fit on most updates
+        rate = _fit_rate(samples)
+        if remaining < 0 or (rate > 0 and remaining / rate <= self.finish_warning_minutes * 60):
             notification = run_finishing(
                 self.instrument.name,
                 self.state.run_name,
@@ -182,7 +198,7 @@ class InstrumentTracker:
                 rng=self._flavour_rng(),
                 channel=self._card_channel(),
             )
-            logger.info(f"Target Reached: {notification.to_plain_text()}")
+            logger.info(f"Run finishing: {notification.to_plain_text()}")
             await self.experiment_channel.broadcast(notification)
             self.state.end_notified = True
             self._save_progress()

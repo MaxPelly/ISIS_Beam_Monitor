@@ -369,6 +369,64 @@ async def test_handle_update_counts_triggers_notification_past_the_target(mock_c
     assert facts["Instrument beam"] == "high"
 
 
+async def _feed_counts(m, readings):
+    """Feed (minutes after t0, µA·h) readings to the only tracker."""
+    t0 = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
+    for minutes, value in readings:
+        await tracker(m).handle_counts(value, t0 + timedelta(minutes=minutes))
+
+
+@pytest.mark.asyncio
+async def test_finishing_card_is_sent_ahead_of_the_target_on_its_eta(mock_config, mock_channels):
+    _, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels, counts_target=100)  # finish_warning_minutes = 15
+    tracker(m).state.run_name = "Run 1"
+
+    # 1 µA·h a minute: 20 minutes to go at 80, 15 at 85.
+    await _feed_counts(m, [(0, 70.0), (5, 75.0), (10, 80.0)])
+    exp_channel.broadcast.assert_not_called()
+    await _feed_counts(m, [(15, 85.0)])
+    exp_channel.broadcast.assert_called_once()
+    facts = dict(exp_channel.broadcast.call_args[0][0].facts)
+    assert facts["ETA"] == "15m"
+
+    # Sent once, however the ETA wobbles or the target is then passed.
+    await _feed_counts(m, [(16, 85.5), (17, 90.0), (30, 101.0)])
+    exp_channel.broadcast.assert_called_once()
+    # Counts reset (e.g. a new run that kept its title): the next finish gets a card.
+    await _feed_counts(m, [(31, 0.0)])
+    assert tracker(m).state.end_notified is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("readings", [
+    [(0, 90.0), (2, 99.0)],  # too little history to trust the rate
+    [(0, 0.0), (5, 5.0)],  # rising, but ETA 95 minutes
+    [(0, 90.0), (5, 90.0)],  # not rising at all
+])
+async def test_finishing_card_waits_for_the_target_without_a_near_eta(mock_config, mock_channels, readings):
+    _, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels, counts_target=100)
+    tracker(m).state.run_name = "Run 1"
+
+    await _feed_counts(m, readings)
+    exp_channel.broadcast.assert_not_called()
+    await _feed_counts(m, [(6, 100.5)])  # the target itself always triggers it
+    exp_channel.broadcast.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_finish_warning_minutes_zero_only_sends_at_the_target(mock_config, mock_channels):
+    _, exp_channel = mock_channels
+    m = make_monitor(replace(mock_config, finish_warning_minutes=0), mock_channels, counts_target=100)
+    tracker(m).state.run_name = "Run 1"
+
+    await _feed_counts(m, [(0, 90.0), (5, 99.0), (6, 100.0)])
+    exp_channel.broadcast.assert_not_called()
+    await _feed_counts(m, [(7, 100.1)])
+    exp_channel.broadcast.assert_called_once()
+
+
 @pytest.mark.asyncio
 async def test_handle_update_counts_malformed(mock_config, mock_channels):
     sink = MagicMock()
