@@ -193,6 +193,11 @@ class DaemonState(MonitorSinkProtocol):
         self.health[component] = status
         self._touch()
         self._publish("health", {"component": component, "status": status})
+        if component == "beam" and status != "connected":
+            # No readings arrive without the feed, so the last ones can't be
+            # trusted; PVWS re-sends every value once it reconnects.
+            for beam, beam_state in self.beam_states.items():
+                self.update_beam_state(beam, float(beam_state["current"]), "unknown")
 
     def record_run_completed(self, instrument: str, ts: datetime) -> int:
         """Record a completed run and return the instrument's new all-time
@@ -252,9 +257,11 @@ class DaemonState(MonitorSinkProtocol):
         beam_states = snap.get("beam_states", {})
         for beam in CHANNEL_LABELS:
             if beam in beam_states:
+                # The power is left "unknown" until the beam feed connects:
+                # the saved one may be long out of date.
                 self.beam_states[beam] = {
                     "current": float(beam_states[beam].get("current", 0.0)),
-                    "power": str(beam_states[beam].get("power", "unknown")),
+                    "power": "unknown",
                 }
         self.mcr_news = str(snap.get("mcr_news", self.mcr_news))
         self._restore_instruments(snap)

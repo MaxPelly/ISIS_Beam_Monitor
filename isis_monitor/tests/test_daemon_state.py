@@ -198,7 +198,7 @@ def test_restore_from_snapshot():
     })
     state.restore_from_snapshot_json(valid_json)
     assert state.mcr_news == "Restored News"
-    assert state.beam_states["Muons"]["current"] == 2.0
+    assert state.beam_states["Muons"] == {"current": 2.0, "power": "unknown"}  # not yet live
     
     # Corrupt JSON shouldn't crash
     state.restore_from_snapshot_json("{bad_json: True")
@@ -353,3 +353,23 @@ def test_old_and_malformed_run_completions_are_not_restored(caplog):
     assert "Skipped 3 malformed run completion(s)" in caplog.text
     state.restore_from_snapshot_json(json.dumps({"run_completions": {"not": "a list"}}))
     assert len(state.run_completions) == 1
+
+
+def test_beams_are_unknown_while_the_beam_feed_is_down():
+    state = DaemonState()
+    state.update_health("beam", "connected")
+    state.update_beam_state("TS1", 150.0, "high")
+    q = state.subscribe()
+
+    state.update_health("beam", "disconnected")
+    assert state.beam_states["TS1"] == {"current": 150.0, "power": "unknown"}
+    events = [q.get_nowait() for _ in range(q.qsize())]
+    assert {e.payload["beam"] for e in events if e.event == "beam"} == {"TS1", "TS2", "Muons"}
+
+    state.update_health("beam", "reconnecting")
+    state.update_health("beam", "connected")
+    assert state.beam_states["TS1"]["power"] == "unknown"  # until PVWS re-sends it
+    state.update_beam_state("TS1", 150.0, "high")
+    assert state.beam_states["TS1"]["power"] == "high"
+    state.update_health("mcr", "disconnected")  # other components leave beams alone
+    assert state.beam_states["TS1"]["power"] == "high"
