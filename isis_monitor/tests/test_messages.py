@@ -1,6 +1,8 @@
 import random
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from isis_monitor.messages import (
     Notification,
     Severity,
@@ -122,18 +124,14 @@ def test_beam_change_builder_going_up_is_good():
     assert n.flavour == ""  # no rng, no flavour
 
 
-def test_beam_change_builder_dropping_to_low_is_warning():
-    n = beam_change("TS1", "medium", "low", 20.0, 80.0, 140.0, timedelta(minutes=45), DT)
-    assert n.title == "TS1 ⬇️ medium → low"
-    assert n.severity == Severity.WARNING
-    assert n.emoji == "🟠"
-
-
-def test_beam_change_builder_going_to_off_is_attention():
-    n = beam_change("TS1", "low", "off", 0.0, 20.0, 140.0, timedelta(minutes=10), DT)
-    assert n.title == "TS1 ⬇️ low → off"
-    assert n.severity == Severity.ATTENTION
-    assert n.emoji == "🔴"
+@pytest.mark.parametrize("old, new, current, previous, severity, emoji", [
+    ("medium", "low", 20.0, 80.0, Severity.WARNING, "🟠"),
+    ("low", "off", 0.0, 20.0, Severity.ATTENTION, "🔴"),
+])
+def test_beam_change_builder_going_down(old, new, current, previous, severity, emoji):
+    n = beam_change("TS1", old, new, current, previous, 140.0, timedelta(minutes=45), DT)
+    assert n.title == f"TS1 ⬇️ {old} → {new}"
+    assert (n.severity, n.emoji) == (severity, emoji)
 
 
 def test_beam_change_builder_restored_emoji_only_after_an_hour_plus_outage():
@@ -233,29 +231,16 @@ def test_mcr_news_builder():
     assert n.url_label == "Open MCR news"
 
 
-def test_mcr_news_builder_good_keyword():
-    n = mcr_news("Timing issues have been rectified. Beam back on @ 15:35", DT)
-    assert n.severity == Severity.GOOD
-    assert n.emoji == "🎉"
-
-
-def test_mcr_news_builder_attention_keyword():
-    n = mcr_news("We are investigating a water flow fault on Target 2.", DT)
-    assert n.severity == Severity.ATTENTION
-    assert n.emoji == "🚨"
-
-
-def test_mcr_news_builder_warning_keyword():
-    n = mcr_news("Scheduled maintenance will take place this evening.", DT)
-    assert n.severity == Severity.WARNING
-    assert n.emoji == "🔧"
-
-
-def test_mcr_news_builder_good_checked_before_attention():
-    """A resolution message naming the fault it just fixed must classify as GOOD."""
-    n = mcr_news("The faulty power supply in the Inner Synchrotron has been repaired.", DT)
-    assert n.severity == Severity.GOOD
-    assert n.emoji == "🎉"
+@pytest.mark.parametrize("news, severity, emoji", [
+    ("Timing issues have been rectified. Beam back on @ 15:35", Severity.GOOD, "🎉"),
+    ("We are investigating a water flow fault on Target 2.", Severity.ATTENTION, "🚨"),
+    ("Scheduled maintenance will take place this evening.", Severity.WARNING, "🔧"),
+    # A resolution naming the fault it just fixed is GOOD: good keywords are checked first.
+    ("The faulty power supply in the Inner Synchrotron has been repaired.", Severity.GOOD, "🎉"),
+])
+def test_mcr_news_builder_keywords(news, severity, emoji):
+    n = mcr_news(news, DT)
+    assert (n.severity, n.emoji) == (severity, emoji)
 
 
 def test_builders_pick_flavour_when_rng_given():

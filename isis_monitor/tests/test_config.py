@@ -52,11 +52,6 @@ def test_load_config_missing_mcr_url(tmp_path):
         load_config(config_file)
 
 
-def test_load_config_boundary_wrong_number_of_values(tmp_path):
-    with pytest.raises(ConfigError, match="exactly 3"):
-        load_config(_write(tmp_path, "[BEAM_BOUNDARIES]\nts1_boundaries = 0.0, 50.0\n"))
-
-
 def test_load_config_empty_websocket_url_logs_warning(tmp_path, caplog):
     """Empty isis_websocket_url should log a WARNING, not raise."""
     import logging
@@ -133,17 +128,64 @@ def test_load_config_defaults_match_dataclass_defaults(tmp_path):
     assert [(i.name, i.notify_counts) for i in config.instruments] == [("PEARL", 130.0)]
 
 
-@pytest.mark.parametrize("section, line", [
-    ("TIMEOUTS_INTERVALS", "mcr_poll_interval = soon"),
-    ("DAEMON", "retention_days = 1.5"),
-    ("LOGGING", "log_max_bytes = big"),
-    ("NOTIFICATIONS", "fun_mode = maybe"),
-    ("BEAM_BOUNDARIES", "ts1_boundaries = 0, a, 2"),
+NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
+
+
+@pytest.mark.parametrize("extra, match", [
+    # Malformed values name the section and key.
+    ("[TIMEOUTS_INTERVALS]\nmcr_poll_interval = soon\n", r"\[TIMEOUTS_INTERVALS\] mcr_poll_interval"),
+    ("[DAEMON]\nretention_days = 1.5\n", r"\[DAEMON\] retention_days"),
+    ("[LOGGING]\nlog_max_bytes = big\n", r"\[LOGGING\] log_max_bytes"),
+    (NOTIF + "fun_mode = maybe\n", r"\[NOTIFICATIONS\] fun_mode"),
+    ("[BEAM_BOUNDARIES]\nts1_boundaries = 0, a, 2\n", r"\[BEAM_BOUNDARIES\] ts1_boundaries"),
+    ("[BEAM_BOUNDARIES]\nts1_boundaries = 0.0, 50.0\n", "exactly 3"),
+    ("[INSTRUMENT:WISH]\n[INSTRUMENT:WISH]\n", "Could not parse"),  # duplicate section
+    # Out-of-range numbers
+    ("[TUI_CLIENT]\nreconnect_initial = 0\nreconnect_max = 5\n", "positive"),
+    ("[TUI_CLIENT]\nreconnect_initial = 10\nreconnect_max = 5\n", "cannot be greater"),
+    ("[TIMEOUTS_INTERVALS]\nmcr_poll_interval = 0\n", r"\[TIMEOUTS_INTERVALS\] mcr_poll_interval must be between 5"),
+    ("[TIMEOUTS_INTERVALS]\nbeam_reconnect_interval = -1\n", "beam_reconnect_interval must be between"),
+    ("[TIMEOUTS_INTERVALS]\nwebhook_timeout = 0\n", "webhook_timeout must be between 1 and 300"),
+    ("[TUI]\nsample_interval = nan\n", "sample_interval must be between"),
+    ("[TUI]\nhistory_maxlen = -5\n", "history_maxlen must be between"),
+    ("[TUI]\nlogs_maxlen = 0\n", "logs_maxlen must be between"),
+    ("[DAEMON]\nretention_days = 100000000\n", "retention_days must be between"),
+    ("[LOGGING]\nlog_backup_count = -1\n", "log_backup_count must be between"),
+    ("[DAEMON]\nretention_days = 30\n[TUI]\nsample_interval = 1\n", "samples per beam"),
+    # Legacy [PVS] instrument
+    ("[PVS]\nnotify_counts = 0\n", r"^\[PVS\] notify_counts must be"),
+    ("[PVS]\nrun_name_pv = AC:TS1:BEAM:CURR\n", r"^\[PVS\] PV AC:TS1:BEAM:CURR is already used by the TS1 beam"),
+    # [INSTRUMENT:*] sections
+    ("[INSTRUMENT:]\n", "needs an instrument name"),
+    ("[INSTRUMENT:PE ARL]\nnotify_counts = 5\n", "may only contain"),
+    ("[INSTRUMENT:A:B]\nnotify_counts = 5\n", "may only contain"),
+    (PEARL + "notify_counts = nan\n", "must be a positive number"),
+    (PEARL + "notify_counts = inf\n", "must be a positive number"),
+    (PEARL, "notify_counts is required"),
+    (PEARL + "notify_counts = lots\n", r"\[INSTRUMENT:PEARL\] notify_counts"),
+    (PEARL + "notify_counts = 5\nbeam_target = Muons\n", "beam_target must be one of"),
+    (PEARL + "notify_counts = 5\nchannel = teams\n",
+     r"\[INSTRUMENT:PEARL\] channel must be one of experiment, instrument"),
+    (PEARL + "notify_counts = 5\n[INSTRUMENT:pearl]\nnotify_counts = 5\n", "defined more than once"),
+    ("[PVS]\nts1_beam_current_pv = IN:PEARL:DAE:TOTALUAMPS\n" + PEARL + "notify_counts = 5\n",
+     "already used by the TS1 beam"),
+    # [NOTIFICATIONS], caught at load time so a bad edit can't leave the daemon failing on restart
+    (NOTIF + "timezone = Nowhere/City\n", "not a known timezone"),
+    (NOTIF + "timezone = ../etc\n", "not a known timezone"),
+    (NOTIF + "debounce_seconds = -1\n", "debounce_seconds must be between"),
+    (NOTIF + "debounce_seconds = nan\n", "debounce_seconds must be between"),
+    (NOTIF + "debounce_seconds = inf\n", "debounce_seconds must be between"),
+    (NOTIF + "stall_minutes = 0\n", "stall_minutes must be above 0"),
+    (NOTIF + "stall_minutes = 1e20\n", "stall_minutes must be above 0"),
+    (NOTIF + "stall_minutes = nan\n", "stall_minutes must be above 0"),
+    (NOTIF + "finish_warning_minutes = -1\n", "finish_warning_minutes must be between"),
+    (NOTIF + "finish_warning_minutes = nan\n", "finish_warning_minutes must be between"),
+    (NOTIF + "summary_time = not-a-time\n", "summary_time"),
+    (NOTIF + "summary_time = 25:00\n", "summary_time"),
 ])
-def test_load_config_invalid_value_raises_config_error(tmp_path, section, line):
-    key = line.split(" = ")[0]
-    with pytest.raises(ConfigError, match=rf"\[{section}\] {key}"):
-        load_config(_write(tmp_path, f"[{section}]\n{line}\n"))
+def test_invalid_config_raises_config_error(tmp_path, extra, match):
+    with pytest.raises(ConfigError, match=match):
+        load_config(_write(tmp_path, extra))
 
 
 def test_load_config_blank_numeric_value_uses_default(tmp_path):
@@ -155,17 +197,6 @@ def test_load_config_blank_numeric_value_uses_default(tmp_path):
 def test_load_config_tui_socket_defaults_to_daemon_socket(tmp_path):
     config = load_config(_write(tmp_path, "[DAEMON]\nsocket_path = /run/beam.sock\n"))
     assert config.tui_socket_path == "/run/beam.sock"
-
-
-@pytest.mark.parametrize("initial, maximum, match", [
-    ("0", "5", "positive"),
-    ("10", "5", "cannot be greater"),
-])
-def test_load_config_invalid_tui_reconnect(tmp_path, initial, maximum, match):
-    with pytest.raises(ConfigError, match=match):
-        load_config(_write(
-            tmp_path, f"[TUI_CLIENT]\nreconnect_initial = {initial}\nreconnect_max = {maximum}\n"
-        ))
 
 
 def test_load_config_custom_boundaries(tmp_path):
@@ -218,59 +249,6 @@ def test_instrument_unknown_key_warns(tmp_path, caplog):
 def test_instrument_default_section_keys_not_reported_as_unknown(tmp_path, caplog):
     load_config(_write(tmp_path, "[DEFAULT]\nfoo = 1\n[INSTRUMENT:PEARL]\nnotify_counts = 5\n"))
     assert "unknown key" not in caplog.text
-
-
-def test_duplicate_section_raises_config_error(tmp_path):
-    with pytest.raises(ConfigError, match="Could not parse"):
-        load_config(_write(tmp_path, "[INSTRUMENT:WISH]\n[INSTRUMENT:WISH]\n"))
-
-
-@pytest.mark.parametrize("extra, match", [
-    ("[PVS]\nnotify_counts = 0\n", r"^\[PVS\] notify_counts must be"),
-    ("[PVS]\nrun_name_pv = AC:TS1:BEAM:CURR\n", r"^\[PVS\] PV AC:TS1:BEAM:CURR is already used by the TS1 beam"),
-])
-def test_legacy_instrument_errors_name_pvs_section(tmp_path, extra, match):
-    with pytest.raises(ConfigError, match=match):
-        load_config(_write(tmp_path, extra))
-
-
-@pytest.mark.parametrize("extra, match", [
-    ("[INSTRUMENT:]\n", "needs an instrument name"),
-    ("[INSTRUMENT:PE ARL]\nnotify_counts = 5\n", "may only contain"),
-    ("[INSTRUMENT:A:B]\nnotify_counts = 5\n", "may only contain"),
-    ("[INSTRUMENT:PEARL]\nnotify_counts = nan\n", "must be a positive number"),
-    ("[INSTRUMENT:PEARL]\nnotify_counts = inf\n", "must be a positive number"),
-    ("[INSTRUMENT:PEARL]\n", "notify_counts is required"),
-    ("[INSTRUMENT:PEARL]\nnotify_counts = lots\n", r"\[INSTRUMENT:PEARL\] notify_counts"),
-    ("[INSTRUMENT:PEARL]\nnotify_counts = 5\nbeam_target = Muons\n", "beam_target must be one of"),
-    ("[INSTRUMENT:PEARL]\nnotify_counts = 5\n[INSTRUMENT:pearl]\nnotify_counts = 5\n",
-     "defined more than once"),
-    ("[PVS]\nts1_beam_current_pv = IN:PEARL:DAE:TOTALUAMPS\n[INSTRUMENT:PEARL]\nnotify_counts = 5\n",
-     "already used by the TS1 beam"),
-])
-def test_invalid_instrument_sections(tmp_path, extra, match):
-    with pytest.raises(ConfigError, match=match):
-        load_config(_write(tmp_path, extra))
-
-
-@pytest.mark.parametrize("line, match", [
-    ("timezone = Nowhere/City", "not a known timezone"),
-    ("timezone = ../etc", "not a known timezone"),
-    ("debounce_seconds = -1", "debounce_seconds must be between"),
-    ("debounce_seconds = nan", "debounce_seconds must be between"),
-    ("debounce_seconds = inf", "debounce_seconds must be between"),
-    ("stall_minutes = 0", "stall_minutes must be above 0"),
-    ("stall_minutes = 1e20", "stall_minutes must be above 0"),
-    ("stall_minutes = nan", "stall_minutes must be above 0"),
-    ("finish_warning_minutes = -1", "finish_warning_minutes must be between"),
-    ("finish_warning_minutes = nan", "finish_warning_minutes must be between"),
-    ("summary_time = not-a-time", "summary_time"),
-    ("summary_time = 25:00", "summary_time"),
-])
-def test_invalid_notification_settings(tmp_path, line, match):
-    """Caught at load time, so a bad edit can't leave the daemon failing on restart."""
-    with pytest.raises(ConfigError, match=match):
-        load_config(_write(tmp_path, f"[NOTIFICATIONS]\n{line}\n"))
 
 
 # ---------------------------------------------------------------------------
@@ -460,24 +438,3 @@ channel = Instrument
 """))
     assert [(i.name, i.channel) for i in config.instruments] == [("PEARL", "experiment"), ("WISH", "instrument")]
     assert load_config(_write(tmp_path, "")).instruments[0].channel == "experiment"  # legacy
-
-
-def test_invalid_instrument_channel(tmp_path):
-    with pytest.raises(ConfigError, match=r"\[INSTRUMENT:PEARL\] channel must be one of experiment, instrument"):
-        load_config(_write(tmp_path, "[INSTRUMENT:PEARL]\nnotify_counts = 5\nchannel = teams\n"))
-
-
-@pytest.mark.parametrize("extra, match", [
-    ("[TIMEOUTS_INTERVALS]\nmcr_poll_interval = 0\n", r"\[TIMEOUTS_INTERVALS\] mcr_poll_interval must be between 5"),
-    ("[TIMEOUTS_INTERVALS]\nbeam_reconnect_interval = -1\n", "beam_reconnect_interval must be between"),
-    ("[TIMEOUTS_INTERVALS]\nwebhook_timeout = 0\n", "webhook_timeout must be between 1 and 300"),
-    ("[TUI]\nsample_interval = nan\n", "sample_interval must be between"),
-    ("[TUI]\nhistory_maxlen = -5\n", "history_maxlen must be between"),
-    ("[TUI]\nlogs_maxlen = 0\n", "logs_maxlen must be between"),
-    ("[DAEMON]\nretention_days = 100000000\n", "retention_days must be between"),
-    ("[LOGGING]\nlog_backup_count = -1\n", "log_backup_count must be between"),
-    ("[DAEMON]\nretention_days = 30\n[TUI]\nsample_interval = 1\n", "samples per beam"),
-])
-def test_out_of_range_numeric_settings_are_rejected(tmp_path, extra, match):
-    with pytest.raises(ConfigError, match=match):
-        load_config(_write(tmp_path, extra))
