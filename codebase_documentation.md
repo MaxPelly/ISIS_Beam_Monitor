@@ -27,7 +27,7 @@ The core logic for accelerator beam monitoring.
 ### `isis_monitor/instrument.py`
 Run and counts tracking for one instrument (one `InstrumentTracker` per `config.instruments` entry).
 -   **`InstrumentTracker`**: Handles its instrument's run-name PV (new-run cards, run-completion recording and, with `fun_mode`, a milestone card every `RUN_MILESTONE_INTERVAL` (25) runs of that instrument) and counts PV (the "run about to finish" card once the total passes its `notify_counts`), and `check_collection_progress()` for stall warnings, suppressed while its `beam_target` is off.
--   **`InstrumentState`**: run name, start time, counts, and a 15-minute deque of `(time, counts_collected)` samples used for the finishing card's rate/ETA. `counts_pv`'s text is `live_current/total_collected` — only the total is tracked; live current is discarded since beam current is already tracked directly via the TS1/TS2/Muon PVs.
+-   **`InstrumentState`**: run name, start time, counts, and a 15-minute deque of `(time, counts_collected)` samples used for the finishing card's rate/ETA. Counts come from the instrument's `counts_pv`, derived as `IN:<NAME>:DAE:TOTALUAMPS`: a numeric `value` giving the total µA·h collected this run (0 at the start of a run is a real reading; NaN is ignored).
 
 ### `isis_monitor/mcr.py`
 Handles MCR news polling.
@@ -39,7 +39,7 @@ Handles MCR news polling.
 Builds the structured, channel-agnostic notifications used everywhere else.
 -   **`Notification`**: A dataclass (title, text, severity, emoji, facts, flavour, url/url_label, timestamp) with a `to_plain_text()` method used by `DummyNotifier` and log lines.
 -   **`Severity`**: `INFO` / `GOOD` / `WARNING` / `ATTENTION`, mapped to Adaptive Card container styles by `notifiers.py`.
--   **Builders**: one pure function per notification-worthy event — `beam_change`, `startup_status`, `run_started`, `run_finishing`, `collection_stalled`, `mcr_news`, `daily_summary`, `run_milestone`. Each takes an optional `rng: random.Random` so callers can opt into a `flavour.py` line (only when `fun_mode` is on) while keeping the builders deterministic and pure for tests. The run builders take the instrument name as their first argument and prefix it to the title; they leave `channel` blank so it stays "Experiment Updates", which downstream Power Automate flows route on.
+-   **Builders**: one pure function per notification-worthy event — `beam_change`, `startup_status`, `run_started`, `run_finishing`, `collection_stalled`, `mcr_news`, `daily_summary`, `run_milestone`. Each takes an optional `rng: random.Random` so callers can opt into a `flavour.py` line (only when `fun_mode` is on) while keeping the builders deterministic and pure for tests. The run builders take the instrument name as their first argument and prefix it to the title, and an optional `channel`: blank (the default) is filled with "Experiment Updates" on broadcast, which downstream Power Automate flows route on; `InstrumentTracker._card_channel()` passes the instrument's name instead when its config sets `channel = instrument`.
 -   **`fmt_time` / `fmt_duration` / `set_timezone` / `get_timezone`**: shared formatting helpers; the display timezone is process-global, set once from `[NOTIFICATIONS] timezone` at startup.
 
 ### `isis_monitor/flavour.py`
@@ -91,14 +91,14 @@ Defines `MonitorSinkProtocol`, the interface monitors use to report into `Daemon
 Configuration is managed via `config.ini` files, loaded through `isis_monitor/config.py`. Key sections include:
 -   **`[DATA]`**: WebSocket and HTTP URLs for data sources, plus the optional `mcr_page_url` link button.
 -   **`[WEBHOOKS]`**: URLs for Teams integration (should be kept secure). A blank URL disables that channel's Teams notifier.
--   **`[INSTRUMENT:<NAME>]`**: one per instrument — `counts_pv` and `notify_counts` (required) and `beam_target` (optional); parsed into `AppConfig.instruments` (`InstrumentConfig`, with `run_name_pv` derived as `IN:<NAME>:DAE:WDTITLE`).
--   **`[PVS]`**: `instrument_target` (the default `beam_target` for instrument sections that don't set one; TS1), the beam-current PVs, and the legacy single-instrument keys (`counts_pv`, `run_name_pv`, `notify_counts`) used only when there are no instrument sections.
+-   **`[INSTRUMENT:<NAME>]`**: one per instrument — `notify_counts` (required, µA·h), `beam_target` and `channel` (`experiment`/`instrument`, both optional); parsed into `AppConfig.instruments` (`InstrumentConfig`, with `counts_pv` derived as `IN:<NAME>:DAE:TOTALUAMPS` and `run_name_pv` as `IN:<NAME>:DAE:WDTITLE`). A leftover `counts_pv` key is ignored with a warning (`_RETIRED_INSTRUMENT_KEYS`).
+-   **`[PVS]`**: `instrument_target` (the default `beam_target` for instrument sections that don't set one; TS1), the beam-current PVs, and the legacy single-instrument keys (`counts_pv`, now only used to name the instrument, `run_name_pv`, `notify_counts`) used only when there are no instrument sections.
 -   **`[DAEMON]`** / **`[TUI_CLIENT]`**: Paths for UNIX sockets, SQLite database, and retention settings.
 -   **`[BEAM_BOUNDARIES]`**: Thresholds for power level classification.
 -   **`[TUI]`**: Display settings like history length and refresh rates.
 -   **`[NOTIFICATIONS]`**: `fun_mode` (personality lines/milestones), `timezone` (for card timestamps and `summary_time`), `debounce_seconds` (beam-change confirmation window, 0–3600), `stall_minutes` (collection-stall warning threshold, up to 7 days), and `summary_time` (HH:MM local time the daily summary is sent).
 
-`load_config()` is a thin wrapper over `parse_config(parser, path)`, which also validates everything that could otherwise fail only after a restart (timezone, finite bounds, instrument names and PV clashes). `editable_settings()` exposes the TUI-editable subset (the `[NOTIFICATIONS]` keys above and the instrument list) as INI strings; `update_config_file()` applies such a dict, validates the result, checks the file still matches the given `config_revision()`, then writes it atomically (temp file, `fsync`, `os.replace`, directory `fsync`), keeping the file mode and a `.bak` copy. `configparser` drops comments on rewrite.
+`load_config()` is a thin wrapper over `parse_config(parser, path)`, which also validates everything that could otherwise fail only after a restart (timezone, finite bounds, instrument names and PV clashes). `editable_settings()` exposes the TUI-editable subset (the `[NOTIFICATIONS]` keys above and each instrument's name, `notify_counts`, `beam_target` and `channel`) as INI strings; the daemon's `get_config` adds the allowed `beam_targets` and `channel_modes`, and the editor skips the channel prompt if a daemon offers no modes; `update_config_file()` applies such a dict, validates the result, checks the file still matches the given `config_revision()`, then writes it atomically (temp file, `fsync`, `os.replace`, directory `fsync`), keeping the file mode and a `.bak` copy. `configparser` drops comments on rewrite.
 
 ---
 
