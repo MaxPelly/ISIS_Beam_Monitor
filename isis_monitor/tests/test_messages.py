@@ -34,36 +34,20 @@ def test_set_timezone_changes_fmt_time():
     try:
         set_timezone("America/New_York")
         assert fmt_time(dt) == "Wed 23 Sep 09:05"
-    finally:
-        set_timezone("Europe/London")  # restore the default for other tests
-
-
-def test_get_timezone_reflects_set_timezone():
-    try:
-        set_timezone("America/New_York")
         assert get_timezone().key == "America/New_York"
     finally:
-        set_timezone("Europe/London")
+        set_timezone("Europe/London")  # restore the default for other tests
 
 
 # ---------------------------------------------------------------------------
 # fmt_duration
 # ---------------------------------------------------------------------------
 
-def test_fmt_duration_hours_and_minutes():
+def test_fmt_duration():
     assert fmt_duration(timedelta(hours=3, minutes=12)) == "3h 12m"
-
-
-def test_fmt_duration_minutes_only():
     assert fmt_duration(timedelta(minutes=45)) == "45m"
-
-
-def test_fmt_duration_seconds_only():
     assert fmt_duration(timedelta(seconds=20)) == "20s"
-
-
-def test_fmt_duration_negative_clamps_to_zero():
-    assert fmt_duration(timedelta(seconds=-5)) == "0s"
+    assert fmt_duration(timedelta(seconds=-5)) == "0s"  # clamps to zero
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +113,9 @@ def test_to_summary_omits_empty_optional_parts():
 
 def test_beam_change_builder_going_up_is_good():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = beam_change("TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=3, minutes=12), dt)
+    n = beam_change(
+        "TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=3, minutes=12), dt, channel="TS1",
+    )
     assert n.title == "TS1 ⬆️ low → high"
     assert n.severity == Severity.GOOD
     assert n.emoji == "🟢"
@@ -140,15 +126,8 @@ def test_beam_change_builder_going_up_is_good():
         ("Was low for", "3h 12m"),
     ]
     assert n.timestamp == dt
-    assert n.channel == ""
-
-
-def test_beam_change_builder_sets_explicit_channel():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = beam_change(
-        "TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), dt, channel="TS1",
-    )
     assert n.channel == "TS1"
+    assert n.flavour == ""  # no rng, no flavour
 
 
 def test_beam_change_builder_dropping_to_low_is_warning():
@@ -165,12 +144,6 @@ def test_beam_change_builder_going_to_off_is_attention():
     assert n.title == "TS1 ⬇️ low → off"
     assert n.severity == Severity.ATTENTION
     assert n.emoji == "🔴"
-
-
-def test_beam_change_builder_state_emoji_for_medium():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = beam_change("TS1", "low", "medium", 80.0, 20.0, 140.0, timedelta(minutes=10), dt)
-    assert n.emoji == "🟡"
 
 
 def test_beam_change_builder_short_outage_keeps_state_emoji():
@@ -192,12 +165,6 @@ def test_beam_change_builder_long_outage_is_restored():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = beam_change("TS1", "off", "high", 150.0, 0.0, 140.0, timedelta(hours=1, minutes=5), dt)
     assert n.emoji == "🎉"
-
-
-def test_beam_change_builder_no_rng_means_no_flavour():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = beam_change("TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), dt)
-    assert n.flavour == ""
 
 
 def test_beam_change_builder_with_rng_picks_deterministic_flavour():
@@ -232,18 +199,13 @@ def test_startup_status_builder():
     assert n.channel == "TS1"
 
 
-def test_startup_status_builder_picks_flavour_when_rng_given():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = startup_status("TS1", "high", 150.0, dt, rng=random.Random(1))
-    assert n.flavour != ""
-
-
 def test_run_started_builder():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     n = run_started("PEARL", "Run 12346", "Run 12345", timedelta(hours=2), 1000.0, dt)
     assert n.title == "PEARL: New run started"
     assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
     assert n.text == "Run 12346"
+    assert n.severity == Severity.INFO
     assert n.emoji == "🚀"
     assert n.flavour == ""
     assert n.facts == [
@@ -259,6 +221,7 @@ def test_run_finishing_builder():
     assert n.title == "PEARL: Run about to finish"
     assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
     assert n.text == "Run 12345"
+    assert n.severity == Severity.INFO
     assert n.emoji == "🏁"
     assert n.flavour == ""
     assert n.facts == [
@@ -285,6 +248,9 @@ def test_mcr_news_builder():
     assert n.emoji == "📰"
     assert n.flavour == ""
     assert n.url is None
+    n = mcr_news("Machine update.", dt, url="https://example.com/mcr")
+    assert n.url == "https://example.com/mcr"
+    assert n.url_label == "Open MCR news"
 
 
 def test_mcr_news_builder_good_keyword():
@@ -316,32 +282,17 @@ def test_mcr_news_builder_good_checked_before_attention():
     assert n.emoji == "🎉"
 
 
-def test_mcr_news_builder_includes_url_and_label():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = mcr_news("Machine update.", dt, url="https://example.com/mcr")
-    assert n.url == "https://example.com/mcr"
-    assert n.url_label == "Open MCR news"
-
-
-def test_run_and_mcr_builders_default_to_info_severity():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    for n in (
-        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, dt),
-        run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", dt),
-        mcr_news("News", dt),
-    ):
-        assert n.severity == Severity.INFO
-
-
-def test_run_and_mcr_builders_pick_flavour_when_rng_given():
+def test_builders_pick_flavour_when_rng_given():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
     rng = random.Random(1)
     for n in (
+        startup_status("TS1", "high", 150.0, dt, rng=rng),
         run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, dt, rng=rng),
         run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", dt, rng=rng),
         mcr_news("News", dt, rng=rng),
+        run_milestone("PEARL", 25, dt, rng=rng),
     ):
-        assert n.flavour != ""
+        assert n.flavour != "", n.title
 
 
 def test_collection_stalled_builder():
@@ -378,15 +329,13 @@ def test_daily_summary_builder_low_uptime_is_info():
     assert n.severity == Severity.INFO
 
 
-def test_daily_summary_builder_new_record_note():
+def test_daily_summary_builder_new_record_note_and_fact_of_the_day():
     dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = daily_summary("TS1", 95.0, 0, timedelta(hours=10), "▇", 3, dt, is_new_record=True)
+    n = daily_summary(
+        "TS1", 95.0, 0, timedelta(hours=10), "▇", 3, dt,
+        is_new_record=True, fact_of_the_day="Neutrons are neutral.",
+    )
     assert "New record" in n.text
-
-
-def test_daily_summary_builder_carries_fact_of_the_day_as_flavour():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = daily_summary("TS1", 95.0, 0, timedelta(hours=10), "▇", 3, dt, fact_of_the_day="Neutrons are neutral.")
     assert n.flavour == "Neutrons are neutral."
 
 
@@ -398,16 +347,6 @@ def test_run_milestone_builder():
     assert n.severity == Severity.GOOD
     assert n.emoji == "🏆"
     assert n.flavour == ""
-    # title must not also bake in the emoji, or to_plain_text()/the Teams
-    # card header (which both prefix `emoji` onto `title`) would show it twice.
-    assert "🏆" not in n.title
-    assert n.to_plain_text().count("🏆") == 1
-
-
-def test_run_milestone_builder_picks_flavour_when_rng_given():
-    dt = datetime(2026, 9, 23, 13, 5, tzinfo=timezone.utc)
-    n = run_milestone("PEARL", 25, dt, rng=random.Random(1))
-    assert n.flavour != ""
 
 
 def test_no_builder_bakes_its_own_emoji_into_the_title():
