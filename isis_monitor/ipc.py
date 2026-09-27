@@ -211,10 +211,20 @@ class IPCClient:
             raise msg
         return msg
 
-    async def request(self, payload: dict) -> dict:
+    async def request(self, payload: dict, timeout: Optional[float] = None) -> dict:
+        """Send `payload` and return its reply. On timeout (TimeoutError, an
+        OSError) the client is closed: a late reply would otherwise be taken
+        as the answer to the next request."""
         if self.writer is None:
             raise RuntimeError("IPC client is not connected")
         self.writer.write(_encode(payload))
+        try:
+            return await asyncio.wait_for(self._send_and_take(), timeout)
+        except asyncio.TimeoutError:
+            await self.close()
+            raise
+
+    async def _send_and_take(self) -> dict:
         await self.writer.drain()
         return await self._take(self._responses)
 

@@ -479,3 +479,13 @@ class TestProgressBar:
     def test_partial_and_capped_at_full(self):
         assert _progress_bar(25.0, 100.0).plain == "██░░░░░░ 25/100"
         assert _progress_bar(150.0, 100.0).plain == "████████ 150/100"
+
+
+def test_add_history_sample_skips_samples_it_already_has():
+    """The TUI subscribes before fetching history, so a sample can arrive twice."""
+    tui = make_tui()
+    t0 = datetime(2026, 9, 27, 8, 0, tzinfo=timezone.utc)
+    tui.set_history_snapshot({"TS1": [{"timestamp": t0.isoformat(), "current": 1.0, "power": "low"}]})
+    tui.add_history_sample("TS1", t0, 1.0, "low")
+    tui.add_history_sample("TS1", t0.replace(minute=1), 2.0, "low")
+    assert [v for _, v, _ in tui._history["TS1"]] == [1.0, 2.0]

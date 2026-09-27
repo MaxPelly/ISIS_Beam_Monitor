@@ -42,7 +42,8 @@ logger = logging.getLogger("MAIN")
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 # Set in the environment of a daemon that re-exec'd itself (see restart_process).
 RESTARTED_ENV = "ISIS_MONITOR_RESTARTED"
-LOOP_STOP_TIMEOUT = 5.0  # seconds run_daemon's loops get to exit after stop_event
+LOOP_STOP_TIMEOUT = 5.0
+IPC_REQUEST_TIMEOUT = 10.0  # for the TUI's sync and `stop`; a stuck daemon mustn't hang them  # seconds run_daemon's loops get to exit after stop_event
 
 
 class StateLogHandler(logging.Handler):
@@ -375,20 +376,25 @@ def _apply_event_to_tui(tui: RichTUI, message: dict) -> None:
 
 
 async def _sync_tui(client: IPCClient, tui: RichTUI, history_limit: int) -> None:
-    snapshot_resp = await client.request({"method": "get_snapshot"})
+    # Subscribe first, so nothing that happens during the sync is missed;
+    # events carry absolute values, so replaying one after the snapshot is harmless.
+    sub_resp = await client.request({"method": "subscribe_updates"}, timeout=IPC_REQUEST_TIMEOUT)
+
+    snapshot_resp = await client.request({"method": "get_snapshot"}, timeout=IPC_REQUEST_TIMEOUT)
     if snapshot_resp.get("ok"):
         _apply_snapshot_to_tui(tui, snapshot_resp.get("snapshot", {}))
 
-    history_resp = await client.request({"method": "get_history", "limit": history_limit})
+    history_resp = await client.request(
+        {"method": "get_history", "limit": history_limit}, timeout=IPC_REQUEST_TIMEOUT
+    )
     if history_resp.get("ok"):
         tui.set_history_snapshot(history_resp.get("history", {}))
 
-    logs_resp = await client.request({"method": "get_logs"})
+    logs_resp = await client.request({"method": "get_logs"}, timeout=IPC_REQUEST_TIMEOUT)
     if logs_resp.get("ok"):
         for line in logs_resp.get("logs", [])[-20:]:
             tui.update_log(str(line))
 
-    sub_resp = await client.request({"method": "subscribe_updates"})
     if sub_resp.get("ok"):
         tui.update_log("Subscribed to daemon updates.")
 
@@ -571,13 +577,17 @@ async def run_stop(config) -> None:
     """Connect to a running daemon via IPC and request a clean shutdown."""
     client = IPCClient(Path(config.daemon_socket_path))
     try:
-        await client.connect()
-    except OSError as exc:
-        print(f"Could not connect to daemon at {config.daemon_socket_path}: {exc}")
+        await asyncio.wait_for(client.connect(), IPC_REQUEST_TIMEOUT)
+    except OSError as exc:  # includes TimeoutError
+        print(f"Could not connect to daemon at {config.daemon_socket_path}: {exc!r}")
         raise SystemExit(1)
 
     try:
-        response = await client.request({"method": "command", "name": "shutdown"})
+        try:
+            response = await client.request({"method": "command", "name": "shutdown"}, timeout=IPC_REQUEST_TIMEOUT)
+        except TimeoutError:
+            print(f"The daemon didn't answer within {IPC_REQUEST_TIMEOUT:.0f}s; it may be stuck.")
+            raise SystemExit(1)
         if response.get("ok"):
             result = response.get("result", {})
             if result.get("shutdown") == "ok":

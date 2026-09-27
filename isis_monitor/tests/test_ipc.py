@@ -438,3 +438,19 @@ async def test_subscriber_that_stops_reading_is_disconnected(tmp_path):
         writer.close()
     finally:
         await asyncio.wait_for(server.stop(), 3)
+
+
+@pytest.mark.asyncio
+async def test_request_timeout_closes_the_client(tmp_path):
+    """A late reply would otherwise be read as the next request's answer."""
+    async def never_answers(_name):
+        await asyncio.sleep(3600)
+
+    async with serving(tmp_path, command_handler=never_answers) as server:
+        client = IPCClient(server.socket_path)
+        await client.connect()
+        with pytest.raises(TimeoutError):
+            await client.request({"method": "command", "name": "x"}, timeout=0.05)
+        with pytest.raises(RuntimeError, match="not connected"):
+            await client.request({"method": "get_snapshot"})
+        await client.close()  # idempotent

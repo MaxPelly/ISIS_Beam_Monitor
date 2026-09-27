@@ -998,3 +998,31 @@ async def test_config_save_is_refused_once_shutdown_has_started(tmp_path):
         reply = await handlers["config"]("update_config", {"revision": revision, "settings": {}})
         assert await asyncio.wait_for(task, 5) is False
     assert (reply["ok"], reply["error"]) == (False, "restart_pending")
+
+
+@pytest.mark.asyncio
+async def test_sync_tui_subscribes_before_fetching_state():
+    client = MagicMock()
+    client.request = AsyncMock(return_value={"ok": True})
+    await main._sync_tui(client, MagicMock(), 60)
+    methods = [c.args[0]["method"] for c in client.request.await_args_list]
+    assert methods == ["subscribe_updates", "get_snapshot", "get_history", "get_logs"]
+    assert all(c.kwargs["timeout"] == main.IPC_REQUEST_TIMEOUT for c in client.request.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_run_stop_gives_up_on_a_daemon_that_does_not_answer(tmp_path, capsys):
+    async def never_answers(_name):
+        await asyncio.sleep(3600)
+
+    config = _config(tmp_path)
+    server = IPCServer(Path(config.daemon_socket_path), DaemonState(), never_answers)
+    await server.start()
+    try:
+        with patch("main.IPC_REQUEST_TIMEOUT", 0.05), pytest.raises(SystemExit) as exc:
+            await main.run_stop(config)
+    finally:
+        with patch("isis_monitor.ipc.STOP_FLUSH_TIMEOUT", 0.05):
+            await server.stop()
+    assert exc.value.code == 1
+    assert "didn't answer" in capsys.readouterr().out

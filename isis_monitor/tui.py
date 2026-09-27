@@ -348,8 +348,11 @@ class RichTUI:
         )
 
     def add_history_sample(self, beam: str, timestamp: datetime, current: float, power: str) -> None:
-        if beam in self._history:
-            self._history[beam].append((timestamp, current, power))
+        history = self._history.get(beam)
+        # Skip samples already in the history (the TUI subscribes before
+        # fetching the history snapshot, so one can arrive both ways).
+        if history is not None and not (history and timestamp <= history[-1][0]):
+            history.append((timestamp, current, power))
         self.last_update = datetime.now(timezone.utc)
         self._update_beam_graph()
 
