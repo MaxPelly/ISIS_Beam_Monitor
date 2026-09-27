@@ -122,21 +122,16 @@ async def test_teams_notifier_logs_error_on_bad_status(caplog):
 # TeamsNotifier — card structure
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("severity, style", [
-    (Severity.INFO, "default"),
-    (Severity.GOOD, "good"),
-    (Severity.WARNING, "warning"),
-    (Severity.ATTENTION, "attention"),
-])
-def test_create_payload_severity_style(severity, style):
+def test_create_payload_header_style_follows_severity():
     notifier = TeamsNotifier("http://fake.webhook.url")
-    notification = Notification(title="Title", text="Text", severity=severity)
-
-    payload = notifier._create_payload(notification)
-
-    card = payload["attachments"][0]["content"]
-    header_container = card["body"][0]
-    assert header_container["style"] == style
+    styles = {}
+    for severity in Severity:
+        payload = notifier._create_payload(Notification(title="Title", text="Text", severity=severity))
+        styles[severity] = payload["attachments"][0]["content"]["body"][0]["style"]
+    assert styles == {
+        Severity.INFO: "default", Severity.GOOD: "good",
+        Severity.WARNING: "warning", Severity.ATTENTION: "attention",
+    }
 
 
 def test_create_payload_includes_facts():
@@ -156,36 +151,31 @@ def test_create_payload_includes_facts():
     ]
 
 
-def test_create_payload_includes_flavour_line():
+def test_create_payload_includes_flavour_and_timestamp_lines():
+    from datetime import datetime, timezone
     notifier = TeamsNotifier("http://fake.webhook.url")
-    notification = Notification(title="Title", text="Text", flavour="Beam's back, baby.")
+    ts = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    notification = Notification(title="Title", text="Text", flavour="Beam's back, baby.", timestamp=ts)
 
     payload = notifier._create_payload(notification)
 
-    card = payload["attachments"][0]["content"]
-    texts = [item["text"] for item in card["body"] if "text" in item]
+    body = payload["attachments"][0]["content"]["body"]
+    texts = [item["text"] for item in body if "text" in item]
     assert "_Beam's back, baby._" in texts
+    assert body[-1]["isSubtle"] is True
+    assert "Jan" in body[-1]["text"]
 
 
-def test_create_payload_includes_url_action():
+def test_create_payload_url_action_only_when_url_given():
     notifier = TeamsNotifier("http://fake.webhook.url")
     notification = Notification(title="Title", text="Text", url="https://example.com/news")
 
-    payload = notifier._create_payload(notification)
-
-    card = payload["attachments"][0]["content"]
+    card = notifier._create_payload(notification)["attachments"][0]["content"]
     assert card["actions"] == [
         {"type": "Action.OpenUrl", "title": "Open", "url": "https://example.com/news"}
     ]
 
-
-def test_create_payload_no_url_means_no_actions():
-    notifier = TeamsNotifier("http://fake.webhook.url")
-    notification = Notification(title="Title", text="Text")
-
-    payload = notifier._create_payload(notification)
-
-    card = payload["attachments"][0]["content"]
+    card = notifier._create_payload(replace(notification, url=None))["attachments"][0]["content"]
     assert "actions" not in card
 
 
@@ -296,17 +286,6 @@ async def test_notification_channel_close_closes_all_notifiers():
     channel.add_notifier(DummyNotifier())  # base-class close() is a no-op
     await channel.close()
     assert teams._session is None
-
-
-def test_create_payload_includes_timestamp_line():
-    from datetime import datetime, timezone
-    notifier = TeamsNotifier("http://x")
-    ts = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
-    payload = notifier._create_payload(Notification(title="t", text="x", timestamp=ts))
-    body = payload["attachments"][0]["content"]["body"]
-    assert body[-1]["isSubtle"] is True
-    assert "Jan" in body[-1]["text"]
-
 
 
 class _SlowNotifier(Notifier):
