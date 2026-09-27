@@ -235,8 +235,8 @@ sudo systemctl status isis-beam-monitor.service
   "run about to finish" card straight away, as after any restart.
 - Run cards keep the "Experiment Updates" channel unless an instrument sets
   `channel = instrument`.
-- A config without `counts_pv` lines (or with `channel` keys) won't load on an older
-  version, so keep a copy (e.g. `config.ini.bak`) if you might roll back.
+- A config without `counts_pv` lines won't load on an older version (which requires
+  them), so keep a copy (e.g. `config.ini.bak`) if you might roll back.
 
 ### Troubleshooting
 
