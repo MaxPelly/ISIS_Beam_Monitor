@@ -942,6 +942,7 @@ async def test_run_daemon_stops_other_loops_when_one_crashes(tmp_path):
 
     config = _config(tmp_path)
     with patch("main.install_signal_handlers"), \
+         patch("main.LOOP_STOP_TIMEOUT", 0.1), \
          patch("main.state_persistence_loop", side_effect=persistence), \
          patch("main.daily_summary_loop", new_callable=AsyncMock, side_effect=RuntimeError("summary bug")):
         with pytest.raises(RuntimeError, match="summary bug"):

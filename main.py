@@ -42,6 +42,7 @@ logger = logging.getLogger("MAIN")
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 # Set in the environment of a daemon that re-exec'd itself (see restart_process).
 RESTARTED_ENV = "ISIS_MONITOR_RESTARTED"
+LOOP_STOP_TIMEOUT = 5.0  # seconds run_daemon's loops get to exit after stop_event
 
 
 class StateLogHandler(logging.Handler):
@@ -293,11 +294,15 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
         await asyncio.gather(*tasks)
     finally:
         # If one loop crashed, gather() raised while the others kept running;
-        # stop them before the store and channels they use are closed.
+        # stop them before the store and channels they use are closed. They
+        # exit on stop_event by themselves (letting monitors close cleanly);
+        # cancel any that don't within LOOP_STOP_TIMEOUT.
         stop_event.set()
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        if tasks:
+            _done, pending = await asyncio.wait(tasks, timeout=LOOP_STOP_TIMEOUT)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         logger.warning("Shutting down daemon")
         state.update_health("daemon", "stopping")
         await ipc_server.stop()
