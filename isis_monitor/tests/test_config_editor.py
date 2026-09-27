@@ -52,7 +52,6 @@ def test_render_menu_numbers_settings_then_instruments():
     assert " 8) WISH" in menu
 
 
-@pytest.mark.asyncio
 async def test_edit_notification_and_save():
     result, term = await edit("1", "true", "s", "y")
     assert result["notifications"]["fun_mode"] == "true"
@@ -60,14 +59,12 @@ async def test_edit_notification_and_save():
     assert "fun_mode [false]: " in term.prompts
 
 
-@pytest.mark.asyncio
 async def test_enter_keeps_current_value():
     result, term = await edit("4", "", "s", "q")
     assert "No changes to save." in term.text
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_edit_instrument_reprompts_for_invalid_beam_target():
     """Beam targets are case-insensitive and stored canonically."""
     result, term = await edit("8", "", "75", "Muons", "muon", "", "s", "y")
@@ -77,7 +74,6 @@ async def test_edit_instrument_reprompts_for_invalid_beam_target():
     assert "Beam target must be one of TS1, TS2, Muon." in term.text
 
 
-@pytest.mark.asyncio
 async def test_add_instrument_upper_cases_name():
     result, term = await edit("a", "emu", "10", "Muon", "", "s", "y")
     assert result["instruments"][-1] == {
@@ -86,28 +82,24 @@ async def test_add_instrument_upper_cases_name():
     assert "+ EMU (notify_counts=10, beam_target=Muon, channel=experiment)" in term.text
 
 
-@pytest.mark.asyncio
 async def test_delete_instrument_needs_confirmation():
     result, term = await edit("d 7", "n", "d 7", "y", "s", "y")
     assert [i["name"] for i in result["instruments"]] == ["WISH"]
     assert "  - PEARL" in term.text
 
 
-@pytest.mark.asyncio
 async def test_cannot_delete_last_instrument_or_a_missing_one():
     result, term = await edit("d 7", "y", "d 7", "d 10", "q")
     assert "At least one instrument is required." in term.text
     assert "No instrument with that number." in term.text
 
 
-@pytest.mark.asyncio
 async def test_declining_save_or_discard_returns_to_menu():
     result, term = await edit("1", "true", "s", "n", "q", "n", "q", "y")
     assert result is None
     assert term.prompts.count("Discard your changes? [y/N]: ") == 2
 
 
-@pytest.mark.asyncio
 async def test_unknown_command_and_closed_input():
     result, term = await edit("zz", "²", "d ²")  # superscript digits aren't numbers here
     assert "Unknown command: zz" in term.text
@@ -135,7 +127,6 @@ def daemon(*update_replies):
     return AsyncMock(side_effect=replies)
 
 
-@pytest.mark.asyncio
 async def test_run_config_editor_saves_with_revision():
     request = daemon({"ok": True, "restarting": True})
     term = Terminal("1", "true", "s", "y", "")
@@ -146,7 +137,6 @@ async def test_run_config_editor_saves_with_revision():
     assert "daemon is restarting" in term.text
 
 
-@pytest.mark.asyncio
 async def test_run_config_editor_lets_user_fix_invalid_config():
     request = daemon(
         {"ok": False, "error": "invalid_config", "detail": "[INSTRUMENT:WISH] notify_counts must be a positive number"},
@@ -160,7 +150,6 @@ async def test_run_config_editor_lets_user_fix_invalid_config():
     assert request.await_args_list[2].args[0]["settings"]["instruments"][1]["notify_counts"] == "5"
 
 
-@pytest.mark.asyncio
 async def test_run_config_editor_stops_on_config_changed():
     request = daemon({"ok": False, "error": "config_changed", "detail": "reload and try again"})
     term = Terminal("1", "true", "s", "y", "")
@@ -169,14 +158,12 @@ async def test_run_config_editor_stops_on_config_changed():
     assert request.await_count == 2
 
 
-@pytest.mark.asyncio
 async def test_run_config_editor_quit_sends_nothing():
     request = daemon()
     await run_config_editor(request, Terminal("q").read_line, lambda _text: None)
     assert request.await_count == 1
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("request_mock, message", [
     (AsyncMock(side_effect=ConnectionError("gone")), "Could not reach the daemon: gone"),
     (AsyncMock(return_value={"ok": False, "error": "invalid_config", "detail": "bad file"}),
@@ -189,7 +176,6 @@ async def test_run_config_editor_reports_load_failures(request_mock, message):
     assert term.prompts == ["Press Enter to return to the monitor..."]
 
 
-@pytest.mark.asyncio
 async def test_run_config_editor_keeps_edits_when_connection_is_lost_on_save():
     request = AsyncMock(side_effect=[
         {"ok": True, "config": copy.deepcopy(SETTINGS), "revision": "r", "beam_targets": TARGETS},
@@ -204,7 +190,6 @@ async def test_run_config_editor_keeps_edits_when_connection_is_lost_on_save():
     assert (retry["revision"], retry["settings"]["notifications"]["fun_mode"]) == ("r", "true")
 
 
-@pytest.mark.asyncio
 async def test_blank_name_cancels_adding_an_instrument():
     result, term = await edit("a", "", "q")
     assert result is None
@@ -212,14 +197,12 @@ async def test_blank_name_cancels_adding_an_instrument():
     assert term.prompts.count("Name []: ") == 1
 
 
-@pytest.mark.asyncio
 async def test_closed_input_with_changes_says_they_were_discarded():
     result, term = await edit("1", "true")
     assert result is None
     assert "Input closed; your changes were discarded." in term.text
 
 
-@pytest.mark.asyncio
 async def test_teams_channel_prompt_validates_and_shows_in_menu():
     result, term = await edit("7", "", "", "", "teams", "Instrument", "s", "y")
     assert result["instruments"][0]["channel"] == "instrument"
@@ -229,7 +212,6 @@ async def test_teams_channel_prompt_validates_and_shows_in_menu():
     assert "Teams channel: PEARL" in render_menu(result)
 
 
-@pytest.mark.asyncio
 async def test_no_channel_prompt_when_daemon_offers_no_modes():
     """An older daemon has no channel_modes and would reject a channel key."""
     old_settings = copy.deepcopy(SETTINGS)

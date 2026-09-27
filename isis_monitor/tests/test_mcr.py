@@ -31,7 +31,6 @@ def mock_channel():
 # get_news()
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
 async def test_mcr_get_news_success(mock_config, mock_channel):
     """The news is the text before the "<N> more lines" / old-line footer,
     whatever the number of digits."""
@@ -50,7 +49,6 @@ async def test_mcr_get_news_success(mock_config, mock_channel):
         assert await monitor.get_news(mock_session) == expected
 
 
-@pytest.mark.asyncio
 async def test_mcr_get_news_failure(mock_config, mock_channel):
     monitor = MCRNewsMonitor(mock_config, mock_channel)
 
@@ -64,7 +62,6 @@ async def test_mcr_get_news_failure(mock_config, mock_channel):
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_mcr_get_news_timeout(mock_config, mock_channel):
     monitor = MCRNewsMonitor(mock_config, mock_channel)
 
@@ -76,7 +73,6 @@ async def test_mcr_get_news_timeout(mock_config, mock_channel):
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_mcr_get_news_empty_feed_returns_none(mock_config, mock_channel, caplog):
     monitor = MCRNewsMonitor(mock_config, mock_channel)
     mock_response = AsyncMock()
@@ -90,7 +86,6 @@ async def test_mcr_get_news_empty_feed_returns_none(mock_config, mock_channel, c
     assert "parsed to empty string" in caplog.text
 
 
-@pytest.mark.asyncio
 async def test_mcr_get_news_connection_error_returns_none(mock_config, mock_channel):
     monitor = MCRNewsMonitor(mock_config, mock_channel)
     mock_session = MagicMock()
@@ -143,7 +138,6 @@ async def run_script(monitor, *items, waits=None):
     return delays
 
 
-@pytest.mark.asyncio
 async def test_mcr_run_broadcasts_only_on_news_change(mock_config, mock_channel):
     sink = MagicMock()
     monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=False, sink=sink)
@@ -159,7 +153,6 @@ async def test_mcr_run_broadcasts_only_on_news_change(mock_config, mock_channel)
     assert monitor.old_news == "News B"
 
 
-@pytest.mark.asyncio
 async def test_mcr_run_notify_current_broadcasts_first_poll(mock_config, mock_channel):
     monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=True)
     await run_script(monitor, "News A")
@@ -167,7 +160,6 @@ async def test_mcr_run_notify_current_broadcasts_first_poll(mock_config, mock_ch
     assert mock_channel.broadcast.call_args[0][0].text == "News A"
 
 
-@pytest.mark.asyncio
 async def test_mcr_run_fun_mode_adds_flavour(mock_config):
     import random
     from dataclasses import replace
@@ -181,7 +173,6 @@ async def test_mcr_run_fun_mode_adds_flavour(mock_config):
     assert channel.broadcast.call_args[0][0].flavour != ""
 
 
-@pytest.mark.asyncio
 async def test_mcr_run_baseline_retries_until_news_available(mock_config, mock_channel):
     sink = MagicMock()
     monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=False, sink=sink)
@@ -195,7 +186,6 @@ async def test_mcr_run_baseline_retries_until_news_available(mock_config, mock_c
     assert statuses[:4] == ["starting", "error", "error", "connected"]
 
 
-@pytest.mark.asyncio
 async def test_mcr_run_backoff_on_consecutive_failures(mock_config, mock_channel):
     """Poll delay doubles per consecutive failure, capped at 8x, and resets on success."""
     sink = MagicMock()
@@ -210,7 +200,6 @@ async def test_mcr_run_backoff_on_consecutive_failures(mock_config, mock_channel
     assert "error" in statuses and "connected" in statuses
 
 
-@pytest.mark.asyncio
 async def test_mcr_run_cancels_promptly_mid_wait(mock_config, mock_channel):
     """Shutdown cancels run(); it must not sit out the poll interval."""
     from dataclasses import replace
@@ -223,7 +212,6 @@ async def test_mcr_run_cancels_promptly_mid_wait(mock_config, mock_channel):
             await asyncio.wait_for(task, timeout=1.0)
 
 
-@pytest.mark.asyncio
 async def test_mcr_request_reconnect_polls_immediately(mock_config, mock_channel):
     from dataclasses import replace
     sink = MagicMock()

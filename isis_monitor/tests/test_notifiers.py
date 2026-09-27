@@ -11,7 +11,6 @@ import aiohttp
 # DummyNotifier
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
 async def test_dummy_notifier(caplog):
     import logging
     caplog.set_level(logging.INFO)
@@ -78,7 +77,6 @@ def no_retry_delay():
 # TeamsNotifier — send
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
 async def test_teams_notifier_sends_request():
     """Downstream routing (e.g. Power Automate) reads `channel` and `summary`
     from inside `content`, not just the top-level `summary` — both must be present."""
@@ -102,7 +100,6 @@ async def test_teams_notifier_sends_request():
     assert card["summary"] == payload["summary"]
 
 
-@pytest.mark.asyncio
 async def test_teams_notifier_logs_error_on_bad_status(caplog):
     import logging
     notifier = TeamsNotifier("http://fake.webhook.url")
@@ -181,7 +178,6 @@ def test_create_payload_url_action_only_when_url_given():
 # NotificationChannel
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
 async def test_notification_channel_fills_in_only_a_blank_channel():
     channel = NotificationChannel("TestChannel")
 
@@ -209,7 +205,6 @@ async def test_notification_channel_fills_in_only_a_blank_channel():
     mock_notifier1.send.assert_called_with(explicit)
 
 
-@pytest.mark.asyncio
 async def test_notification_channel_empty_logs_debug(caplog):
     """Broadcast on a channel with no notifiers should log at DEBUG level."""
     import logging
@@ -227,7 +222,6 @@ class _FailingNotifier(DummyNotifier):
         raise RuntimeError("webhook exploded")
 
 
-@pytest.mark.asyncio
 async def test_notification_channel_logs_failing_notifier_and_still_delivers(caplog):
     channel = NotificationChannel("Beam")
     good = DummyNotifier()
@@ -243,7 +237,6 @@ async def test_notification_channel_logs_failing_notifier_and_still_delivers(cap
     assert "webhook exploded" in caplog.text
 
 
-@pytest.mark.asyncio
 async def test_teams_notifier_retries_connection_errors_then_gives_up(caplog, no_retry_delay):
     notifier = TeamsNotifier("http://example.invalid/hook")
     session = MagicMock()
@@ -256,7 +249,6 @@ async def test_teams_notifier_retries_connection_errors_then_gives_up(caplog, no
     assert "Failed to send Teams webhook: refused (after 3 attempts)" in caplog.text
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("statuses, attempts", [
     ((429, 200), 2),
     ((503, 502, 200), 3),
@@ -272,7 +264,6 @@ async def test_teams_notifier_retries_only_temporary_http_errors(statuses, attem
     assert notifier._session.post.call_count == attempts
 
 
-@pytest.mark.asyncio
 async def test_teams_notifier_retries_a_5xx_whose_body_cannot_be_read(no_retry_delay):
     notifier = TeamsNotifier("http://example.invalid/hook")
     notifier._session = make_status_session(503, 200)
@@ -282,7 +273,6 @@ async def test_teams_notifier_retries_a_5xx_whose_body_cannot_be_read(no_retry_d
     assert notifier._session.post.call_count == 2
 
 
-@pytest.mark.asyncio
 async def test_teams_notifier_does_not_retry_unexpected_errors(no_retry_delay):
     notifier = TeamsNotifier("http://example.invalid/hook")
     session = MagicMock(closed=False)
@@ -293,7 +283,6 @@ async def test_teams_notifier_does_not_retry_unexpected_errors(no_retry_delay):
     assert session.post.call_count == 1
 
 
-@pytest.mark.asyncio
 async def test_teams_notifier_waits_between_retries(caplog):
     import logging
     notifier = TeamsNotifier("http://example.invalid/hook")
@@ -307,7 +296,6 @@ async def test_teams_notifier_waits_between_retries(caplog):
     assert "retrying in 2s" in caplog.text
 
 
-@pytest.mark.asyncio
 async def test_teams_notifier_honours_retry_after():
     notifier = TeamsNotifier("http://example.invalid/hook")
     notifier._session = make_status_session(429, 200, headers={"Retry-After": "7"})
@@ -332,7 +320,6 @@ def test_retry_after_parsing():
         assert _retry_after(bad) is None, bad
 
 
-@pytest.mark.asyncio
 async def test_closing_the_channel_cancels_a_send_waiting_to_retry():
     notifier = TeamsNotifier("http://example.invalid/hook")
     notifier._session = make_status_session(503, 200)
@@ -348,7 +335,6 @@ async def test_closing_the_channel_cancels_a_send_waiting_to_retry():
     assert notifier._session.post.call_count == 1
 
 
-@pytest.mark.asyncio
 async def test_teams_notifier_reuses_and_closes_session():
     notifier = TeamsNotifier("http://example.invalid/hook")
     session = await notifier._get_session()
@@ -359,7 +345,6 @@ async def test_teams_notifier_reuses_and_closes_session():
     await notifier.close()  # idempotent
 
 
-@pytest.mark.asyncio
 async def test_notification_channel_close_closes_all_notifiers():
     channel = NotificationChannel("Beam")
     teams = TeamsNotifier("http://example.invalid/hook")
@@ -380,7 +365,6 @@ class _SlowNotifier(Notifier):
         self.sent.append(notification.title)
 
 
-@pytest.mark.asyncio
 async def test_broadcast_returns_without_waiting_for_a_slow_webhook():
     """A hung webhook mustn't hold up the caller (e.g. the beam WebSocket loop)."""
     channel = NotificationChannel("Beam")
@@ -392,7 +376,6 @@ async def test_broadcast_returns_without_waiting_for_a_slow_webhook():
     await channel.close()  # gives up on the unsent one rather than hanging
 
 
-@pytest.mark.asyncio
 async def test_queued_notifications_are_sent_in_order_and_flushed_on_close():
     channel = NotificationChannel("Beam")
     slow = _SlowNotifier(0.01)
@@ -403,7 +386,6 @@ async def test_queued_notifications_are_sent_in_order_and_flushed_on_close():
     assert slow.sent == ["a", "b", "c"]
 
 
-@pytest.mark.asyncio
 async def test_full_queue_drops_the_oldest_notification(caplog):
     channel = NotificationChannel("Beam")
     channel.QUEUE_SIZE = 2
@@ -418,7 +400,6 @@ async def test_full_queue_drops_the_oldest_notification(caplog):
 
 
 
-@pytest.mark.asyncio
 async def test_worker_survives_an_unexpected_send_error(caplog):
     channel = NotificationChannel("Beam")
     slow = _SlowNotifier(0)
@@ -432,7 +413,6 @@ async def test_worker_survives_an_unexpected_send_error(caplog):
     await channel.close()
 
 
-@pytest.mark.asyncio
 async def test_broadcast_after_close_is_ignored(caplog):
     channel = NotificationChannel("Beam")
     slow = _SlowNotifier(0)

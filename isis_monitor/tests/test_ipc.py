@@ -14,7 +14,6 @@ from isis_monitor.ipc import SERVER_LINE_LIMIT, IPCClient, IPCServer
 from isis_monitor.tests.test_beam import wait_until
 
 
-@pytest.mark.asyncio
 async def test_ipc_snapshot_and_command(tmp_path):
     socket_path = tmp_path / "daemon.sock"
     state = DaemonState()
@@ -43,7 +42,6 @@ async def test_ipc_snapshot_and_command(tmp_path):
     await server.stop()
 
 
-@pytest.mark.asyncio
 async def test_ipc_request_and_events_do_not_race(tmp_path):
     """A command sent while the event stream is being consumed must not
     raise — request() and iter_events() no longer share a bare readline()."""
@@ -84,7 +82,6 @@ async def test_ipc_request_and_events_do_not_race(tmp_path):
     await client.close()
     await server.stop()
 
-@pytest.mark.asyncio
 async def test_ipc_malformed_json_and_oversized_payload(tmp_path):
     socket_path = tmp_path / "daemon.sock"
     state = DaemonState()
@@ -150,7 +147,6 @@ async def raw_request(server, line: bytes) -> dict:
     return reply
 
 
-@pytest.mark.asyncio
 async def test_stop_returns_promptly_with_subscribed_client(tmp_path):
     """Python 3.12's Server.wait_closed() waits for open connections; stop()
     must close them rather than hang while a TUI is attached."""
@@ -168,7 +164,6 @@ async def test_stop_returns_promptly_with_subscribed_client(tmp_path):
     await client.close()
 
 
-@pytest.mark.asyncio
 async def test_slow_subscriber_is_disconnected_so_it_can_resync(tmp_path):
     state = DaemonState()
     async with serving(tmp_path, state) as server, connected(server) as client:
@@ -184,7 +179,6 @@ async def test_slow_subscriber_is_disconnected_so_it_can_resync(tmp_path):
         await wait_until(lambda: not state._subscribers)
 
 
-@pytest.mark.asyncio
 async def test_invalid_and_unknown_requests(tmp_path):
     async with serving(tmp_path) as server:
         not_object = await raw_request(server, b"[1, 2]\n")
@@ -193,7 +187,6 @@ async def test_invalid_and_unknown_requests(tmp_path):
     assert unknown == {"ok": False, "error": "unknown_method", "version": 1}
 
 
-@pytest.mark.asyncio
 async def test_failing_command_returns_error_and_keeps_connection(tmp_path):
     async def handler(name):
         raise ValueError("kaboom")
@@ -209,7 +202,6 @@ async def test_failing_command_returns_error_and_keeps_connection(tmp_path):
         assert snap["snapshot"]["mcr_news"] == "still here"
 
 
-@pytest.mark.asyncio
 async def test_get_history_limit_and_get_logs(tmp_path):
     state = DaemonState()
     for i in range(5):
@@ -226,7 +218,6 @@ async def test_get_history_limit_and_get_logs(tmp_path):
     assert logs["logs"] == ["hello"]
 
 
-@pytest.mark.asyncio
 async def test_client_requests_fail_fast_after_daemon_disconnects(tmp_path):
     server = IPCServer(tmp_path / "d.sock", DaemonState(), AsyncMock())
     await server.start()
@@ -241,7 +232,6 @@ async def test_client_requests_fail_fast_after_daemon_disconnects(tmp_path):
     await client.close()
 
 
-@pytest.mark.asyncio
 async def test_client_not_connected_raises(tmp_path):
     client = IPCClient(tmp_path / "missing.sock")
     with pytest.raises(RuntimeError):
@@ -252,7 +242,6 @@ async def test_client_not_connected_raises(tmp_path):
         await client.connect()
 
 
-@pytest.mark.asyncio
 async def test_start_replaces_stale_socket_and_restricts_permissions(tmp_path):
     stale = tmp_path / "d.sock"
     stale.write_text("left over from a crash")
@@ -261,7 +250,6 @@ async def test_start_replaces_stale_socket_and_restricts_permissions(tmp_path):
         assert stat.S_IMODE(server.socket_path.stat().st_mode) == 0o600
 
 
-@pytest.mark.asyncio
 async def test_connection_accepted_during_shutdown_is_closed(tmp_path):
     server = IPCServer(tmp_path / "d.sock", DaemonState(), AsyncMock())
     server._closing = True
@@ -271,7 +259,6 @@ async def test_connection_accepted_during_shutdown_is_closed(tmp_path):
     assert not server._clients
 
 
-@pytest.mark.asyncio
 async def test_client_surfaces_garbage_from_server(tmp_path):
     async def garbage_server(reader, writer):
         writer.write(b"this is not json\n")
@@ -288,7 +275,6 @@ async def test_client_surfaces_garbage_from_server(tmp_path):
     await srv.wait_closed()
 
 
-@pytest.mark.asyncio
 async def test_config_methods_are_routed_to_config_handler(tmp_path):
     config_handler = AsyncMock(return_value={"config": {"x": 1}})
     server = IPCServer(tmp_path / "d.sock", DaemonState(), AsyncMock(), config_handler)
@@ -305,7 +291,6 @@ async def test_config_methods_are_routed_to_config_handler(tmp_path):
     assert update["ok"] is True
 
 
-@pytest.mark.asyncio
 async def test_config_methods_unknown_without_config_handler(tmp_path):
     async with serving(tmp_path) as server, connected(server) as client:
         reply = await client.request({"method": "get_config"})
@@ -313,7 +298,6 @@ async def test_config_methods_unknown_without_config_handler(tmp_path):
 
 
 
-@pytest.mark.asyncio
 async def test_socket_is_created_owner_only(tmp_path):
     modes = []
     real_start = asyncio.start_unix_server
@@ -353,7 +337,6 @@ def _state_with_big_history() -> DaemonState:
     return state
 
 
-@pytest.mark.asyncio
 async def test_stop_does_not_hang_on_a_client_that_stopped_reading(tmp_path):
     server = IPCServer(tmp_path / "d.sock", _state_with_big_history(), AsyncMock())
     await server.start()
@@ -369,7 +352,6 @@ async def test_stop_does_not_hang_on_a_client_that_stopped_reading(tmp_path):
     assert stopping in done, "IPCServer.stop() hung on a client that stopped reading"
 
 
-@pytest.mark.asyncio
 async def test_stop_still_delivers_a_reply_already_written(tmp_path):
     """The reply to the request that triggered a restart must reach a reading client."""
     stop_task = None
@@ -387,7 +369,6 @@ async def test_stop_still_delivers_a_reply_already_written(tmp_path):
     assert reply["result"] == {"restart": "ok"}
 
 
-@pytest.mark.asyncio
 async def test_subscriber_that_stops_reading_is_disconnected(tmp_path):
     state = DaemonState()
     server = IPCServer(tmp_path / "d.sock", state, AsyncMock())
@@ -412,7 +393,6 @@ async def test_subscriber_that_stops_reading_is_disconnected(tmp_path):
         await asyncio.wait_for(server.stop(), 3)
 
 
-@pytest.mark.asyncio
 async def test_request_timeout_closes_the_client(tmp_path):
     """A late reply would otherwise be read as the next request's answer."""
     async def never_answers(_name):
@@ -429,7 +409,6 @@ async def test_request_timeout_closes_the_client(tmp_path):
 
 
 
-@pytest.mark.asyncio
 async def test_timeout_raises_builtin_timeout_and_wakes_other_waiters(tmp_path):
     async def never_answers(_name):
         await asyncio.sleep(3600)

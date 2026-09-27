@@ -100,7 +100,6 @@ def test_apply_snapshot_to_tui():
 # StateLogHandler from other threads
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
 async def test_state_log_handler_hands_off_records_from_other_threads():
     """DaemonState is loop-confined; a record logged in a worker thread must be
     applied on the loop thread, not in the worker."""
@@ -123,7 +122,6 @@ async def test_state_log_handler_hands_off_records_from_other_threads():
 # run_until_stopped / signals
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
 async def test_run_until_stopped_cancels_on_stop():
     cancelled = asyncio.Event()
 
@@ -141,7 +139,6 @@ async def test_run_until_stopped_cancels_on_stop():
     assert cancelled.is_set()
 
 
-@pytest.mark.asyncio
 async def test_run_until_stopped_propagates_errors_and_returns_on_completion():
     async def boom():
         raise ValueError("crashed")
@@ -154,7 +151,6 @@ async def test_run_until_stopped_propagates_errors_and_returns_on_completion():
     await asyncio.wait_for(main.run_until_stopped(quick(), asyncio.Event()), 1)
 
 
-@pytest.mark.asyncio
 async def test_run_until_stopped_propagates_outer_cancellation():
     inner_cancelled = asyncio.Event()
 
@@ -172,7 +168,6 @@ async def test_run_until_stopped_propagates_outer_cancellation():
     await asyncio.wait_for(inner_cancelled.wait(), 1)
 
 
-@pytest.mark.asyncio
 async def test_install_signal_handlers_sets_stop_event():
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -225,7 +220,6 @@ def test_build_channels_only_configured_webhooks(tmp_path):
 # state_persistence_loop
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
 async def test_state_persistence_loop_samples_trims_and_persists(tmp_path):
     config = _config(tmp_path, sample_interval=0.01, retention_days=1)
     state = DaemonState()
@@ -251,7 +245,6 @@ async def test_state_persistence_loop_samples_trims_and_persists(tmp_path):
     store.close()
 
 
-@pytest.mark.asyncio
 async def test_state_persistence_loop_samples_only_while_the_beam_feed_is_connected(tmp_path):
     config = _config(tmp_path, sample_interval=0.01)
     state = DaemonState()
@@ -276,7 +269,6 @@ async def test_state_persistence_loop_samples_only_while_the_beam_feed_is_connec
         store.close()
 
 
-@pytest.mark.asyncio
 async def test_state_persistence_loop_survives_database_errors(tmp_path, caplog):
     config = _config(tmp_path, sample_interval=0.01)
     store = MagicMock()
@@ -319,7 +311,6 @@ async def daemon(config):
             await asyncio.wait_for(task, 5)
 
 
-@pytest.mark.asyncio
 async def test_run_daemon_serves_ipc_and_shuts_down_cleanly_with_tui_attached(tmp_path):
     update = {"type": "update", "pv": AppConfig.ts1_beam_current_pv, "value": 150.0}
     async with FakePVWS([update]) as pvws:
@@ -362,7 +353,6 @@ async def test_run_daemon_serves_ipc_and_shuts_down_cleanly_with_tui_attached(tm
     assert snap["beam_states"]["TS1"]["power"] == "high"
 
 
-@pytest.mark.asyncio
 async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
     ts = datetime.now(timezone.utc) - timedelta(minutes=5)
     store = SQLiteStateStore(tmp_path / "state.db")
@@ -415,7 +405,6 @@ def test_apply_event_to_tui_dispatches_each_event_type():
     assert tui.update_log.call_args_list == [call("line"), call("Health: beam -> connected")]
 
 
-@pytest.mark.asyncio
 async def test_tui_connection_loop_syncs_streams_and_reconnects(tmp_path):
     config = _config(tmp_path, history_maxlen=2, tui_reconnect_initial=0.01, tui_reconnect_max=0.02)
     state = DaemonState()
@@ -453,7 +442,6 @@ async def test_tui_connection_loop_syncs_streams_and_reconnects(tmp_path):
         await server.stop()
 
 
-@pytest.mark.asyncio
 async def test_handle_tui_key():
     stop, tui, tasks = asyncio.Event(), MagicMock(), set()
 
@@ -493,7 +481,6 @@ async def test_handle_tui_key():
 # run_stop / CLI
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
 async def test_run_stop_without_daemon_exits_1(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         await main.run_stop(_config(tmp_path))
@@ -501,7 +488,6 @@ async def test_run_stop_without_daemon_exits_1(tmp_path, capsys):
     assert "Could not connect" in capsys.readouterr().out
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("result, expected", [
     ({"shutdown": "ok"}, "stopping cleanly"),
     ({"something": "else"}, "Daemon responded"),
@@ -516,7 +502,6 @@ async def test_run_stop_reports_daemon_reply(tmp_path, capsys, result, expected)
     assert expected in capsys.readouterr().out
 
 
-@pytest.mark.asyncio
 async def test_run_stop_error_reply_exits_1(tmp_path, capsys):
     server = IPCServer(tmp_path / "d.sock", DaemonState(), AsyncMock(side_effect=RuntimeError("x")))
     await server.start()
@@ -624,7 +609,6 @@ async def _revision(client) -> str:
     return (await client.request({"method": "get_config"}))["revision"]
 
 
-@pytest.mark.asyncio
 async def test_daemon_get_config_reads_the_file(tmp_path):
     async with daemon_with_file(tmp_path) as (task, client, ini):
         reply = await client.request({"method": "get_config"})
@@ -635,7 +619,6 @@ async def test_daemon_get_config_reads_the_file(tmp_path):
     assert task.result() is False  # plain stop, no restart
 
 
-@pytest.mark.asyncio
 async def test_daemon_update_config_requires_revision(tmp_path):
     async with daemon_with_file(tmp_path) as (task, client, ini):
         reply = await client.request({"method": "update_config", "settings": {}})
@@ -643,7 +626,6 @@ async def test_daemon_update_config_requires_revision(tmp_path):
         assert not task.done()
 
 
-@pytest.mark.asyncio
 async def test_daemon_rejects_update_based_on_stale_read(tmp_path):
     """A hand edit (or another TUI's save) since get_config must not be overwritten."""
     async with daemon_with_file(tmp_path) as (task, client, ini):
@@ -657,7 +639,6 @@ async def test_daemon_rejects_update_based_on_stale_read(tmp_path):
         assert not task.done()
 
 
-@pytest.mark.asyncio
 async def test_concurrent_updates_only_one_is_applied(tmp_path):
     """Two TUIs saving at once from the same read: the edits are serialised,
     and the loser gets restart_pending (or the connection closes as the
@@ -686,7 +667,6 @@ async def test_concurrent_updates_only_one_is_applied(tmp_path):
     assert ("fun_mode = true" in text) != ("summary_time = 09:30" in text)
 
 
-@pytest.mark.asyncio
 async def test_daemon_rejects_invalid_config_and_keeps_running(tmp_path):
     async with daemon_with_file(tmp_path) as (task, client, ini):
         before = ini.read_text()
@@ -699,7 +679,6 @@ async def test_daemon_rejects_invalid_config_and_keeps_running(tmp_path):
         assert not task.done()
 
 
-@pytest.mark.asyncio
 async def test_daemon_reports_config_write_failure(tmp_path):
     async with daemon_with_file(tmp_path) as (task, client, ini):
         with patch("main.update_config_file", side_effect=PermissionError("read-only")):
@@ -708,7 +687,6 @@ async def test_daemon_reports_config_write_failure(tmp_path):
         assert not task.done()
 
 
-@pytest.mark.asyncio
 async def test_daemon_update_config_writes_file_and_requests_restart(tmp_path):
     async with daemon_with_file(tmp_path) as (task, client, ini):
         reply = await client.request({
@@ -721,7 +699,6 @@ async def test_daemon_update_config_writes_file_and_requests_restart(tmp_path):
     assert "fun_mode = true" in ini.read_text()
 
 
-@pytest.mark.asyncio
 async def test_daemon_restart_command_requests_restart(tmp_path):
     async with daemon_with_file(tmp_path) as (task, client, ini):
         reply = await client.request({"method": "command", "name": "restart"})
@@ -792,7 +769,6 @@ def tui_terminal():
         stdin.close()
 
 
-@pytest.mark.asyncio
 async def test_run_tui_c_hands_the_terminal_to_the_config_editor_and_back(tmp_path, capsys):
     async with daemon_with_file(tmp_path) as (_task, _client, _ini):
         with tui_terminal() as (tui, keys, termios_mock, tty_mock):
@@ -814,7 +790,6 @@ async def test_run_tui_c_hands_the_terminal_to_the_config_editor_and_back(tmp_pa
     assert tui.stop.call_count == 2
 
 
-@pytest.mark.asyncio
 async def test_quitting_the_tui_cancels_an_open_config_editor(tmp_path, capsys):
     async with daemon_with_file(tmp_path) as (_task, _client, _ini):
         with tui_terminal() as (tui, keys, termios_mock, tty_mock):
@@ -832,7 +807,6 @@ async def test_quitting_the_tui_cancels_an_open_config_editor(tmp_path, capsys):
     assert termios_mock.tcsetattr.call_args_list[-1] == call(ANY, termios_mock.TCSADRAIN, "saved")
 
 
-@pytest.mark.asyncio
 async def test_run_tui_handles_several_keys_in_one_read_and_quits_on_eof(tmp_path):
     """No daemon running: the TUI keeps retrying, still handles keys, and
     restores the terminal when it quits."""
@@ -856,7 +830,6 @@ async def test_run_tui_handles_several_keys_in_one_read_and_quits_on_eof(tmp_pat
     tui.stop.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_config_editor_saves_over_the_new_connection_after_reconnecting(tmp_path, capsys):
     config = _config(tmp_path, tui_reconnect_initial=0.05, tui_reconnect_max=0.05)
     clients = []
@@ -889,7 +862,6 @@ async def test_config_editor_saves_over_the_new_connection_after_reconnecting(tm
             await asyncio.wait_for(task, 2)
 
 
-@pytest.mark.asyncio
 async def test_failed_tui_action_is_logged(caplog):
     tasks = set()
     async def boom():
@@ -900,7 +872,6 @@ async def test_failed_tui_action_is_logged(caplog):
     assert not tasks
 
 
-@pytest.mark.asyncio
 async def test_keys_typed_ahead_of_the_editor_are_passed_to_it(tmp_path, capsys):
     async with daemon_with_file(tmp_path) as (_task, _client, _ini):
         with tui_terminal() as (tui, keys, _termios, _tty):
@@ -921,7 +892,6 @@ async def test_keys_typed_ahead_of_the_editor_are_passed_to_it(tmp_path, capsys)
 
 
 
-@pytest.mark.asyncio
 async def test_run_daemon_stops_other_loops_when_one_crashes(tmp_path):
     persistence_cancelled = asyncio.Event()
 
@@ -943,7 +913,6 @@ async def test_run_daemon_stops_other_loops_when_one_crashes(tmp_path):
     assert not os.path.exists(config.daemon_socket_path)  # teardown still ran
 
 
-@pytest.mark.asyncio
 async def test_run_daemon_seeds_trackers_from_the_restored_snapshot(tmp_path):
     started = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     store = SQLiteStateStore(tmp_path / "state.db")
@@ -968,7 +937,6 @@ async def test_run_daemon_seeds_trackers_from_the_restored_snapshot(tmp_path):
 
 
 
-@pytest.mark.asyncio
 async def test_config_save_is_refused_once_shutdown_has_started(tmp_path):
     """A save accepted after SIGTERM or a shutdown command would re-exec the daemon."""
     config = _config(tmp_path)
@@ -992,7 +960,6 @@ async def test_config_save_is_refused_once_shutdown_has_started(tmp_path):
     assert (reply["ok"], reply["error"]) == (False, "restart_pending")
 
 
-@pytest.mark.asyncio
 async def test_sync_tui_subscribes_before_fetching_state():
     client = MagicMock()
     client.request = AsyncMock(return_value={"ok": True})
@@ -1002,7 +969,6 @@ async def test_sync_tui_subscribes_before_fetching_state():
     assert all(c.kwargs["timeout"] == main.IPC_REQUEST_TIMEOUT for c in client.request.await_args_list)
 
 
-@pytest.mark.asyncio
 async def test_run_stop_gives_up_on_a_daemon_that_does_not_answer(tmp_path, capsys):
     async def never_answers(_name):
         await asyncio.sleep(3600)

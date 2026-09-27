@@ -104,7 +104,6 @@ def test_get_power_label(mock_config, mock_channels):
 # _handle_update — beam-current arm
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
 async def test_handle_update_beam_startup_sends_immediately(mock_config, mock_channels):
     """The first reading for a target is a startup card, sent with no debounce."""
     beam_channel, exp_channel = mock_channels
@@ -120,7 +119,6 @@ async def test_handle_update_beam_startup_sends_immediately(mock_config, mock_ch
     assert notification.channel == "TS1"
 
 
-@pytest.mark.asyncio
 async def test_handle_update_beam_no_change_no_broadcast(mock_config, mock_channels):
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
@@ -136,7 +134,6 @@ async def test_handle_update_beam_no_change_no_broadcast(mock_config, mock_chann
     beam_channel.broadcast.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_handle_update_beam_change_is_debounced(mock_config, mock_channels):
     """A confirmed state change is not sent immediately — only after the debounce window."""
     beam_channel, exp_channel = mock_channels
@@ -157,7 +154,6 @@ async def test_handle_update_beam_change_is_debounced(mock_config, mock_channels
     assert notification.channel == "TS1"
 
 
-@pytest.mark.asyncio
 async def test_handle_update_beam_flapping_sends_nothing(mock_config, mock_channels):
     """A change that reverts before the debounce window elapses is dropped entirely."""
     beam_channel, exp_channel = mock_channels
@@ -173,7 +169,6 @@ async def test_handle_update_beam_flapping_sends_nothing(mock_config, mock_chann
     beam_channel.broadcast.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_handle_update_beam_trip_notes_other_targets(mock_config, mock_channels):
     """When multiple targets go off in the same debounce window, each card names the others."""
     beam_channel, exp_channel = mock_channels
@@ -197,7 +192,6 @@ async def test_handle_update_beam_trip_notes_other_targets(mock_config, mock_cha
         assert "also went off, likely a facility-wide trip" in notification.text
 
 
-@pytest.mark.asyncio
 async def test_change_aggregator_cancel_all_stops_pending_flush(mock_config, mock_channels):
     """cancel_all() (called on shutdown) must stop pending timers from firing."""
     beam_channel, exp_channel = mock_channels
@@ -214,7 +208,6 @@ async def test_change_aggregator_cancel_all_stops_pending_flush(mock_config, moc
     assert m.change_aggregator._pending == {}
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("fun_mode", [False, True])
 async def test_handle_update_beam_flavour_only_in_fun_mode(mock_config, mock_channels, fun_mode):
     """Flavour lines appear only with fun_mode on. fun_mode defaults to False,
@@ -236,7 +229,6 @@ async def test_handle_update_beam_flavour_only_in_fun_mode(mock_config, mock_cha
 # _handle_update — run-name (b64byt) arm
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
 async def test_handle_update_run_name_first_set(mock_config, mock_channels):
     """The very first run seen isn't a completion: no card, nothing to count yet."""
     beam_channel, exp_channel = mock_channels
@@ -252,7 +244,6 @@ async def test_handle_update_run_name_first_set(mock_config, mock_channels):
     sink.record_run_completed.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_handle_update_run_name_change(mock_config, mock_channels):
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
@@ -278,7 +269,6 @@ async def test_handle_update_run_name_change(mock_config, mock_channels):
     assert tracker(m).state.current_counts == 0
 
 
-@pytest.mark.asyncio
 async def test_handle_update_run_name_change_resets_end_notified(mock_config, mock_channels):
     """A new run must re-arm the 'about to finish' notification for itself,
     even if the previous run ended with end_notified already set."""
@@ -300,7 +290,6 @@ async def test_handle_update_run_name_change_resets_end_notified(mock_config, mo
     assert "about to finish" in exp_channel.broadcast.call_args[0][0].title
 
 
-@pytest.mark.asyncio
 async def test_handle_update_run_name_nan_ignored(mock_config, mock_channels):
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
@@ -310,7 +299,6 @@ async def test_handle_update_run_name_nan_ignored(mock_config, mock_channels):
     exp_channel.broadcast.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_handle_update_run_name_change_no_milestone_for_zero_total(mock_config, mock_channels):
     """The sink returns 0 for an instrument it doesn't know; 0 % 25 == 0
     must not be mistaken for a milestone."""
@@ -327,7 +315,6 @@ async def test_handle_update_run_name_change_no_milestone_for_zero_total(mock_co
     assert exp_channel.broadcast.call_count == 1  # just the "new run" card
 
 
-@pytest.mark.asyncio
 async def test_handle_update_run_name_change_no_milestone_without_fun_mode(mock_config, mock_channels):
     beam_channel, exp_channel = mock_channels
     sink = MagicMock()
@@ -346,7 +333,6 @@ async def test_handle_update_run_name_change_no_milestone_without_fun_mode(mock_
 # _handle_update — counts (IN:<NAME>:DAE:TOTALUAMPS) arm
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
 async def test_handle_update_counts_triggers_notification_past_the_target(mock_config, mock_channels):
     """TOTALUAMPS publishes the total µA·h collected this run as a number."""
     beam_channel, exp_channel = mock_channels
@@ -377,7 +363,6 @@ async def _feed_counts(m, readings):
         await tracker(m).handle_counts(value, t0 + timedelta(minutes=minutes))
 
 
-@pytest.mark.asyncio
 async def test_finishing_card_is_sent_ahead_of_the_target_on_its_eta(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels, counts_target=100)  # finish_warning_minutes = 15
@@ -399,7 +384,6 @@ async def test_finishing_card_is_sent_ahead_of_the_target_on_its_eta(mock_config
     assert tracker(m).state.end_notified is False
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("readings", [
     [(0, 90.0), (2, 99.0)],  # too little history to trust the rate
     [(0, 0.0), (5, 5.0)],  # rising, but ETA 95 minutes
@@ -416,7 +400,6 @@ async def test_finishing_card_waits_for_the_target_without_a_near_eta(mock_confi
     exp_channel.broadcast.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_eta_rate_fit_is_rate_limited(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels, counts_target=1000)
     tracker(m).state.run_name = "Run 1"
@@ -427,7 +410,6 @@ async def test_eta_rate_fit_is_rate_limited(mock_config, mock_channels):
     assert fit.call_count == 6  # every 30s once there are 3 minutes of history
 
 
-@pytest.mark.asyncio
 async def test_finish_warning_minutes_zero_only_sends_at_the_target(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = make_monitor(replace(mock_config, finish_warning_minutes=0), mock_channels, counts_target=100)
@@ -439,7 +421,6 @@ async def test_finish_warning_minutes_zero_only_sends_at_the_target(mock_config,
     exp_channel.broadcast.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_handle_update_counts_malformed(mock_config, mock_channels):
     sink = MagicMock()
     m = make_monitor(mock_config, mock_channels, counts_target=100, sink=sink)
@@ -454,7 +435,6 @@ async def test_handle_update_counts_malformed(mock_config, mock_channels):
     sink.update_counts.assert_called_once_with("PEARL", 42.0)
 
 
-@pytest.mark.asyncio
 async def test_handle_update_counts_zero_is_a_real_reading(mock_config, mock_channels):
     """TOTALUAMPS is 0 at the start of a run; that mustn't be taken as blank."""
     m = make_monitor(mock_config, mock_channels, counts_target=100)
@@ -484,7 +464,6 @@ def test_fit_rate_computes_slope_per_second():
 # _check_collection_progress — stall detection
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
 async def test_check_collection_progress_no_check_without_enough_history(mock_config, mock_channels):
     """Fewer than STALL_CHECK_WINDOW worth of samples means there's nothing
     to compare against yet — must not warn."""
@@ -502,7 +481,6 @@ async def test_check_collection_progress_no_check_without_enough_history(mock_co
     exp_channel.broadcast.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_check_collection_progress_no_false_stall_when_counts_update_in_batches(mock_config, mock_channels):
     """Regression: a source that updates the collected count in less frequent
     batches than the 60s check interval must not look stalled just because a
@@ -529,7 +507,6 @@ async def test_check_collection_progress_no_false_stall_when_counts_update_in_ba
     exp_channel.broadcast.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_check_collection_progress_detects_stall_when_instrument_beam_on(mock_config, mock_channels):
     beam_config = replace(mock_config, stall_minutes=0.01)  # ~0.6s, fast for tests
     beam_channel, exp_channel = mock_channels
@@ -551,7 +528,6 @@ async def test_check_collection_progress_detects_stall_when_instrument_beam_on(m
     assert notification.title == "PEARL: Data collection stalled"
 
 
-@pytest.mark.asyncio
 async def test_check_collection_progress_movement_resets_stall_clock(mock_config, mock_channels):
     beam_config = replace(mock_config, stall_minutes=0.01)
     beam_channel, exp_channel = mock_channels
@@ -574,7 +550,6 @@ async def test_check_collection_progress_movement_resets_stall_clock(mock_config
     exp_channel.broadcast.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_check_collection_progress_no_active_run_never_warns(mock_config, mock_channels):
     """Between runs, the collected count is naturally static — that must not
     look like a stall just because no run is currently in progress."""
@@ -661,7 +636,6 @@ def ws_monitor(mock_config, mock_channels, url, sink=None, reconnect_interval=60
     return make_monitor(config, mock_channels, sink=sink, **kw)
 
 
-@pytest.mark.asyncio
 async def test_run_loop_subscribes_and_dispatches_updates(mock_config, mock_channels):
     sink = MagicMock()
     update = {"type": "update", "pv": mock_config.ts1_beam_current_pv, "value": 150.0}
@@ -678,7 +652,6 @@ async def test_run_loop_subscribes_and_dispatches_updates(mock_config, mock_chan
     sink.update_health.assert_any_call("beam", "connected")
 
 
-@pytest.mark.asyncio
 async def test_run_loop_survives_malformed_messages(mock_config, mock_channels, caplog):
     """Bad frames and handler errors are logged and skipped, not a reconnect."""
     sink = MagicMock()
@@ -702,7 +675,6 @@ async def test_run_loop_survives_malformed_messages(mock_config, mock_channels, 
     assert "handler bug" in caplog.text
 
 
-@pytest.mark.asyncio
 async def test_run_loop_reconnects_after_server_closes(mock_config, mock_channels):
     sink = MagicMock()
     async with FakePVWS(close_after_send=True) as server:
@@ -712,7 +684,6 @@ async def test_run_loop_reconnects_after_server_closes(mock_config, mock_channel
     sink.update_health.assert_any_call("beam", "disconnected")
 
 
-@pytest.mark.asyncio
 async def test_reconnect_repopulates_beam_states_marked_unknown(mock_config, mock_channels):
     """DaemonState marks beams unknown when the feed drops; PVWS re-sending an
     unchanged value on reconnect must restore it, without a beam notification."""
@@ -737,7 +708,6 @@ async def test_reconnect_repopulates_beam_states_marked_unknown(mock_config, moc
     beam_channel.broadcast.assert_called_once()  # just the startup card
 
 
-@pytest.mark.asyncio
 async def test_request_reconnect_while_connected_reconnects_immediately(mock_config, mock_channels):
     sink = MagicMock()
     async with FakePVWS() as server:
@@ -753,7 +723,6 @@ async def test_request_reconnect_while_connected_reconnects_immediately(mock_con
     sink.update_health.assert_any_call("beam", "reconnecting")
 
 
-@pytest.mark.asyncio
 async def test_request_reconnect_while_disconnected_skips_backoff(mock_config, mock_channels):
     """A reconnect requested during the backoff wait retries at once, and does
     not linger to tear down the next successful connection."""
@@ -777,7 +746,6 @@ async def test_request_reconnect_while_disconnected_skips_backoff(mock_config, m
             await server._server.wait_closed()
 
 
-@pytest.mark.asyncio
 async def test_run_cancels_promptly_and_cancels_pending_debounce(mock_config, mock_channels):
     async with FakePVWS() as server:
         m = ws_monitor(mock_config, mock_channels, server.url)
@@ -794,14 +762,12 @@ async def test_run_cancels_promptly_and_cancels_pending_debounce(mock_config, mo
     assert m.change_aggregator._pending == {}
 
 
-@pytest.mark.asyncio
 async def test_run_without_url_returns_immediately(mock_config, mock_channels, caplog):
     m = ws_monitor(mock_config, mock_channels, "")
     await asyncio.wait_for(m.run(), 1)
     assert "will not run" in caplog.text
 
 
-@pytest.mark.asyncio
 async def test_collection_check_loop_calls_progress_check(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels)
     m._check_collection_progress = AsyncMock()
@@ -813,14 +779,12 @@ async def test_collection_check_loop_calls_progress_check(mock_config, mock_chan
             await task
 
 
-@pytest.mark.asyncio
 async def test_aggregator_flush_without_pending_is_noop(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels)
     await m.change_aggregator._flush("TS1")
     mock_channels[0].broadcast.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_handle_update_run_name_bad_base64_is_ignored(mock_config, mock_channels, caplog):
     m = make_monitor(mock_config, mock_channels)
     await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": "!!!not base64"})
@@ -840,7 +804,6 @@ def test_prune_collected_samples_drops_samples_outside_window(mock_config, mock_
     assert list(tracker(m).state.collected_samples) == [(now, 2.0)]
 
 
-@pytest.mark.asyncio
 async def test_run_loop_bad_url_marks_health_and_retries(mock_config, mock_channels, caplog):
     sink = MagicMock()
     m = ws_monitor(mock_config, mock_channels, "not-a-websocket-url", sink=sink, reconnect_interval=0.01)
@@ -877,7 +840,6 @@ def test_classify_ws_error():
     assert "HTTP 403" in _classify_ws_error(InvalidStatusCode(403, Headers()))[1]
 
 
-@pytest.mark.asyncio
 async def test_run_loop_backs_off_only_for_persistent_problems(mock_config, mock_channels):
     """Transient failures retry after reconnect_interval; persistent ones
     double the wait each time up to BEAM_MAX_BACKOFF, resetting on connect."""
@@ -923,7 +885,6 @@ async def test_run_loop_backs_off_only_for_persistent_problems(mock_config, mock
     assert waits == [5, 10, 20, 40, 80, 160, 300, 300, 5, 5, 5, 10]
 
 
-@pytest.mark.asyncio
 async def test_run_loop_logs_repeated_failures_once(mock_config, mock_channels, caplog):
     import logging
     async with FakePVWS() as server:
@@ -949,7 +910,6 @@ async def test_run_loop_logs_repeated_failures_once(mock_config, mock_channels, 
     assert "failed attempt(s) over" in caplog.text
 
 
-@pytest.mark.asyncio
 async def test_close_ws_quietly_logs_instead_of_raising(caplog):
     ws = MagicMock()
     ws.close = AsyncMock(side_effect=RuntimeError("socket gone"))
@@ -969,7 +929,6 @@ def two_instrument_monitor(mock_config, mock_channels):
     return BeamMonitor(replace(config, debounce_seconds=DEBOUNCE_SECONDS), *mock_channels)
 
 
-@pytest.mark.asyncio
 async def test_updates_are_routed_to_their_own_instrument(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = two_instrument_monitor(mock_config, mock_channels)
@@ -985,7 +944,6 @@ async def test_updates_are_routed_to_their_own_instrument(mock_config, mock_chan
     assert exp_channel.broadcast.call_args[0][0].title == "WISH: Run about to finish"
 
 
-@pytest.mark.asyncio
 async def test_run_loop_subscribes_to_every_instruments_pvs(mock_config, mock_channels):
     async with FakePVWS([]) as server:
         config = replace(mock_config, isis_websocket_url=server.url)
@@ -998,7 +956,6 @@ async def test_run_loop_subscribes_to_every_instruments_pvs(mock_config, mock_ch
     )
 
 
-@pytest.mark.asyncio
 async def test_stall_check_uses_each_instruments_beam_target(mock_config, mock_channels):
     """WISH is on TS2, which is off, so only PEARL (on TS1, high) warns."""
     _, exp_channel = mock_channels
@@ -1020,7 +977,6 @@ async def test_stall_check_uses_each_instruments_beam_target(mock_config, mock_c
     exp_channel.broadcast.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_one_instruments_failed_stall_check_does_not_skip_others(mock_config, mock_channels, caplog):
     m = two_instrument_monitor(mock_config, mock_channels)
     m._current_ws = MagicMock()  # connected to PVWS
@@ -1033,7 +989,6 @@ async def test_one_instruments_failed_stall_check_does_not_skip_others(mock_conf
     assert "Collection check failed for PEARL" in caplog.text
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("mode, expected", [("experiment", ""), ("instrument", "PEARL")])
 async def test_run_cards_use_the_instruments_channel_setting(mock_config, mock_channels, mode, expected):
     """Blank is filled with "Experiment Updates" by the experiment channel on broadcast."""
@@ -1065,7 +1020,6 @@ async def test_run_cards_use_the_instruments_channel_setting(mock_config, mock_c
 
 
 
-@pytest.mark.asyncio
 async def test_repeated_run_title_after_reconnect_keeps_the_run_start_time(mock_config, mock_channels):
     """PVWS re-sends the current title on every reconnect; the next new-run
     card must still report the whole previous run's duration."""
@@ -1086,7 +1040,6 @@ async def test_repeated_run_title_after_reconnect_keeps_the_run_start_time(mock_
     assert dict(card.facts)["Duration"].startswith("6h")
 
 
-@pytest.mark.asyncio
 async def test_no_stall_warning_while_pvws_is_disconnected(mock_config, mock_channels):
     """Counts are frozen and beam states stale during an outage."""
     _, exp_channel = mock_channels
@@ -1106,7 +1059,6 @@ async def test_no_stall_warning_while_pvws_is_disconnected(mock_config, mock_cha
 
 
 
-@pytest.mark.asyncio
 async def test_dropped_flicker_does_not_reset_time_in_state(mock_config, mock_channels):
     """High for 10h, a 5s flicker to medium (dropped by the debounce), then
     off: the off card must say it was high for ~10h, not since the flicker."""
@@ -1130,7 +1082,6 @@ async def test_dropped_flicker_does_not_reset_time_in_state(mock_config, mock_ch
 
 
 
-@pytest.mark.asyncio
 async def test_restored_run_is_not_reset_or_renotified_after_a_restart(mock_config, mock_channels):
     """After a restart (e.g. a TUI config save) PVWS re-sends the same title and
     TOTALUAMPS; neither a new-run card nor a second finishing card is sent."""
@@ -1154,14 +1105,12 @@ async def test_restored_run_is_not_reset_or_renotified_after_a_restart(mock_conf
     sink.update_run_progress.assert_called_with("PEARL", ANY, False)
 
 
-@pytest.mark.asyncio
 async def test_restore_ignores_entries_without_a_run(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels)
     m.restore_instruments({"PEARL": {"run_name": "", "run_started_at": None, "counts": 5.0}})
     assert tracker(m).state.run_name == "" and tracker(m).state.current_counts == -1.0
 
 
-@pytest.mark.asyncio
 async def test_finishing_card_state_is_saved_to_the_sink(mock_config, mock_channels):
     sink = MagicMock()
     m = make_monitor(mock_config, mock_channels, counts_target=100, sink=sink)
@@ -1174,7 +1123,6 @@ async def test_finishing_card_state_is_saved_to_the_sink(mock_config, mock_chann
 
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("saved_target, renotified", [(100.0, False), (120.0, True), (80.0, True)])
 async def test_finishing_card_after_restart_depends_on_the_threshold_it_was_sent_for(
     mock_config, mock_channels, saved_target, renotified,
@@ -1195,7 +1143,6 @@ async def test_finishing_card_after_restart_depends_on_the_threshold_it_was_sent
     assert exp_channel.broadcast.called is renotified
 
 
-@pytest.mark.asyncio
 async def test_new_run_is_saved_before_the_milestone_card(mock_config, mock_channels):
     """Every 25th completed run (with fun_mode on) gets a milestone card, sent
     after the new run has been saved."""
@@ -1215,7 +1162,6 @@ async def test_new_run_is_saved_before_the_milestone_card(mock_config, mock_chan
 
 
 
-@pytest.mark.asyncio
 async def test_blank_decoded_run_title_is_ignored(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
@@ -1228,7 +1174,6 @@ async def test_blank_decoded_run_title_is_ignored(mock_config, mock_channels):
     assert exp_channel.broadcast.call_args[0][0].text == "Run 2"
 
 
-@pytest.mark.asyncio
 async def test_reconnect_requested_during_handshake_does_not_block_later_ones(mock_config, mock_channels):
     """The new connection satisfies a request made while it was being set up."""
     async with FakePVWS() as server:

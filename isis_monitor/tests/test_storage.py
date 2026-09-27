@@ -1,7 +1,5 @@
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from isis_monitor.storage import SQLiteStateStore
 
 
@@ -53,7 +51,6 @@ def test_storage_sets_busy_timeout(tmp_path):
 
 
 
-@pytest.mark.asyncio
 async def test_run_serialises_database_work_on_one_thread(tmp_path):
     """The persistence and summary loops share one connection; concurrent use
     from two threads raised InterfaceError/OperationalError."""

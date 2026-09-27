@@ -108,7 +108,6 @@ async def _run_summary_loop_briefly(config, state, store, channel, **kw):
         await daily_summary_loop(config, state, store, channel, stop_event, **kw)
 
 
-@pytest.mark.asyncio
 async def test_daily_summary_loop_sends_one_card_per_target_at_summary_time(tmp_path):
     now_local = datetime.now(get_timezone())
     config = make_config(summary_time=now_local.strftime("%H:%M"))
@@ -131,7 +130,6 @@ async def test_daily_summary_loop_sends_one_card_per_target_at_summary_time(tmp_
     store.close()
 
 
-@pytest.mark.asyncio
 async def test_daily_summary_loop_fires_even_if_the_exact_minute_was_missed(tmp_path):
     """A slow tick that steps past the target minute must still send today's
     summary rather than silently waiting for tomorrow (regression guard)."""
@@ -149,7 +147,6 @@ async def test_daily_summary_loop_fires_even_if_the_exact_minute_was_missed(tmp_
     store.close()
 
 
-@pytest.mark.asyncio
 async def test_daily_summary_loop_does_not_fire_outside_summary_time(tmp_path):
     # 23:59 is guaranteed later today without the hour-wraparound that
     # `now + timedelta(hours=6)` could hit (e.g. run at 22:00 -> 04:00,
@@ -168,7 +165,6 @@ async def test_daily_summary_loop_does_not_fire_outside_summary_time(tmp_path):
     store.close()
 
 
-@pytest.mark.asyncio
 async def test_daily_summary_loop_flags_and_persists_new_record(tmp_path):
     now_local = datetime.now(get_timezone())
     config = make_config(summary_time=now_local.strftime("%H:%M"), fun_mode=True)
@@ -194,7 +190,6 @@ async def test_daily_summary_loop_flags_and_persists_new_record(tmp_path):
     store.close()
 
 
-@pytest.mark.asyncio
 async def test_daily_summary_loop_no_record_tracking_without_fun_mode(tmp_path):
     now_local = datetime.now(get_timezone())
     config = make_config(summary_time=now_local.strftime("%H:%M"), fun_mode=False)
@@ -218,7 +213,6 @@ async def test_daily_summary_loop_no_record_tracking_without_fun_mode(tmp_path):
     store.close()
 
 
-@pytest.mark.asyncio
 async def test_daily_summary_not_resent_after_restart_same_day(tmp_path):
     """The last-sent date is persisted, so restarting the daemon after
     summary_time doesn't send the day's cards a second time."""
@@ -240,7 +234,6 @@ async def test_daily_summary_not_resent_after_restart_same_day(tmp_path):
     after_restart.broadcast.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_daily_summary_tolerates_corrupt_persisted_values(tmp_path, caplog):
     config = make_config(summary_time=datetime.now(get_timezone()).strftime("%H:%M"), fun_mode=True)
     store = SQLiteStateStore(tmp_path / "summary_corrupt.db")
@@ -258,7 +251,6 @@ async def test_daily_summary_tolerates_corrupt_persisted_values(tmp_path, caplog
     store.close()
 
 
-@pytest.mark.asyncio
 async def test_daily_summary_counts_runs_only_on_instruments_using_that_target(tmp_path):
     config = make_config(summary_time=datetime.now(get_timezone()).strftime("%H:%M"))
     state = DaemonState(instruments=[
@@ -284,7 +276,6 @@ async def test_daily_summary_counts_runs_only_on_instruments_using_that_target(t
     store.close()
 
 
-@pytest.mark.asyncio
 async def test_daily_summary_loop_survives_database_errors(tmp_path, caplog):
     """A transient SQLite error at load or save time is logged, not fatal."""
     import sqlite3
