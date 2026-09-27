@@ -32,6 +32,13 @@ For development and testing, install the development dependencies:
 pip install -r requirements-dev.txt
 ```
 
+Run the tests, optionally with a coverage report (branch coverage, listing uncovered lines):
+
+```bash
+pytest
+pytest --cov=isis_monitor --cov=main --cov-branch --cov-report=term-missing
+```
+
 ## Configuration
 
 The application requires an INI configuration file to set up the Teams webhook URLs and other settings.
