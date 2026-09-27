@@ -453,7 +453,7 @@ class BeamMonitor:
             if kind == "transient":
                 delay = interval
             else:
-                backoff = min(max(backoff * 2, interval), BEAM_MAX_BACKOFF)
+                backoff = min(max(backoff * 2, interval), max(BEAM_MAX_BACKOFF, interval))
                 delay = backoff
             if not self._force_reconnect.is_set():
                 # "error" flags a problem that likely needs someone to fix it.

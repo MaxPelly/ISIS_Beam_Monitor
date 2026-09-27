@@ -73,7 +73,7 @@ class InstrumentTracker:
         experiment_channel: NotificationChannel,
         beam_power: Callable[[str], str],
         stall_minutes: float,
-        finish_warning_minutes: float = 0.0,
+        finish_warning_minutes: float = 15.0,
         fun_mode: bool = False,
         rng: Optional[random.Random] = None,
         sink: Optional[MonitorSinkProtocol] = None,
