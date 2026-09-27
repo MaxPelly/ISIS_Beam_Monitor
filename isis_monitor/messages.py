@@ -210,8 +210,8 @@ def run_finishing(
     rng: Optional[random.Random] = None,
 ) -> Notification:
     facts = [("Collected", f"{counts_collected:.1f} / {counts_target:g} µA·h")]
-    # µA·h per hour is the average beam current delivered, in µA.
-    facts.append(("Rate", f"{rate_per_second * 3600:.1f} µA·h/h"))
+    # µA·h collected per hour is simply the average beam current, in µA.
+    facts.append(("Rate", f"{rate_per_second * 3600:.1f} µA"))
     if rate_per_second > 0:
         eta_seconds = max(counts_target - counts_collected, 0) / rate_per_second
         facts.append(("ETA", fmt_duration(timedelta(seconds=eta_seconds))))

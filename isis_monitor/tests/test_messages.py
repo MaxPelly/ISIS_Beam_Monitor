@@ -263,7 +263,7 @@ def test_run_finishing_builder():
     assert n.flavour == ""
     assert n.facts == [
         ("Collected", "150.0 / 130 µA·h"),
-        ("Rate", "1800.0 µA·h/h"),
+        ("Rate", "1800.0 µA"),
         ("ETA", "0s"),
         ("Instrument beam", "high"),
     ]
