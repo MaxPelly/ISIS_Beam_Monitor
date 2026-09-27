@@ -120,24 +120,29 @@ class InstrumentTracker:
             self.state.collection_stalled_since = None
             self.state.stall_warned = False
 
-            if self.sink:
-                total_runs = self.sink.record_run_completed(self.instrument.name, time_now)
-                if self.fun_mode and total_runs and total_runs % RUN_MILESTONE_INTERVAL == 0:
-                    milestone = run_milestone(
-                        self.instrument.name, total_runs, time_now, rng=self._rng, channel=self._card_channel()
-                    )
-                    logger.info(f"Milestone: {milestone.to_plain_text()}")
-                    await self.experiment_channel.broadcast(milestone)
+            total_runs = self.sink.record_run_completed(self.instrument.name, time_now) if self.sink else 0
+        else:
+            # PVWS re-sends the current title on every (re)subscribe, so a repeat
+            # of the same name mustn't restart the run's clock. (A new run that
+            # reuses the old title can't be told apart, so it isn't reported.)
+            if name == self.state.run_name and self.state.run_started_at is not None:
+                return
+            total_runs = 0
 
-        # PVWS re-sends the current title on every (re)subscribe, so a repeat
-        # of the same name mustn't restart the run's clock.
-        if name == self.state.run_name and self.state.run_started_at is not None:
-            return
+        # Saved before any further await, so a snapshot can't pair the new
+        # completion count with the old run (which a restart would re-report).
         self.state.run_name = name
         self.state.run_started_at = time_now
         if self.sink:
             self.sink.update_run_name(self.instrument.name, name)
         self._save_progress()
+
+        if self.fun_mode and total_runs and total_runs % RUN_MILESTONE_INTERVAL == 0:
+            milestone = run_milestone(
+                self.instrument.name, total_runs, time_now, rng=self._rng, channel=self._card_channel()
+            )
+            logger.info(f"Milestone: {milestone.to_plain_text()}")
+            await self.experiment_channel.broadcast(milestone)
 
     async def handle_counts(self, raw_value: Any, time_now: datetime) -> None:
         """`raw_value` is IN:<NAME>:DAE:TOTALUAMPS: total µA·h collected this run."""
@@ -194,7 +199,13 @@ class InstrumentTracker:
         self.state.run_name = str(saved["run_name"])
         self.state.run_started_at = datetime.fromisoformat(saved["run_started_at"])
         self.state.current_counts = float(saved.get("counts", -1.0))
-        self.state.end_notified = bool(saved.get("end_notified", False))
+        # Only if still past the *current* threshold: notify_counts may have
+        # been raised by the config save that caused this restart, and the
+        # card for the new threshold hasn't been sent.
+        self.state.end_notified = (
+            bool(saved.get("end_notified", False))
+            and self.state.current_counts > self.instrument.notify_counts
+        )
 
     def reset_stall_clock(self) -> None:
         self.state.collection_stalled_since = None

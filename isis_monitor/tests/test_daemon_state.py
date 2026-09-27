@@ -328,3 +328,10 @@ def test_malformed_run_start_in_snapshot_skips_that_instrument():
         "WISH": {"total_runs": 4, "run_started_at": "yesterday"},
     }}))
     assert state.instruments["WISH"]["total_runs"] == 0
+
+
+
+def test_run_start_without_a_timezone_is_restored_as_utc():
+    state = DaemonState(instruments=INSTRUMENTS)
+    state.restore_from_snapshot_json(json.dumps({"instruments": {"WISH": {"run_started_at": "2026-09-27T08:00:00"}}}))
+    assert state.instruments["WISH"]["run_started_at"] == "2026-09-27T08:00:00+00:00"

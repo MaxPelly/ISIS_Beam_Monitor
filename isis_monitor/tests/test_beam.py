@@ -1075,3 +1075,35 @@ async def test_finishing_card_state_is_saved_to_the_sink(mock_config, mock_chann
     sink.update_run_progress.assert_called_with("PEARL", None, True)
     await m._handle_update({"pv": PEARL_UAMPS, "value": 10.0})  # back below target - 25
     sink.update_run_progress.assert_called_with("PEARL", None, False)
+
+
+
+@pytest.mark.asyncio
+async def test_raised_threshold_after_restart_still_gets_its_finishing_card(mock_config, mock_channels):
+    """The card was sent at 101 with a target of 100; the config save that
+    raised the target to 120 restarted the daemon. Passing 120 must notify."""
+    _, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels, counts_target=120)
+    m.restore_instruments({"PEARL": {
+        "run_name": "Run 1", "run_started_at": datetime.now(timezone.utc).isoformat(),
+        "counts": 101.0, "end_notified": True,
+    }})
+    assert tracker(m).state.end_notified is False
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 121.0})
+    assert exp_channel.broadcast.call_args[0][0].title == "PEARL: Run about to finish"
+
+
+@pytest.mark.asyncio
+async def test_new_run_is_saved_before_the_milestone_card(mock_config, mock_channels):
+    fun_config = replace(mock_config, fun_mode=True)
+    _, exp_channel = mock_channels
+    sink = MagicMock()
+    sink.record_run_completed.return_value = 25
+    order = []
+    sink.update_run_name.side_effect = lambda *a: order.append("saved")
+    exp_channel.broadcast.side_effect = lambda n: order.append(n.title)
+    m = make_monitor(fun_config, mock_channels, sink=sink)
+    tracker(m).state.run_name = "Run 24"
+    tracker(m).state.run_started_at = datetime.now(timezone.utc)
+    await m._handle_update({"pv": fun_config.run_name_pv, "b64byt": base64.b64encode(b"Run 25").decode()})
+    assert order == ["PEARL: New run started", "saved", "PEARL: 25 runs completed"]

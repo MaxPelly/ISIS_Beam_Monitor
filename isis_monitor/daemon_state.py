@@ -17,6 +17,13 @@ logger = logging.getLogger(__name__)
 SUBSCRIBER_QUEUE_SIZE = 500
 
 
+def _aware_iso(text: str) -> str:
+    """Normalise a saved timestamp, treating one without a zone as UTC (the
+    daemon always writes UTC); comparing naive and aware times would raise."""
+    ts = datetime.fromisoformat(text)
+    return (ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)).isoformat()
+
+
 @dataclass
 class DaemonEvent:
     event: str
@@ -276,7 +283,7 @@ class DaemonState(MonitorSinkProtocol):
                     "counts": float(info.get("counts", current["counts"])),
                     "total_runs": int(info.get("total_runs", current["total_runs"])),
                     # Validated here (raises ValueError) but kept as ISO text.
-                    "run_started_at": datetime.fromisoformat(started).isoformat() if started else None,
+                    "run_started_at": _aware_iso(started) if started else None,
                     "end_notified": bool(info.get("end_notified", False)),
                 }
             except (TypeError, ValueError):
