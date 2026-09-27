@@ -183,8 +183,13 @@ def run_started(
     prev_counts: float,
     time_now: datetime,
     rng: Optional[random.Random] = None,
+    channel: str = "",
 ) -> Notification:
-    """Build a card for a new run starting — reports on the run that just ended."""
+    """Build a card for a new run starting — reports on the run that just ended.
+
+    The run builders' `channel` is blank by default, which broadcast() fills
+    with the experiment channel's name ("Experiment Updates").
+    """
     return Notification(
         title=f"{instrument}: New run started",
         text=new_run_name,
@@ -197,6 +202,7 @@ def run_started(
         ],
         flavour=flavour.pick(("*", "new_run"), rng) if rng else "",
         timestamp=time_now,
+        channel=channel,
     )
 
 
@@ -209,6 +215,7 @@ def run_finishing(
     instrument_state: str,
     time_now: datetime,
     rng: Optional[random.Random] = None,
+    channel: str = "",
 ) -> Notification:
     facts = [("Collected", f"{counts_collected:.1f} / {counts_target:g} µA·h")]
     # µA·h collected per hour is simply the average beam current, in µA.
@@ -225,11 +232,12 @@ def run_finishing(
         facts=facts,
         flavour=flavour.pick(("*", "finishing"), rng) if rng else "",
         timestamp=time_now,
+        channel=channel,
     )
 
 
 def collection_stalled(
-    instrument: str, beam_target: str, stalled_for: timedelta, time_now: datetime
+    instrument: str, beam_target: str, stalled_for: timedelta, time_now: datetime, channel: str = ""
 ) -> Notification:
     return Notification(
         title=f"{instrument}: Data collection stalled",
@@ -237,6 +245,7 @@ def collection_stalled(
         severity=Severity.WARNING,
         emoji="⚠️",
         timestamp=time_now,
+        channel=channel,
     )
 
 
@@ -312,7 +321,11 @@ def daily_summary(
 
 
 def run_milestone(
-    instrument: str, run_count: int, time_now: datetime, rng: Optional[random.Random] = None
+    instrument: str,
+    run_count: int,
+    time_now: datetime,
+    rng: Optional[random.Random] = None,
+    channel: str = "",
 ) -> Notification:
     return Notification(
         title=f"{instrument}: {run_count} runs completed",
@@ -321,4 +334,5 @@ def run_milestone(
         emoji="🏆",
         flavour=flavour.pick(("*", "milestone"), rng) if rng else "",
         timestamp=time_now,
+        channel=channel,
     )

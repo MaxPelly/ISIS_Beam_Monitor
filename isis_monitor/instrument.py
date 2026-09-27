@@ -84,6 +84,11 @@ class InstrumentTracker:
     def _flavour_rng(self) -> Optional[random.Random]:
         return self._rng if self.fun_mode else None
 
+    def _card_channel(self) -> str:
+        """Teams channel for this instrument's cards; blank means the
+        experiment channel's own name ("Experiment Updates")."""
+        return self.instrument.name if self.instrument.channel == "instrument" else ""
+
     def _beam_state(self) -> str:
         return self.beam_power(self.instrument.beam_target)
 
@@ -105,6 +110,7 @@ class InstrumentTracker:
                 self.state.current_counts,
                 time_now,
                 rng=self._flavour_rng(),
+                channel=self._card_channel(),
             )
             logger.info(f"New Run: {notification.to_plain_text()}")
             await self.experiment_channel.broadcast(notification)
@@ -117,7 +123,9 @@ class InstrumentTracker:
             if self.sink:
                 total_runs = self.sink.record_run_completed(self.instrument.name, time_now)
                 if self.fun_mode and total_runs and total_runs % RUN_MILESTONE_INTERVAL == 0:
-                    milestone = run_milestone(self.instrument.name, total_runs, time_now, rng=self._rng)
+                    milestone = run_milestone(
+                        self.instrument.name, total_runs, time_now, rng=self._rng, channel=self._card_channel()
+                    )
                     logger.info(f"Milestone: {milestone.to_plain_text()}")
                     await self.experiment_channel.broadcast(milestone)
 
@@ -159,6 +167,7 @@ class InstrumentTracker:
                 self._beam_state(),
                 time_now,
                 rng=self._flavour_rng(),
+                channel=self._card_channel(),
             )
             logger.info(f"Target Reached: {notification.to_plain_text()}")
             await self.experiment_channel.broadcast(notification)
@@ -213,7 +222,8 @@ class InstrumentTracker:
             ):
                 self.state.stall_warned = True
                 notification = collection_stalled(
-                    self.instrument.name, self.instrument.beam_target, stalled_for, time_now
+                    self.instrument.name, self.instrument.beam_target, stalled_for, time_now,
+                    channel=self._card_channel(),
                 )
                 logger.info(f"Stall Warning: {notification.to_plain_text()}")
                 await self.experiment_channel.broadcast(notification)

@@ -928,3 +928,34 @@ async def test_one_instruments_failed_stall_check_does_not_skip_others(mock_conf
 
     m.instruments["WISH"].check_collection_progress.assert_awaited_once()
     assert "Collection check failed for PEARL" in caplog.text
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode, expected", [("experiment", ""), ("instrument", "PEARL")])
+async def test_run_cards_use_the_instruments_channel_setting(mock_config, mock_channels, mode, expected):
+    """Blank is filled with "Experiment Updates" by the experiment channel on broadcast."""
+    _, exp_channel = mock_channels
+    config = replace(mock_config, fun_mode=True, stall_minutes=0.01,
+                     instruments=[replace(mock_config.instruments[0], channel=mode)])
+    sink = MagicMock()
+    sink.record_run_completed.return_value = 25
+    m = make_monitor(config, mock_channels, sink=sink)
+    t = tracker(m)
+    m.state.beams["TS1"].power = "high"
+    t.state.run_name = "Run 24"
+    t.state.run_started_at = datetime.now(timezone.utc)
+
+    await m._handle_update({"pv": config.run_name_pv, "b64byt": base64.b64encode(b"Run 25").decode()})
+    now = datetime.now(timezone.utc)
+    _seed_collected_baseline(m, now, 150.0)  # samples are oldest first
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 150.0})
+    await m._check_collection_progress(now)
+    await m._check_collection_progress(now + timedelta(seconds=1))
+
+    titles_channels = [(c.args[0].title, c.args[0].channel) for c in exp_channel.broadcast.call_args_list]
+    assert [title for title, _ in titles_channels] == [
+        "PEARL: New run started", "PEARL: 25 runs completed", "PEARL: Run about to finish",
+        "PEARL: Data collection stalled",
+    ]
+    assert {channel for _, channel in titles_channels} == {expected}
