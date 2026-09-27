@@ -991,7 +991,6 @@ async def test_repeated_run_title_after_reconnect_keeps_the_run_start_time(mock_
     assert dict(card.facts)["Duration"].startswith("6h")
 
 
-
 @pytest.mark.asyncio
 async def test_no_stall_warning_while_pvws_is_disconnected(mock_config, mock_channels):
     """Counts are frozen and beam states stale during an outage."""
@@ -1009,3 +1008,27 @@ async def test_no_stall_warning_while_pvws_is_disconnected(mock_config, mock_cha
     await m._check_collection_progress(now + timedelta(minutes=5))
     exp_channel.broadcast.assert_not_called()
     assert t.state.collection_stalled_since is None  # restarts once reconnected
+
+
+
+@pytest.mark.asyncio
+async def test_dropped_flicker_does_not_reset_time_in_state(mock_config, mock_channels):
+    """High for 10h, a 5s flicker to medium (dropped by the debounce), then
+    off: the off card must say it was high for ~10h, not since the flicker."""
+    beam_channel, _ = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+    pv = mock_config.ts1_beam_current_pv
+    await m._handle_update({"pv": pv, "value": 150.0})  # startup: high
+    ten_hours_ago = datetime.now(timezone.utc) - timedelta(hours=10)
+    m.state.beams["TS1"].since = ten_hours_ago
+
+    await m._handle_update({"pv": pv, "value": 100.0})  # flicker to medium...
+    await m._handle_update({"pv": pv, "value": 150.0})  # ...and straight back
+    assert m.state.beams["TS1"].since == ten_hours_ago
+    await asyncio.sleep(SETTLE)  # flicker dropped
+
+    beam_channel.broadcast.reset_mock()
+    await m._handle_update({"pv": pv, "value": 0.0})
+    await asyncio.sleep(SETTLE)
+    card = beam_channel.broadcast.call_args[0][0]
+    assert dict(card.facts)["Was high for"].startswith("10h")

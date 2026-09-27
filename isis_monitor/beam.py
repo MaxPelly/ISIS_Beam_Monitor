@@ -158,6 +158,10 @@ class BeamChangeAggregator:
         logger.info(f"State Change: {notification.to_plain_text()}")
         await self.beam_channel.broadcast(notification)
 
+    def pending(self, state_key: str) -> Optional[_PendingChange]:
+        """The unconfirmed change for a target, if one is waiting to flush."""
+        return self._pending.get(state_key)
+
     def cancel_all(self) -> None:
         """Cancel any outstanding flush timers, e.g. on shutdown."""
         for pending in self._pending.values():
@@ -262,13 +266,20 @@ class BeamMonitor:
                 )
                 logger.info(f"Startup: {notification.to_plain_text()}")
                 await self.beam_channel.broadcast(notification)
+                beam_state.since = time_now
             else:
+                pending = self.change_aggregator.pending(bt.state_key)
                 high_threshold = self.beam_boundaries[bt.state_key][2]
                 self.change_aggregator.queue_change(
                     bt, prev_state, prev_val, prev_since or time_now,
                     new_state, beam_val, high_threshold, time_now,
                 )
-            beam_state.since = time_now
+                if pending is not None and new_state == pending.prev_state:
+                    # Back where it was before a flicker the debounce will drop,
+                    # so the time in that state carries on rather than restarting.
+                    beam_state.since = pending.prev_since
+                else:
+                    beam_state.since = time_now
 
         beam_state.current = beam_val
         beam_state.power = new_state
