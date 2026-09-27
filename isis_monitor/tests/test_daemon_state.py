@@ -174,6 +174,7 @@ def test_run_name_and_counts_events():
     snap = state.snapshot()
     assert snap["instruments"]["WISH"] == {
         "run_name": "Run 42", "counts": 12.5, "total_runs": 0, "notify_counts": 50.0, "beam_target": "TS2",
+        "run_started_at": None, "end_notified": False,
     }
     assert snap["instruments"]["PEARL"]["run_name"] == ""
 
@@ -262,6 +263,7 @@ def test_instrument_state_persists_through_snapshot():
     restored.restore_from_snapshot_json(snap_json)
     assert restored.instruments["WISH"] == {
         "run_name": "Run 7", "counts": 3.0, "total_runs": 1, "notify_counts": 75.0, "beam_target": "TS2",
+        "run_started_at": None, "end_notified": False,
     }
     assert restored.instruments["MERLIN"]["total_runs"] == 0
     assert "PEARL" not in restored.instruments
@@ -302,3 +304,27 @@ def test_malformed_instrument_entries_in_snapshot_are_skipped():
     state.restore_from_snapshot_json(json.dumps({"instruments": {"WISH": {"run_name": "R", "counts": None}}}))
     assert state.instruments["WISH"]["run_name"] == ""
     assert state.instruments["WISH"]["total_runs"] == 4
+
+
+
+def test_run_progress_is_saved_but_not_published_and_survives_a_snapshot():
+    state = DaemonState(instruments=INSTRUMENTS)
+    q = state.subscribe()
+    started = datetime(2026, 9, 27, 8, 0, tzinfo=timezone.utc)
+    state.update_run_progress("WISH", started, True)
+    state.update_run_progress("MERLIN", started, True)  # unknown: ignored
+    assert _drain(q) == []
+
+    restored = DaemonState(instruments=INSTRUMENTS)
+    restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
+    assert restored.instruments["WISH"]["run_started_at"] == started.isoformat()
+    assert restored.instruments["WISH"]["end_notified"] is True
+    assert restored.instruments["PEARL"]["run_started_at"] is None
+
+
+def test_malformed_run_start_in_snapshot_skips_that_instrument():
+    state = DaemonState(instruments=INSTRUMENTS)
+    state.restore_from_snapshot_json(json.dumps({"instruments": {
+        "WISH": {"total_runs": 4, "run_started_at": "yesterday"},
+    }}))
+    assert state.instruments["WISH"]["total_runs"] == 0

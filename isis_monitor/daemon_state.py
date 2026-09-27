@@ -52,6 +52,10 @@ class DaemonState(MonitorSinkProtocol):
                 "run_name": "",
                 "counts": -1.0,
                 "total_runs": 0,
+                # Tracker state restored into BeamMonitor after a restart, so a
+                # run's clock and "about to finish" card aren't reset by it.
+                "run_started_at": None,  # ISO timestamp
+                "end_notified": False,
                 "notify_counts": inst.notify_counts,
                 "beam_target": inst.beam_target,
             }
@@ -156,6 +160,14 @@ class DaemonState(MonitorSinkProtocol):
         self._touch()
         self._publish("run", {"instrument": instrument, "run_name": run_name})
 
+    def update_run_progress(
+        self, instrument: str, run_started_at: Optional[datetime], end_notified: bool
+    ) -> None:
+        if instrument not in self.instruments:
+            return
+        self.instruments[instrument]["run_started_at"] = run_started_at.isoformat() if run_started_at else None
+        self.instruments[instrument]["end_notified"] = bool(end_notified)
+
     def update_counts(self, instrument: str, counts: float) -> None:
         if instrument not in self.instruments:
             return
@@ -258,10 +270,14 @@ class DaemonState(MonitorSinkProtocol):
                 continue
             current = self.instruments[name]
             try:
+                started = info.get("run_started_at")
                 restored = {
                     "run_name": str(info.get("run_name", current["run_name"])),
                     "counts": float(info.get("counts", current["counts"])),
                     "total_runs": int(info.get("total_runs", current["total_runs"])),
+                    # Validated here (raises ValueError) but kept as ISO text.
+                    "run_started_at": datetime.fromisoformat(started).isoformat() if started else None,
+                    "end_notified": bool(info.get("end_notified", False)),
                 }
             except (TypeError, ValueError):
                 logger.warning(f"Skipping malformed snapshot state for instrument {name}")

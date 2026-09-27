@@ -115,7 +115,7 @@ class InstrumentTracker:
             logger.info(f"New Run: {notification.to_plain_text()}")
             await self.experiment_channel.broadcast(notification)
             self.state.current_counts = 0
-            self.state.end_notified = False
+            self.state.end_notified = False  # saved below with the new run's start
             self.state.collected_samples.clear()
             self.state.collection_stalled_since = None
             self.state.stall_warned = False
@@ -137,6 +137,7 @@ class InstrumentTracker:
         self.state.run_started_at = time_now
         if self.sink:
             self.sink.update_run_name(self.instrument.name, name)
+        self._save_progress()
 
     async def handle_counts(self, raw_value: Any, time_now: datetime) -> None:
         """`raw_value` is IN:<NAME>:DAE:TOTALUAMPS: total µA·h collected this run."""
@@ -159,6 +160,7 @@ class InstrumentTracker:
         counts_target = self.instrument.notify_counts
         if self.state.end_notified and total_collected < (counts_target - 25):
             self.state.end_notified = False
+            self._save_progress()
 
         if total_collected > counts_target and not self.state.end_notified:
             rate = _fit_rate(list(self.state.collected_samples))
@@ -176,6 +178,23 @@ class InstrumentTracker:
             logger.info(f"Target Reached: {notification.to_plain_text()}")
             await self.experiment_channel.broadcast(notification)
             self.state.end_notified = True
+            self._save_progress()
+
+    def _save_progress(self) -> None:
+        if self.sink:
+            self.sink.update_run_progress(
+                self.instrument.name, self.state.run_started_at, self.state.end_notified
+            )
+
+    def restore(self, saved: dict) -> None:
+        """Seed state from a DaemonState snapshot entry after a restart. PVWS
+        re-sends the same run title on connect, which then changes nothing."""
+        if not saved.get("run_name") or not saved.get("run_started_at"):
+            return
+        self.state.run_name = str(saved["run_name"])
+        self.state.run_started_at = datetime.fromisoformat(saved["run_started_at"])
+        self.state.current_counts = float(saved.get("counts", -1.0))
+        self.state.end_notified = bool(saved.get("end_notified", False))
 
     def reset_stall_clock(self) -> None:
         self.state.collection_stalled_since = None

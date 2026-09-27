@@ -303,6 +303,12 @@ class BeamMonitor:
             case {"pv": pv, "value": raw_val} if pv in self.pv_to_counts:
                 await self.pv_to_counts[pv].handle_counts(raw_val, time_now)
 
+    def restore_instruments(self, saved: Dict[str, dict]) -> None:
+        """Seed each tracker from DaemonState's restored per-instrument state."""
+        for name, tracker in self.instruments.items():
+            if name in saved:
+                tracker.restore(saved[name])
+
     def _beam_power(self, target: str) -> str:
         beam_state = self.state.beams.get(target)
         return beam_state.power if beam_state else "unknown"

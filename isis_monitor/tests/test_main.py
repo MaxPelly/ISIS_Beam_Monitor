@@ -949,3 +949,27 @@ async def test_run_daemon_stops_other_loops_when_one_crashes(tmp_path):
             await asyncio.wait_for(main.run_daemon(config, DAEMON_ARGS, asyncio.Event()), 5)
     assert persistence_cancelled.is_set()
     assert not os.path.exists(config.daemon_socket_path)  # teardown still ran
+
+
+@pytest.mark.asyncio
+async def test_run_daemon_seeds_trackers_from_the_restored_snapshot(tmp_path):
+    started = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    store = SQLiteStateStore(tmp_path / "state.db")
+    store.upsert_snapshot("daemon_state", json.dumps({"instruments": {"PEARL": {
+        "run_name": "Run 9", "run_started_at": started, "counts": 150.0, "end_notified": True,
+    }}}))
+    store.commit()
+    store.close()
+
+    config = _config(tmp_path, instruments=[InstrumentConfig("PEARL", 130.0, "TS1")])
+    seeded = {}
+    real_restore = main.BeamMonitor.restore_instruments
+
+    def spy(self, saved):
+        real_restore(self, saved)
+        seeded.update({name: vars(t.state).copy() for name, t in self.instruments.items()})
+
+    with patch.object(main.BeamMonitor, "restore_instruments", spy):
+        async with daemon(config):
+            pass
+    assert seeded["PEARL"]["run_name"] == "Run 9" and seeded["PEARL"]["end_notified"] is True

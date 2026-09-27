@@ -1032,3 +1032,46 @@ async def test_dropped_flicker_does_not_reset_time_in_state(mock_config, mock_ch
     await asyncio.sleep(SETTLE)
     card = beam_channel.broadcast.call_args[0][0]
     assert dict(card.facts)["Was high for"].startswith("10h")
+
+
+
+@pytest.mark.asyncio
+async def test_restored_run_is_not_reset_or_renotified_after_a_restart(mock_config, mock_channels):
+    """After a restart (e.g. a TUI config save) PVWS re-sends the same title and
+    TOTALUAMPS; neither a new-run card nor a second finishing card is sent."""
+    _, exp_channel = mock_channels
+    sink = MagicMock()
+    m = make_monitor(mock_config, mock_channels, counts_target=100, sink=sink)
+    started = datetime.now(timezone.utc) - timedelta(hours=3)
+    m.restore_instruments({"PEARL": {
+        "run_name": "Run 1", "run_started_at": started.isoformat(), "counts": 120.0, "end_notified": True,
+    }, "MERLIN": {"run_name": "x", "run_started_at": started.isoformat()}})
+
+    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": base64.b64encode(b"Run 1").decode()})
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 121.0})
+    exp_channel.broadcast.assert_not_called()
+    assert tracker(m).state.run_started_at == started
+
+    # The run then changes: the card covers the whole run, restart included.
+    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": base64.b64encode(b"Run 2").decode()})
+    card = exp_channel.broadcast.call_args[0][0]
+    assert dict(card.facts)["Duration"].startswith("3h")
+    sink.update_run_progress.assert_called_with("PEARL", ANY, False)
+
+
+@pytest.mark.asyncio
+async def test_restore_ignores_entries_without_a_run(mock_config, mock_channels):
+    m = make_monitor(mock_config, mock_channels)
+    m.restore_instruments({"PEARL": {"run_name": "", "run_started_at": None, "counts": 5.0}})
+    assert tracker(m).state.run_name == "" and tracker(m).state.current_counts == -1.0
+
+
+@pytest.mark.asyncio
+async def test_finishing_card_state_is_saved_to_the_sink(mock_config, mock_channels):
+    sink = MagicMock()
+    m = make_monitor(mock_config, mock_channels, counts_target=100, sink=sink)
+    tracker(m).state.run_name = "Run 1"
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 110.0})
+    sink.update_run_progress.assert_called_with("PEARL", None, True)
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 10.0})  # back below target - 25
+    sink.update_run_progress.assert_called_with("PEARL", None, False)

@@ -225,6 +225,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
         sink=state,
         debounce_seconds=config.debounce_seconds,
     )
+    beam_monitor.restore_instruments(state.instruments)
     mcr_monitor = MCRNewsMonitor(config, mcr_channel, args.notify_current, sink=state)
     restart_requested = False
 

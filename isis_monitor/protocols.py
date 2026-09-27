@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -16,6 +16,12 @@ class MonitorSinkProtocol(Protocol):
         ...
 
     def update_counts(self, instrument: str, counts: float) -> None:
+        ...
+
+    def update_run_progress(
+        self, instrument: str, run_started_at: Optional[datetime], end_notified: bool
+    ) -> None:
+        """Record tracker state that must survive a restart (not published)."""
         ...
 
     def update_health(self, component: str, status: str) -> None:
