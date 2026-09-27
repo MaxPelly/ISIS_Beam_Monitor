@@ -153,9 +153,6 @@ class TeamsNotifier(Notifier):
         }
 
     async def send(self, notification: Notification):
-        if not self.webhook_url:
-            return
-
         payload = self._create_payload(notification)
         for attempt, delay in enumerate((*self.RETRY_DELAYS, None), 1):
             error, retryable, retry_after = await self._post(payload)

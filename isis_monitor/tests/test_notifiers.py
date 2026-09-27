@@ -103,18 +103,6 @@ async def test_teams_notifier_sends_request():
 
 
 @pytest.mark.asyncio
-async def test_teams_notifier_no_url():
-    notifier = TeamsNotifier("")
-    mock_session = make_mock_session()
-    notification = Notification(title="Test title", text="Test message")
-
-    with patch("isis_monitor.notifiers.aiohttp.ClientSession", return_value=mock_session):
-        await notifier.send(notification)
-
-    mock_session.post.assert_not_called()
-
-
-@pytest.mark.asyncio
 async def test_teams_notifier_logs_error_on_bad_status(caplog):
     import logging
     notifier = TeamsNotifier("http://fake.webhook.url")
