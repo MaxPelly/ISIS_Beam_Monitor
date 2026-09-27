@@ -11,13 +11,7 @@ from isis_monitor.mcr import MCRNewsMonitor
 
 @pytest.fixture
 def mock_config():
-    return AppConfig(
-        mcr_news_url="http://test.url/mcr",
-        isis_websocket_url="",
-        news_teams_url="",
-        beam_teams_url="",
-        experiment_teams_url="",
-    )
+    return AppConfig(mcr_news_url="http://test.url/mcr")
 
 
 @pytest.fixture
@@ -31,66 +25,35 @@ def mock_channel():
 # get_news()
 # ---------------------------------------------------------------------------
 
-async def test_mcr_get_news_success(mock_config, mock_channel):
-    """The news is the text before the "<N> more lines" / old-line footer,
-    whatever the number of digits."""
+def news_session(status=200, text="", error=None):
+    """A mock aiohttp session whose get() responds with `status`/`text`, or raises `error` on entry."""
+    session = MagicMock()
+    ctx = session.get.return_value
+    ctx.__aenter__.return_value = MagicMock(status=status, text=AsyncMock(return_value=text))
+    ctx.__aenter__.side_effect = error
+    ctx.__aexit__ = AsyncMock(return_value=None)
+    return session
+
+
+@pytest.mark.parametrize("session, expected", [
+    # The news is the text before the "<N> more lines" / old-line footer, whatever the digits.
+    (news_session(text="Current news text\r\n\r\n12 more lines\r\n"), "Current news text"),
+    (news_session(text="News content\r\n123 old line\r\n"), "News content"),
+    (news_session(status=500), None),
+    (news_session(error=asyncio.TimeoutError()), None),
+    (news_session(text="  \r\n  "), None),  # parses to empty
+])
+async def test_mcr_get_news(mock_config, mock_channel, session, expected):
+    assert await MCRNewsMonitor(mock_config, mock_channel).get_news(session) == expected
+
+
+async def test_mcr_get_news_connection_error_and_empty_feed_log(mock_config, mock_channel, caplog):
     monitor = MCRNewsMonitor(mock_config, mock_channel)
-    for text, expected in [
-        ("Current news text\r\n\r\n12 more lines\r\n", "Current news text"),
-        ("News content\r\n123 old line\r\n", "News content"),
-    ]:
-        mock_response = AsyncMock()
-        mock_response.status = 200
-        mock_response.text = AsyncMock(return_value=text)
-        mock_session = MagicMock()
-        mock_session.get.return_value.__aenter__.return_value = mock_response
-        mock_session.get.return_value.__aexit__ = AsyncMock(return_value=None)
-
-        assert await monitor.get_news(mock_session) == expected
-
-
-async def test_mcr_get_news_failure(mock_config, mock_channel):
-    monitor = MCRNewsMonitor(mock_config, mock_channel)
-
-    mock_response = AsyncMock()
-    mock_response.status = 500
-    mock_session = MagicMock()
-    mock_session.get.return_value.__aenter__.return_value = mock_response
-    mock_session.get.return_value.__aexit__ = AsyncMock(return_value=None)
-
-    result = await monitor.get_news(mock_session)
-    assert result is None
-
-
-async def test_mcr_get_news_timeout(mock_config, mock_channel):
-    monitor = MCRNewsMonitor(mock_config, mock_channel)
-
-    mock_session = MagicMock()
-    mock_session.get.return_value.__aenter__.side_effect = asyncio.TimeoutError()
-    mock_session.get.return_value.__aexit__ = AsyncMock(return_value=None)
-
-    result = await monitor.get_news(mock_session)
-    assert result is None
-
-
-async def test_mcr_get_news_empty_feed_returns_none(mock_config, mock_channel, caplog):
-    monitor = MCRNewsMonitor(mock_config, mock_channel)
-    mock_response = AsyncMock()
-    mock_response.status = 200
-    mock_response.text = AsyncMock(return_value="  \r\n  ")
-    mock_session = MagicMock()
-    mock_session.get.return_value.__aenter__.return_value = mock_response
-    mock_session.get.return_value.__aexit__ = AsyncMock(return_value=None)
-
-    assert await monitor.get_news(mock_session) is None
+    session = MagicMock()
+    session.get.side_effect = aiohttp.ClientConnectionError("refused")
+    assert await monitor.get_news(session) is None
+    assert await monitor.get_news(news_session(text="  ")) is None
     assert "parsed to empty string" in caplog.text
-
-
-async def test_mcr_get_news_connection_error_returns_none(mock_config, mock_channel):
-    monitor = MCRNewsMonitor(mock_config, mock_channel)
-    mock_session = MagicMock()
-    mock_session.get.side_effect = aiohttp.ClientConnectionError("refused")
-    assert await monitor.get_news(mock_session) is None
 
 
 # ---------------------------------------------------------------------------
