@@ -13,28 +13,31 @@ experiment_teams_url =
 
 # One section per monitored instrument; run notifications for all of them go
 # to experiment_teams_url, with the instrument name in the card title.
-#   counts_pv      (required) dashboard PV whose text is "live_current/total_collected"
-#   notify_counts  (required) total collected at which "run about to finish" is sent
+#   notify_counts  (required) total µA·h collected this run at which
+#                  "run about to finish" is sent
 #   beam_target    (optional) TS1, TS2 or Muon: the beam reported on run cards and
 #                  checked before stall warnings (default: [PVS] instrument_target)
-# The run-name PV is derived from the name as IN:<NAME>:DAE:WDTITLE.
+#   channel        (optional) Teams payload channel for this instrument's cards:
+#                  experiment (default) = "Experiment Updates", or instrument =
+#                  the instrument's name
+# Progress is read from IN:<NAME>:DAE:TOTALUAMPS and the run name from
+# IN:<NAME>:DAE:WDTITLE, both derived from the name.
 # Instruments and [NOTIFICATIONS] can also be edited from the TUI (press c); saving
 # there rewrites this file without its comments (the old file is kept as .bak).
 [INSTRUMENT:PEARL]
-counts_pv = IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE
 notify_counts = 130
 
 # [INSTRUMENT:WISH]
-# (find <row>:<col> on the instrument's dashboard; inline comments aren't supported)
-# counts_pv = IN:WISH:CS:DASHBOARD:TAB:<row>:<col>:VALUE
 # notify_counts = 200
 # beam_target = TS2
+# channel = instrument
 
 [PVS]
 # Default beam_target for instrument sections that don't set one (TS1, TS2 or Muon).
 # instrument_target = TS1
 # Legacy single-instrument settings, used only when there are no [INSTRUMENT:*]
-# sections (the instrument is then named from the PV, e.g. PEARL).
+# sections: the instrument is named from counts_pv (e.g. PEARL) and still reads
+# its progress from IN:<NAME>:DAE:TOTALUAMPS.
 # counts_pv = IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE
 # run_name_pv = IN:PEARL:DAE:WDTITLE
 # notify_counts = 130
