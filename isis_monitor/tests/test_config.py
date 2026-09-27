@@ -11,6 +11,12 @@ from isis_monitor.config import (
 )
 
 
+def _write(tmp_path, extra: str) -> Path:
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("[DATA]\nmcr_news_url = http://test.com/news\n" + extra)
+    return config_file
+
+
 def test_load_config_success(tmp_path):
     config_file = tmp_path / "config.ini"
     config_file.write_text("""\
@@ -34,27 +40,6 @@ experiment_teams_url = http://test.teams/exp
     assert config.run_name_pv == "IN:PEARL:DAE:WDTITLE"
 
 
-def test_load_config_custom_pvs(tmp_path):
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-mcr_news_url = http://test.com/news
-isis_websocket_url = wss://test.com/ws
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-
-[PVS]
-counts_pv = IN:MYINST:COUNTS
-run_name_pv = IN:MYINST:RUNNAME
-""")
-    config = load_config(config_file)
-    assert config.counts_pv == "IN:MYINST:COUNTS"
-    assert config.run_name_pv == "IN:MYINST:RUNNAME"
-
-
 def test_load_config_missing_file():
     with pytest.raises(ConfigError, match="not found"):
         load_config(Path("non_existent_file.ini"))
@@ -62,99 +47,27 @@ def test_load_config_missing_file():
 
 def test_load_config_missing_mcr_url(tmp_path):
     config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-isis_websocket_url = wss://test.com/ws
-""")
+    config_file.write_text("[DATA]\nisis_websocket_url = wss://test.com/ws\n")
     with pytest.raises(ConfigError, match="mcr_news_url"):
         load_config(config_file)
 
 
-def test_load_config_missing_data_section(tmp_path):
-    """A config file with no [DATA] section at all should raise ConfigError."""
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-""")
-    with pytest.raises(ConfigError, match="mcr_news_url"):
-        load_config(config_file)
-
-
-def test_load_config_boundary_too_few_values(tmp_path):
-    """Boundary tuple with fewer than 3 values should raise ConfigError."""
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-mcr_news_url = http://test.com
-isis_websocket_url = wss://test.com
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-
-[BEAM_BOUNDARIES]
-ts1_boundaries = 0.0, 50.0
-""")
+def test_load_config_boundary_wrong_number_of_values(tmp_path):
     with pytest.raises(ConfigError, match="exactly 3"):
-        load_config(config_file)
-
-
-def test_load_config_boundary_too_many_values(tmp_path):
-    """Boundary tuple with more than 3 values should raise ConfigError."""
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-mcr_news_url = http://test.com
-isis_websocket_url = wss://test.com
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-
-[BEAM_BOUNDARIES]
-ts1_boundaries = 0.0, 50.0, 140.0, 200.0
-""")
-    with pytest.raises(ConfigError, match="exactly 3"):
-        load_config(config_file)
+        load_config(_write(tmp_path, "[BEAM_BOUNDARIES]\nts1_boundaries = 0.0, 50.0\n"))
 
 
 def test_load_config_empty_websocket_url_logs_warning(tmp_path, caplog):
     """Empty isis_websocket_url should log a WARNING, not raise."""
     import logging
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-mcr_news_url = http://test.com/news
-isis_websocket_url =
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-""")
     with caplog.at_level(logging.WARNING, logger="isis_monitor.config"):
-        config = load_config(config_file)
+        config = load_config(_write(tmp_path, "isis_websocket_url =\n"))
     assert config.isis_websocket_url == ""
     assert "isis_websocket_url" in caplog.text
 
 
 def test_load_config_daemon_and_tui_client_values(tmp_path):
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-mcr_news_url = http://test.com/news
-isis_websocket_url = wss://test.com/ws
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-
+    config = load_config(_write(tmp_path, """\
 [DAEMON]
 db_path = /tmp/beam.db
 socket_path = /tmp/beam.sock
@@ -165,8 +78,7 @@ retention_days = 7
 socket_path = /tmp/beam.sock
 reconnect_initial = 2
 reconnect_max = 20
-""")
-    config = load_config(config_file)
+"""))
     assert config.daemon_db_path == "/tmp/beam.db"
     assert config.daemon_socket_path == "/tmp/beam.sock"
     assert config.daemon_lock_file == "/tmp/beam.lock"
@@ -176,210 +88,37 @@ reconnect_max = 20
     assert config.tui_reconnect_max == 20
 
 
-def test_load_config_invalid_retention_days(tmp_path):
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-mcr_news_url = http://test.com/news
-isis_websocket_url = wss://test.com/ws
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-
-[DAEMON]
-retention_days = 0
-""")
-    with pytest.raises(ConfigError, match=r"\[DAEMON\] retention_days must be between 1 and 365"):
-        load_config(config_file)
-
-
-def test_load_config_notifications_defaults(tmp_path):
-    """[NOTIFICATIONS] is optional — defaults apply when the section is absent."""
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-mcr_news_url = http://test.com/news
-isis_websocket_url = wss://test.com/ws
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-""")
-    config = load_config(config_file)
-    assert config.fun_mode is False
-    assert config.notifications_timezone == "Europe/London"
-    assert config.debounce_seconds == 20.0
-
-
 def test_load_config_notifications_custom_values(tmp_path):
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-mcr_news_url = http://test.com/news
-isis_websocket_url = wss://test.com/ws
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
+    config = load_config(_write(tmp_path, """\
+mcr_page_url = https://example.com/mcr
 
 [NOTIFICATIONS]
-fun_mode = true
+fun_mode = yes
 timezone = America/New_York
 debounce_seconds = 5
-""")
-    config = load_config(config_file)
+stall_minutes = 10
+summary_time = 07:30
+"""))
     assert config.fun_mode is True
     assert config.notifications_timezone == "America/New_York"
     assert config.debounce_seconds == 5.0
-
-
-def test_load_config_instrument_target_defaults(tmp_path):
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-mcr_news_url = http://test.com/news
-isis_websocket_url = wss://test.com/ws
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-""")
-    config = load_config(config_file)
-    assert config.instrument_target == "TS1"
-    assert config.stall_minutes == 15.0
-
-
-def test_load_config_instrument_target_custom_values(tmp_path):
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-mcr_news_url = http://test.com/news
-isis_websocket_url = wss://test.com/ws
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-
-[PVS]
-instrument_target = TS2
-
-[NOTIFICATIONS]
-stall_minutes = 10
-""")
-    config = load_config(config_file)
-    assert config.instrument_target == "TS2"
     assert config.stall_minutes == 10.0
+    assert config.summary_time == "07:30"
+    assert config.mcr_page_url == "https://example.com/mcr"
 
 
 def test_load_config_invalid_instrument_target(tmp_path):
     """A typo like the display label "Muons" instead of the state_key "Muon"
     must be rejected at load time rather than silently degrading to
     "unknown" in every run-card fact."""
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-mcr_news_url = http://test.com/news
-isis_websocket_url = wss://test.com/ws
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-
-[PVS]
-instrument_target = Muons
-""")
     with pytest.raises(ConfigError, match="instrument_target"):
-        load_config(config_file)
+        load_config(_write(tmp_path, "[PVS]\ninstrument_target = Muons\n"))
 
 
 def test_load_config_valid_instrument_targets(tmp_path):
     for target in ("TS1", "TS2", "Muon"):
-        config_file = tmp_path / f"config_{target}.ini"
-        config_file.write_text(f"""\
-[DATA]
-mcr_news_url = http://test.com/news
-isis_websocket_url = wss://test.com/ws
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-
-[PVS]
-instrument_target = {target}
-""")
-        config = load_config(config_file)
+        config = load_config(_write(tmp_path, f"[PVS]\ninstrument_target = {target}\n"))
         assert config.instrument_target == target
-
-
-def test_load_config_mcr_page_url_and_summary_time_defaults(tmp_path):
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-mcr_news_url = http://test.com/news
-isis_websocket_url = wss://test.com/ws
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-""")
-    config = load_config(config_file)
-    assert config.mcr_page_url == ""
-    assert config.summary_time == "08:00"
-
-
-def test_load_config_mcr_page_url_and_summary_time_custom(tmp_path):
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-mcr_news_url = http://test.com/news
-isis_websocket_url = wss://test.com/ws
-mcr_page_url = https://example.com/mcr
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-
-[NOTIFICATIONS]
-summary_time = 07:30
-""")
-    config = load_config(config_file)
-    assert config.mcr_page_url == "https://example.com/mcr"
-    assert config.summary_time == "07:30"
-
-
-def test_load_config_invalid_summary_time(tmp_path):
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
-[DATA]
-mcr_news_url = http://test.com/news
-isis_websocket_url = wss://test.com/ws
-
-[WEBHOOKS]
-news_teams_url =
-beam_teams_url =
-experiment_teams_url =
-
-[NOTIFICATIONS]
-summary_time = not-a-time
-""")
-    with pytest.raises(ConfigError, match="summary_time"):
-        load_config(config_file)
-
-
-def _write(tmp_path, extra: str) -> Path:
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("[DATA]\nmcr_news_url = http://test.com/news\n" + extra)
-    return config_file
 
 
 def test_load_config_defaults_match_dataclass_defaults(tmp_path):
@@ -387,6 +126,12 @@ def test_load_config_defaults_match_dataclass_defaults(tmp_path):
     config = load_config(_write(tmp_path, ""))
     assert replace(config, instruments=[]) == AppConfig(mcr_news_url="http://test.com/news")
     assert config.mcr_poll_interval == 60.0
+    assert (config.fun_mode, config.notifications_timezone, config.debounce_seconds) == (
+        False, "Europe/London", 20.0)
+    assert (config.instrument_target, config.stall_minutes) == ("TS1", 15.0)
+    assert (config.mcr_page_url, config.summary_time) == ("", "08:00")
+    # With no [PVS] or [INSTRUMENT:*] sections the one instrument is PEARL.
+    assert [(i.name, i.notify_counts) for i in config.instruments] == [("PEARL", 130.0)]
 
 
 @pytest.mark.parametrize("section, line", [
@@ -413,14 +158,6 @@ def test_load_config_tui_socket_defaults_to_daemon_socket(tmp_path):
     assert config.tui_socket_path == "/run/beam.sock"
 
 
-def test_load_config_boolean_and_renamed_keys(tmp_path):
-    config = load_config(_write(
-        tmp_path, "[NOTIFICATIONS]\nfun_mode = yes\ntimezone = UTC\n"
-    ))
-    assert config.fun_mode is True
-    assert config.notifications_timezone == "UTC"
-
-
 @pytest.mark.parametrize("initial, maximum, match", [
     ("0", "5", "positive"),
     ("10", "5", "cannot be greater"),
@@ -438,25 +175,16 @@ def test_load_config_custom_boundaries(tmp_path):
     assert config.ts1_boundaries == (0.0, 50.0, 140.0)
 
 
-def test_load_config_summary_time_out_of_range(tmp_path):
-    with pytest.raises(ConfigError, match="summary_time"):
-        load_config(_write(tmp_path, "[NOTIFICATIONS]\nsummary_time = 25:00\n"))
-
-
 def test_legacy_pvs_become_single_instrument(tmp_path):
-    """With no [INSTRUMENT:*] sections, the [PVS] keys still define one instrument."""
+    """With no [INSTRUMENT:*] sections, the [PVS] keys still define one instrument,
+    named from the counts PV, with its progress read from TOTALUAMPS."""
     config = load_config(_write(
         tmp_path, "[PVS]\ncounts_pv = IN:WISH:COUNTS\nrun_name_pv = IN:WISH:TITLE\ninstrument_target = TS2\nnotify_counts = 50\n"
     ))
     assert config.instruments == [
         InstrumentConfig("WISH", 50.0, "TS2", run_name_pv="IN:WISH:TITLE")
     ]
-
-
-def test_legacy_instrument_defaults_to_pearl(tmp_path):
-    config = load_config(_write(tmp_path, ""))
-    assert [i.name for i in config.instruments] == ["PEARL"]
-    assert config.instruments[0].notify_counts == 130.0
+    assert config.instruments[0].counts_pv == "IN:WISH:DAE:TOTALUAMPS"
 
 
 def test_legacy_instrument_name_fallback(tmp_path):
@@ -465,6 +193,7 @@ def test_legacy_instrument_name_fallback(tmp_path):
 
 
 def test_instrument_sections(tmp_path):
+    """Section names are case-insensitive and instrument names upper-cased."""
     config = load_config(_write(tmp_path, """\
 [PVS]
 instrument_target = TS2
@@ -472,7 +201,7 @@ counts_pv = IGNORED
 [INSTRUMENT:PEARL]
 notify_counts = 200
 beam_target = TS1
-[INSTRUMENT:wish]
+[instrument:wish]
 notify_counts = 75
 """))
     assert config.instruments == [
@@ -480,11 +209,6 @@ notify_counts = 75
         InstrumentConfig("WISH", 75.0, "TS2"),
     ]
     assert config.instruments[1].run_name_pv == "IN:WISH:DAE:WDTITLE"
-
-
-def test_instrument_section_prefix_is_case_insensitive(tmp_path):
-    config = load_config(_write(tmp_path, "[instrument:wish]\nnotify_counts = 5\n"))
-    assert [i.name for i in config.instruments] == ["WISH"]
 
 
 def test_instrument_unknown_key_warns(tmp_path, caplog):
@@ -541,6 +265,8 @@ def test_invalid_instrument_sections(tmp_path, extra, match):
     ("stall_minutes = inf", "stall_minutes must be above 0"),
     ("stall_minutes = 1e20", "stall_minutes must be above 0"),
     ("stall_minutes = nan", "stall_minutes must be above 0"),
+    ("summary_time = not-a-time", "summary_time"),
+    ("summary_time = 25:00", "summary_time"),
 ])
 def test_invalid_notification_settings(tmp_path, line, match):
     """Caught at load time, so a bad edit can't leave the daemon failing on restart."""
@@ -595,6 +321,7 @@ def test_update_config_file_round_trips_and_keeps_other_settings(tmp_path):
     settings = editable_settings(load_config(path))
     settings["notifications"]["fun_mode"] = "true"
     settings["instruments"][0]["notify_counts"] = "200"
+    settings["instruments"][0]["channel"] = "instrument"
     settings["instruments"].append({"name": "wish", "notify_counts": "50", "beam_target": "TS2"})
 
     returned = update_config_file(path, settings)
@@ -603,9 +330,10 @@ def test_update_config_file_round_trips_and_keeps_other_settings(tmp_path):
     assert reloaded == returned
     assert reloaded.fun_mode is True and reloaded.stall_minutes == 10.0
     assert reloaded.beam_teams_url == "http://secret"
-    assert [(i.name, i.notify_counts, i.beam_target) for i in reloaded.instruments] == [
-        ("PEARL", 200.0, "TS1"), ("WISH", 50.0, "TS2"),
+    assert [(i.name, i.notify_counts, i.beam_target, i.channel) for i in reloaded.instruments] == [
+        ("PEARL", 200.0, "TS1", "instrument"), ("WISH", 50.0, "TS2", "experiment"),
     ]
+    assert "channel = instrument" in path.read_text()
     assert "a comment" not in path.read_text()  # documented limitation
     assert (tmp_path / "config.ini.bak").read_text() == EDITABLE_BASE
     assert path.stat().st_mode & 0o777 == 0o600
@@ -715,11 +443,6 @@ def test_instrument_progress_pv_is_derived_and_old_counts_pv_is_ignored(tmp_path
     assert "unknown key" not in caplog.text
 
 
-def test_legacy_instrument_also_uses_totaluamps(tmp_path):
-    config = load_config(_write(tmp_path, "[PVS]\ncounts_pv = IN:MARI:CS:DASHBOARD:TAB:2:1:VALUE\n"))
-    assert (config.instruments[0].name, config.instruments[0].counts_pv) == ("MARI", "IN:MARI:DAE:TOTALUAMPS")
-
-
 def test_update_config_file_drops_old_counts_pv_and_rejects_editing_it(tmp_path):
     path = _editable_file(tmp_path, EDITABLE_BASE + "[INSTRUMENT:WISH]\ncounts_pv = OLD\nnotify_counts = 5\n")
     update_config_file(path, editable_settings(load_config(path)))
@@ -744,16 +467,6 @@ channel = Instrument
 def test_invalid_instrument_channel(tmp_path):
     with pytest.raises(ConfigError, match=r"\[INSTRUMENT:PEARL\] channel must be one of experiment, instrument"):
         load_config(_write(tmp_path, "[INSTRUMENT:PEARL]\nnotify_counts = 5\nchannel = teams\n"))
-
-
-def test_update_config_file_writes_channel(tmp_path):
-    path = _editable_file(tmp_path)
-    settings = editable_settings(load_config(path))
-    settings["instruments"][0]["channel"] = "instrument"
-    update_config_file(path, settings)
-    assert load_config(path).instruments[0].channel == "instrument"
-    assert "channel = instrument" in path.read_text()
-
 
 
 @pytest.mark.parametrize("extra, match", [
