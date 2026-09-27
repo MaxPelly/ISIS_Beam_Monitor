@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import os
+import socket
 import stat
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -411,22 +412,25 @@ async def test_stop_still_delivers_a_reply_already_written(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_slow_subscriber_is_aborted_even_if_it_is_not_reading(tmp_path):
-    state = _state_with_big_history()
+async def test_subscriber_that_stops_reading_is_disconnected(tmp_path):
+    state = DaemonState()
     server = IPCServer(tmp_path / "d.sock", state, AsyncMock())
     await server.start()
     try:
-        reader, writer = await asyncio.open_unix_connection(str(server.socket_path))
+        # A tiny receive buffer, so the server's writes back up quickly.
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        sock.connect(str(server.socket_path))
+        reader, writer = await asyncio.open_unix_connection(sock=sock)
         writer.write(b'{"method": "subscribe_updates"}\n')
         await writer.drain()
         await asyncio.sleep(0.05)
-        for _ in range(3):  # fill the socket buffer, then overflow the event queue
-            state.update_log("x" * 60000)
-        await asyncio.sleep(0.05)
-        for i in range(SUBSCRIBER_QUEUE_SIZE + 10):
-            state.update_log(f"line {i}")
-        # The server drops the connection without the client reading anything.
-        await wait_until(lambda: not server._clients)
+
+        with patch("isis_monitor.ipc.SUBSCRIBER_DRAIN_TIMEOUT", 0.2):
+            for _ in range(20):
+                state.update_log("x" * 60000)
+            # The server drops the connection without the client reading anything.
+            await wait_until(lambda: not server._clients, timeout=3)
         writer.close()
     finally:
         await asyncio.wait_for(server.stop(), 3)

@@ -24,6 +24,9 @@ SERVER_LINE_LIMIT = 64 * 1024
 # How long stop() lets clients take already-buffered replies before cutting
 # off any that aren't reading (e.g. a suspended TUI), so shutdown can't hang.
 STOP_FLUSH_TIMEOUT = 1.0
+# A subscriber that takes no events for this long (e.g. a suspended TUI) is
+# disconnected; it reconnects and resyncs from a snapshot when it resumes.
+SUBSCRIBER_DRAIN_TIMEOUT = 30.0
 CLIENT_LINE_LIMIT = 16 * 1024 * 1024
 
 
@@ -146,10 +149,12 @@ class IPCServer:
                 writer.write(_encode({
                     "ok": True, "version": PROTOCOL_VERSION, "event": ev.event, "payload": ev.payload,
                 }))
-                await writer.drain()
-        except ConnectionError:
+                # Bounded: a client that stops reading would otherwise leave
+                # this blocked here, never seeing the drop sentinel above.
+                await asyncio.wait_for(writer.drain(), SUBSCRIBER_DRAIN_TIMEOUT)
+        except (ConnectionError, asyncio.TimeoutError):
             pass
-        # Dropped for falling behind, or the peer is gone: dropping the
+        # Dropped for falling behind, not reading, or the peer is gone: dropping the
         # connection makes the client reconnect and resync from a snapshot.
         # Aborted rather than closed, since close() would first wait to flush
         # stale events to a client that isn't reading them.
