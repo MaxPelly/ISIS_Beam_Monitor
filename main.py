@@ -280,16 +280,24 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             return {"restarting": True}
 
     ipc_server = IPCServer(Path(config.daemon_socket_path), state, command_handler, config_handler)
+    tasks: list = []
     try:
         await ipc_server.start()
         state.update_health("daemon", "running")
-        await asyncio.gather(
+        tasks = [asyncio.ensure_future(coro) for coro in (
             run_until_stopped(beam_monitor.run(), stop_event),
             run_until_stopped(mcr_monitor.run(), stop_event),
             state_persistence_loop(config, state, store, stop_event),
             daily_summary_loop(config, state, store, beam_channel, stop_event, rng=random.Random()),
-        )
+        )]
+        await asyncio.gather(*tasks)
     finally:
+        # If one loop crashed, gather() raised while the others kept running;
+        # stop them before the store and channels they use are closed.
+        stop_event.set()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         logger.warning("Shutting down daemon")
         state.update_health("daemon", "stopping")
         await ipc_server.stop()

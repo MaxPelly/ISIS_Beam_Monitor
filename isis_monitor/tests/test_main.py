@@ -926,3 +926,25 @@ async def test_keys_typed_ahead_of_the_editor_are_passed_to_it(tmp_path, capsys)
             await wait_until(lambda: tui.start.call_count == 2)
             os.write(keys, b"q")
             await asyncio.wait_for(task, 2)
+
+
+
+@pytest.mark.asyncio
+async def test_run_daemon_stops_other_loops_when_one_crashes(tmp_path):
+    persistence_cancelled = asyncio.Event()
+
+    async def persistence(*_args):
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            persistence_cancelled.set()
+            raise
+
+    config = _config(tmp_path)
+    with patch("main.install_signal_handlers"), \
+         patch("main.state_persistence_loop", side_effect=persistence), \
+         patch("main.daily_summary_loop", new_callable=AsyncMock, side_effect=RuntimeError("summary bug")):
+        with pytest.raises(RuntimeError, match="summary bug"):
+            await asyncio.wait_for(main.run_daemon(config, DAEMON_ARGS, asyncio.Event()), 5)
+    assert persistence_cancelled.is_set()
+    assert not os.path.exists(config.daemon_socket_path)  # teardown still ran
