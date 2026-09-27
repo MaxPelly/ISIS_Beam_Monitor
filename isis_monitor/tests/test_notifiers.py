@@ -1,10 +1,15 @@
 import asyncio
-import pytest
+import logging
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from unittest.mock import patch, MagicMock, AsyncMock
+
+import aiohttp
+import pytest
+
 from isis_monitor.notifiers import _retry_after, TeamsNotifier, DummyNotifier, NotificationChannel, Notifier
 from isis_monitor.messages import Notification, Severity
-import aiohttp
 
 
 # ---------------------------------------------------------------------------
@@ -12,7 +17,6 @@ import aiohttp
 # ---------------------------------------------------------------------------
 
 async def test_dummy_notifier(caplog):
-    import logging
     caplog.set_level(logging.INFO)
     notifier = DummyNotifier()
     notification = Notification(title="Test", text="Test message", emoji="🔔")
@@ -25,45 +29,17 @@ async def test_dummy_notifier(caplog):
 # TeamsNotifier — helpers
 # ---------------------------------------------------------------------------
 
-def make_mock_session(status: int = 200, response_text: str = "OK"):
-    """Return a mock for aiohttp.ClientSession usable as ``async with ... as session``.
-
-    ``session.post(url, ...)`` returns a sync MagicMock so that
-    ``async with session.post(...) as resp`` works without a coroutine mismatch.
-    """
-    # The response object yielded by `async with session.post(...) as resp`
-    mock_resp = MagicMock()
-    mock_resp.status = status
-    mock_resp.text = AsyncMock(return_value=response_text)
-
-    # The context-manager returned by session.post(url, ...)
-    post_ctx = MagicMock()
-    post_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
-    post_ctx.__aexit__ = AsyncMock(return_value=None)
-
-    # The session itself  (async with aiohttp.ClientSession() as session)
-    mock_session = MagicMock()
-    mock_session.post.return_value = post_ctx
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-
-    return mock_session
-
-
 def make_status_session(*statuses: int, headers=None):
-    """A session whose successive posts return each of `statuses` in turn."""
-    session = make_mock_session()
-    contexts = []
-    for status in statuses:
-        resp = MagicMock(status=status, headers=headers or {})
-        resp.text = AsyncMock(return_value="body")
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=resp)
-        ctx.__aexit__ = AsyncMock(return_value=None)
-        contexts.append(ctx)
+    """A mock ClientSession whose successive ``async with session.post(...)``
+    responses have each of `statuses` in turn."""
+    session = MagicMock(closed=False)
+    session.responses = [
+        MagicMock(status=status, headers=headers or {}, text=AsyncMock(return_value="body")) for status in statuses
+    ]
+    contexts = [MagicMock() for _ in statuses]
+    for ctx, resp in zip(contexts, session.responses):
+        ctx.__aenter__.return_value = resp
     session.post.side_effect = contexts
-    session.responses = [ctx.__aenter__.return_value for ctx in contexts]
-    session.closed = False
     return session
 
 
@@ -81,14 +57,12 @@ async def test_teams_notifier_sends_request():
     """Downstream routing (e.g. Power Automate) reads `channel` and `summary`
     from inside `content`, not just the top-level `summary` — both must be present."""
     notifier = TeamsNotifier("http://fake.webhook.url")
-    mock_session = make_mock_session(status=200)
-    notification = Notification(title="Test title", text="Test message", channel="TS1")
+    notifier._session = make_status_session(200)
 
-    with patch("isis_monitor.notifiers.aiohttp.ClientSession", return_value=mock_session):
-        await notifier.send(notification)
+    await notifier.send(Notification(title="Test title", text="Test message", channel="TS1"))
 
-    mock_session.post.assert_called_once()
-    args, kwargs = mock_session.post.call_args
+    notifier._session.post.assert_called_once()
+    args, kwargs = notifier._session.post.call_args
     assert args[0] == "http://fake.webhook.url"
     payload = kwargs["json"]
     assert payload["summary"] == "Test title | Test message"
@@ -101,16 +75,13 @@ async def test_teams_notifier_sends_request():
 
 
 async def test_teams_notifier_logs_error_on_bad_status(caplog):
-    import logging
     notifier = TeamsNotifier("http://fake.webhook.url")
-    mock_session = make_mock_session(status=400, response_text="Bad Request")
-    notification = Notification(title="Test title", text="Test message")
+    notifier._session = make_status_session(400)
 
-    with patch("isis_monitor.notifiers.aiohttp.ClientSession", return_value=mock_session):
-        with caplog.at_level(logging.ERROR):
-            await notifier.send(notification)
+    with caplog.at_level(logging.ERROR):
+        await notifier.send(Notification(title="Test title", text="Test message"))
 
-    assert "400" in caplog.text
+    assert "HTTP 400: body" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +118,6 @@ def test_create_payload_includes_facts():
 
 
 def test_create_payload_includes_flavour_and_timestamp_lines():
-    from datetime import datetime, timezone
     notifier = TeamsNotifier("http://fake.webhook.url")
     ts = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
     notification = Notification(title="Title", text="Text", flavour="Beam's back, baby.", timestamp=ts)
@@ -207,7 +177,6 @@ async def test_notification_channel_fills_in_only_a_blank_channel():
 
 async def test_notification_channel_empty_logs_debug(caplog):
     """Broadcast on a channel with no notifiers should log at DEBUG level."""
-    import logging
     channel = NotificationChannel("Beam Updates")
 
     with caplog.at_level(logging.DEBUG):
@@ -237,16 +206,18 @@ async def test_notification_channel_logs_failing_notifier_and_still_delivers(cap
     assert "webhook exploded" in caplog.text
 
 
-async def test_teams_notifier_retries_connection_errors_then_gives_up(caplog, no_retry_delay):
+@pytest.mark.parametrize("error, attempts, logged", [
+    (aiohttp.ClientConnectionError("refused"), 3, "Failed to send Teams webhook: refused (after 3 attempts)"),
+    (ValueError("bad payload"), 1, "Failed to send Teams webhook: bad payload"),  # unexpected: not retried
+])
+async def test_teams_notifier_retries_only_connection_errors(caplog, no_retry_delay, error, attempts, logged):
     notifier = TeamsNotifier("http://example.invalid/hook")
-    session = MagicMock()
-    session.closed = False
-    session.post.side_effect = aiohttp.ClientConnectionError("refused")
-    notifier._session = session
+    notifier._session = MagicMock(closed=False)
+    notifier._session.post.side_effect = error
 
     await notifier.send(Notification(title="t", text="x"))
-    assert session.post.call_count == 3
-    assert "Failed to send Teams webhook: refused (after 3 attempts)" in caplog.text
+    assert notifier._session.post.call_count == attempts
+    assert logged in caplog.text
 
 
 @pytest.mark.parametrize("statuses, attempts", [
@@ -273,18 +244,7 @@ async def test_teams_notifier_retries_a_5xx_whose_body_cannot_be_read(no_retry_d
     assert notifier._session.post.call_count == 2
 
 
-async def test_teams_notifier_does_not_retry_unexpected_errors(no_retry_delay):
-    notifier = TeamsNotifier("http://example.invalid/hook")
-    session = MagicMock(closed=False)
-    session.post.side_effect = ValueError("bad payload")
-    notifier._session = session
-
-    await notifier.send(Notification(title="t", text="x"))
-    assert session.post.call_count == 1
-
-
 async def test_teams_notifier_waits_between_retries(caplog):
-    import logging
     notifier = TeamsNotifier("http://example.invalid/hook")
     notifier._session = make_status_session(503, 503, 503)
 
@@ -307,8 +267,6 @@ async def test_teams_notifier_honours_retry_after():
 
 
 def test_retry_after_parsing():
-    from datetime import datetime, timedelta, timezone
-    from email.utils import format_datetime
     in_30s = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=30), usegmt=True)
 
     assert _retry_after("5") == 5.0
@@ -397,7 +355,6 @@ async def test_full_queue_drops_the_oldest_notification(caplog):
     # broadcast() doesn't yield, so all four arrive before the worker takes one.
     assert slow.sent == ["c", "d"]
     assert "dropped notification: a" in caplog.text and "dropped notification: b" in caplog.text
-
 
 
 async def test_worker_survives_an_unexpected_send_error(caplog):
