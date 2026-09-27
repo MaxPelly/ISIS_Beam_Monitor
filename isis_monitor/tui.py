@@ -275,11 +275,7 @@ class RichTUI:
 
         n = len(next(iter(self._history.values())))
         interval_s = self.sample_interval
-
-        def fmt(seconds: float) -> str:  # in the bar interval's own unit
-            return f"{seconds:.0f}s" if interval_s < 60 else f"{seconds / 60:.0f} min"
-
-        subtitle = f"{n}/{self.history_maxlen} samples · {fmt(interval_s)}/bar · {_fmt_window(n * interval_s)} history"
+        subtitle = f"{n}/{self.history_maxlen} samples · {_fmt_window(interval_s)}/bar · {_fmt_window(n * interval_s)} history"
         self.layout["beam_graph"].update(
             Panel(
                 content,
