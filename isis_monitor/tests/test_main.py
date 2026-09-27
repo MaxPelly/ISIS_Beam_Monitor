@@ -580,8 +580,9 @@ def _file_args(tmp_path):
 @contextlib.asynccontextmanager
 async def daemon_with_file(tmp_path):
     args = _file_args(tmp_path)
-    async with daemon(_config(tmp_path), args) as (task, _stop):
-        client = IPCClient(tmp_path / "d.sock")
+    config = _config(tmp_path)
+    async with daemon(config, args) as (task, _stop):
+        client = IPCClient(config.daemon_socket_path)
         await client.connect()
         try:
             yield task, client, args.config

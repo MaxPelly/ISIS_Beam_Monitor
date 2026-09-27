@@ -50,7 +50,8 @@ async def test_ipc_request_and_events_do_not_race(tmp_path):
 
 async def test_ipc_malformed_json_and_oversized_payload(tmp_path):
     async with serving(tmp_path) as server:
-        assert (await raw_request(server, b"{bad_json\n"))["error"] == "invalid_json"
+        reply = await raw_request(server, b"{bad_json\n")
+        assert reply["ok"] is False and reply["error"] == "invalid_json"
         # A request line over SERVER_LINE_LIMIT closes that connection.
         reader, writer = await asyncio.open_unix_connection(str(server.socket_path))
         writer.write(b'{"padding": "' + b"A" * (SERVER_LINE_LIMIT + 10) + b'"}\n')
