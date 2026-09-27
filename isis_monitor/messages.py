@@ -71,7 +71,7 @@ class Notification:
     url: Optional[str] = None
     url_label: str = "Open"
     timestamp: Optional[datetime] = None
-    channel: str = ""  # e.g. "TS1"/"TS2"/"Muons"; falls back to the NotificationChannel's
+    channel: str = ""  # e.g. "TS1" or an instrument name; falls back to the NotificationChannel's
                         # name in NotificationChannel.broadcast() when left blank
 
     def to_plain_text(self) -> str:

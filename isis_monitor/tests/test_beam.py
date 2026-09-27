@@ -930,7 +930,6 @@ async def test_one_instruments_failed_stall_check_does_not_skip_others(mock_conf
     assert "Collection check failed for PEARL" in caplog.text
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode, expected", [("experiment", ""), ("instrument", "PEARL")])
 async def test_run_cards_use_the_instruments_channel_setting(mock_config, mock_channels, mode, expected):

@@ -105,9 +105,10 @@ async def _edit_instrument(
     edited["beam_target"] = await _ask_choice(
         read_line, write, "Beam target", inst.get("beam_target", ""), beam_targets
     )
-    edited["channel"] = await _ask_choice(
-        read_line, write, "Teams channel", inst.get("channel", "") or "experiment", channel_modes
-    )
+    if channel_modes:  # a daemon from before per-instrument channels offers none
+        edited["channel"] = await _ask_choice(
+            read_line, write, "Teams channel", inst.get("channel", "") or "experiment", channel_modes
+        )
     return edited
 
 
@@ -140,7 +141,7 @@ async def edit_settings(
                 )
             elif command.lower() == "a":
                 write("Adding an instrument (leave the name blank to cancel).")
-                blank = {"name": "", "notify_counts": "", "beam_target": "", "channel": "experiment"}
+                blank = {"name": "", "notify_counts": "", "beam_target": ""}
                 added = await _edit_instrument(blank, beam_targets, list(channel_modes), read_line, write)
                 if added is not None:
                     instruments.append(added)
