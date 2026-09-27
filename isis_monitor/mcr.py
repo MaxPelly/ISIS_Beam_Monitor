@@ -89,7 +89,9 @@ class MCRNewsMonitor:
                 self.old_news = ""  # so the first successful poll is broadcast
             else:
                 while (baseline := await self.get_news(session)) is None:
+                    self._set_health("error")
                     await self._wait(self.config.mcr_poll_interval)
+                self._set_health("connected")
                 logger.info(f"Current MCR News: {baseline}")
                 self._publish_news(baseline)
 

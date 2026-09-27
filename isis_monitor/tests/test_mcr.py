@@ -262,3 +262,12 @@ async def test_mcr_request_reconnect_polls_immediately(mock_config, mock_channel
 
     assert ("mcr", "reconnecting") in [c.args for c in sink.update_health.call_args_list]
     assert monitor.request_reconnect() is True  # flag was consumed
+
+
+@pytest.mark.asyncio
+async def test_failing_initial_fetch_reports_error_health(mock_config, mock_channel):
+    sink = MagicMock()
+    monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=False, sink=sink)
+    await run_script(monitor, None, None, "News A")
+    statuses = [c.args[1] for c in sink.update_health.call_args_list]
+    assert statuses[:4] == ["starting", "error", "error", "connected"]
