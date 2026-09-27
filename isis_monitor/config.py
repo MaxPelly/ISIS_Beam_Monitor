@@ -80,17 +80,17 @@ class InstrumentConfig:
     name: str
     notify_counts: float  # total µA·h collected at which "run about to finish" is sent
     beam_target: str  # which beam target's state to report in run cards
-    counts_pv: str = ""  # total µA·h collected this run; derived from the name when blank
-    run_name_pv: str = ""  # derived from the name when blank
     channel: str = "experiment"  # one of CHANNEL_MODES
     # The INI section it was read from, for error messages
     section: str = field(default="", compare=False, repr=False)
 
-    def __post_init__(self):
-        if not self.counts_pv:
-            self.counts_pv = f"IN:{self.name}:DAE:TOTALUAMPS"
-        if not self.run_name_pv:
-            self.run_name_pv = f"IN:{self.name}:DAE:WDTITLE"
+    @property
+    def counts_pv(self) -> str:  # total µA·h collected this run
+        return f"IN:{self.name}:DAE:TOTALUAMPS"
+
+    @property
+    def run_name_pv(self) -> str:
+        return f"IN:{self.name}:DAE:WDTITLE"
 
 
 @dataclass
@@ -104,17 +104,11 @@ class AppConfig:
     beam_teams_url: str = _ini("WEBHOOKS", "")
     experiment_teams_url: str = _ini("WEBHOOKS", "")
 
-    # Legacy single-instrument settings, used only when there are no
-    # [INSTRUMENT:<NAME>] sections (counts_pv now only supplies the name).
-    # instrument_target is also the default beam_target for instrument
-    # sections that don't set one.
-    counts_pv: str = _ini("PVS", "IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE")
-    run_name_pv: str = _ini("PVS", "IN:PEARL:DAE:WDTITLE")
     ts1_beam_current_pv: str = _ini("PVS", "AC:TS1:BEAM:CURR")
     ts2_beam_current_pv: str = _ini("PVS", "AC:TS2:BEAM:CURR")
     muon_beam_current_pv: str = _ini("PVS", "AC:MUON:BEAM:CURR")
-    notify_counts: float = _ini("PVS", 130.0)
-    instrument_target: str = _ini("PVS", "TS1")  # which beam target's state to report in run cards
+    # The default beam_target for instrument sections that don't set one
+    instrument_target: str = _ini("PVS", "TS1")
 
     # off / low / medium cutoffs in uA
     ts1_boundaries: tuple = _ini("BEAM_BOUNDARIES", (0.0, 50.0, 140.0))
@@ -153,7 +147,7 @@ class AppConfig:
     finish_warning_minutes: float = _ini("NOTIFICATIONS", 15.0)
     summary_time: str = _ini("NOTIFICATIONS", "08:00")  # local HH:MM the daily summary is sent at
 
-    # Built from the [INSTRUMENT:<NAME>] sections (or the legacy [PVS] keys)
+    # Built from the [INSTRUMENT:<NAME>] sections
     instruments: List[InstrumentConfig] = field(default_factory=list)
 
 
@@ -172,28 +166,13 @@ def _read_value(parser: configparser.ConfigParser, section: str, key: str, kind:
     return {int: parser.getint, float: parser.getfloat, bool: parser.getboolean}[kind](section, key)
 
 
-def _legacy_instrument_name(config: AppConfig) -> str:
-    for pv in (config.counts_pv, config.run_name_pv):
-        match = re.match(r"IN:([^:]+):", pv)
-        if match:
-            return match.group(1)
-    return "INSTRUMENT"
-
-
 def _read_instruments(
     parser: configparser.ConfigParser, config: AppConfig
 ) -> List[InstrumentConfig]:
-    """Instruments from the [INSTRUMENT:<NAME>] sections, or one built from the
-    legacy [PVS] keys when there are none."""
+    """Instruments from the [INSTRUMENT:<NAME>] sections."""
     sections = [s for s in parser.sections() if s.upper().startswith(INSTRUMENT_SECTION_PREFIX)]
     if not sections:
-        return [InstrumentConfig(
-            name=_legacy_instrument_name(config),
-            notify_counts=config.notify_counts,
-            beam_target=config.instrument_target,
-            run_name_pv=config.run_name_pv,
-            section="PVS",
-        )]
+        raise ConfigError("At least one [INSTRUMENT:<NAME>] section is required, e.g. [INSTRUMENT:PEARL]")
 
     instruments = []
     for section in sections:

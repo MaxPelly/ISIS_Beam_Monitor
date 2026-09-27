@@ -22,6 +22,7 @@ from isis_monitor.tests.helpers import FakePVWS, fake_channel, running, wait_unt
 
 
 PEARL_UAMPS = "IN:PEARL:DAE:TOTALUAMPS"
+PEARL_TITLE = "IN:PEARL:DAE:WDTITLE"
 
 
 def tracker(m):
@@ -49,7 +50,7 @@ def mock_channels():
     return fake_channel("Beam"), fake_channel("Exp")
 
 
-def title(name, pv=AppConfig.run_name_pv):
+def title(name, pv=PEARL_TITLE):
     """A PVWS run-title update; the title arrives base64-encoded."""
     raw = name if isinstance(name, bytes) else name.encode()
     return {"pv": pv, "b64byt": base64.b64encode(raw).decode()}
@@ -295,7 +296,7 @@ async def test_handle_update_run_name_nan_ignored(mock_config, mock_channels):
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
 
-    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": "nan"})
+    await m._handle_update({"pv": PEARL_TITLE, "b64byt": "nan"})
     assert tracker(m).state.run_name == ""
     exp_channel.broadcast.assert_not_called()
 
@@ -557,7 +558,7 @@ async def test_run_loop_subscribes_and_dispatches_updates(mock_config, mock_chan
 
     assert set(server.subscriptions[0]["pvs"]) == {
         mock_config.ts1_beam_current_pv, mock_config.ts2_beam_current_pv,
-        mock_config.muon_beam_current_pv, PEARL_UAMPS, mock_config.run_name_pv,
+        mock_config.muon_beam_current_pv, PEARL_UAMPS, PEARL_TITLE,
     }
     sink.update_beam_state.assert_called_with("TS1", 150.0, "high")
     sink.update_health.assert_any_call("beam", "connected")
@@ -692,7 +693,7 @@ async def test_aggregator_flush_without_pending_is_noop(mock_config, mock_channe
 
 async def test_handle_update_run_name_bad_base64_is_ignored(mock_config, mock_channels, caplog):
     m = make_monitor(mock_config, mock_channels)
-    await m._handle_update({"pv": mock_config.run_name_pv, "b64byt": "!!!not base64"})
+    await m._handle_update({"pv": PEARL_TITLE, "b64byt": "!!!not base64"})
     assert tracker(m).state.run_name == ""
     assert "Failed to decode run name" in caplog.text
 

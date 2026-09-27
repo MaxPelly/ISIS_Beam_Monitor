@@ -12,6 +12,9 @@ from isis_monitor.config import (
 
 
 def _write(tmp_path, extra: str) -> Path:
+    """A config with mcr_news_url, `extra`, and a PEARL instrument unless `extra` has instruments."""
+    if "[INSTRUMENT:" not in extra:
+        extra += "\n[INSTRUMENT:PEARL]\nnotify_counts = 130\n"
     config_file = tmp_path / "config.ini"
     config_file.write_text("[DATA]\nmcr_news_url = http://test.com/news\n" + extra)
     return config_file
@@ -28,6 +31,9 @@ isis_websocket_url = wss://test.com/ws
 news_teams_url = http://test.teams/news
 beam_teams_url = http://test.teams/beam
 experiment_teams_url = http://test.teams/exp
+
+[INSTRUMENT:PEARL]
+notify_counts = 130
 """)
     config = load_config(config_file)
     assert config.mcr_news_url == "http://test.com/news"
@@ -35,9 +41,7 @@ experiment_teams_url = http://test.teams/exp
     assert config.news_teams_url == "http://test.teams/news"
     assert config.beam_teams_url == "http://test.teams/beam"
     assert config.experiment_teams_url == "http://test.teams/exp"
-    # PV defaults
-    assert config.counts_pv == "IN:PEARL:CS:DASHBOARD:TAB:2:1:VALUE"
-    assert config.run_name_pv == "IN:PEARL:DAE:WDTITLE"
+    assert config.instruments == [InstrumentConfig("PEARL", 130.0, "TS1")]
 
 
 def test_load_config_missing_file():
@@ -47,8 +51,15 @@ def test_load_config_missing_file():
 
 def test_load_config_missing_mcr_url(tmp_path):
     config_file = tmp_path / "config.ini"
-    config_file.write_text("[DATA]\nisis_websocket_url = wss://test.com/ws\n")
+    config_file.write_text("[DATA]\nisis_websocket_url = wss://test.com/ws\n[INSTRUMENT:PEARL]\nnotify_counts = 1\n")
     with pytest.raises(ConfigError, match="mcr_news_url"):
+        load_config(config_file)
+
+
+def test_load_config_requires_an_instrument_section(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("[DATA]\nmcr_news_url = http://x\n[PVS]\ninstrument_target = TS2\n")
+    with pytest.raises(ConfigError, match=r"At least one \[INSTRUMENT:<NAME>\] section is required"):
         load_config(config_file)
 
 
@@ -152,13 +163,11 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     ("[DAEMON]\nretention_days = 100000000\n", "retention_days must be between"),
     ("[LOGGING]\nlog_backup_count = -1\n", "log_backup_count must be between"),
     ("[DAEMON]\nretention_days = 30\n[TUI]\nsample_interval = 1\n", "samples per beam"),
-    # Legacy [PVS] instrument
-    ("[PVS]\nnotify_counts = 0\n", r"^\[PVS\] notify_counts must be"),
-    ("[PVS]\nrun_name_pv = AC:TS1:BEAM:CURR\n", r"^\[PVS\] PV AC:TS1:BEAM:CURR is already used by the TS1 beam"),
     # [INSTRUMENT:*] sections
     ("[INSTRUMENT:]\n", "needs an instrument name"),
     ("[INSTRUMENT:PE ARL]\nnotify_counts = 5\n", "may only contain"),
     ("[INSTRUMENT:A:B]\nnotify_counts = 5\n", "may only contain"),
+    (PEARL + "notify_counts = 0\n", r"^\[INSTRUMENT:PEARL\] notify_counts must be a positive number"),
     (PEARL + "notify_counts = nan\n", "must be a positive number"),
     (PEARL + "notify_counts = inf\n", "must be a positive number"),
     (PEARL, "notify_counts is required"),
@@ -169,6 +178,8 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     (PEARL + "notify_counts = 5\n[INSTRUMENT:pearl]\nnotify_counts = 5\n", "defined more than once"),
     ("[PVS]\nts1_beam_current_pv = IN:PEARL:DAE:TOTALUAMPS\n" + PEARL + "notify_counts = 5\n",
      "already used by the TS1 beam"),
+    ("[PVS]\nts2_beam_current_pv = IN:PEARL:DAE:WDTITLE\n" + PEARL + "notify_counts = 5\n",
+     r"^\[INSTRUMENT:PEARL\] PV IN:PEARL:DAE:WDTITLE is already used by the TS2 beam"),
     # [NOTIFICATIONS], caught at load time so a bad edit can't leave the daemon failing on restart
     (NOTIF + "timezone = Nowhere/City\n", "not a known timezone"),
     (NOTIF + "timezone = ../etc\n", "not a known timezone"),
@@ -205,29 +216,11 @@ def test_load_config_custom_boundaries(tmp_path):
     assert config.ts1_boundaries == (0.0, 50.0, 140.0)
 
 
-def test_legacy_pvs_become_single_instrument(tmp_path):
-    """With no [INSTRUMENT:*] sections, the [PVS] keys still define one instrument,
-    named from the counts PV, with its progress read from TOTALUAMPS."""
-    config = load_config(_write(
-        tmp_path, "[PVS]\ncounts_pv = IN:WISH:COUNTS\nrun_name_pv = IN:WISH:TITLE\ninstrument_target = TS2\nnotify_counts = 50\n"
-    ))
-    assert config.instruments == [
-        InstrumentConfig("WISH", 50.0, "TS2", run_name_pv="IN:WISH:TITLE")
-    ]
-    assert config.instruments[0].counts_pv == "IN:WISH:DAE:TOTALUAMPS"
-
-
-def test_legacy_instrument_name_fallback(tmp_path):
-    config = load_config(_write(tmp_path, "[PVS]\ncounts_pv = COUNTS\nrun_name_pv = TITLE\n"))
-    assert config.instruments[0].name == "INSTRUMENT"
-
-
 def test_instrument_sections(tmp_path):
     """Section names are case-insensitive and instrument names upper-cased."""
     config = load_config(_write(tmp_path, """\
 [PVS]
 instrument_target = TS2
-counts_pv = IGNORED
 [INSTRUMENT:PEARL]
 notify_counts = 200
 beam_target = TS1
@@ -321,13 +314,6 @@ def test_update_config_file_removes_dropped_instruments(tmp_path):
     path = _editable_file(tmp_path, EDITABLE_BASE + "[Instrument:WISH]\nnotify_counts = 5\n")
     update_config_file(path, {"instruments": [{"name": "WISH", "notify_counts": "5"}]})
     assert [i.name for i in load_config(path).instruments] == ["WISH"]
-
-
-def test_update_config_file_migrates_legacy_pvs_config(tmp_path):
-    path = _editable_file(tmp_path, "[DATA]\nmcr_news_url = http://x\n[PVS]\ncounts_pv = IN:WISH:C\nnotify_counts = 40\n")
-    update_config_file(path, editable_settings(load_config(path)))
-    assert "[INSTRUMENT:WISH]" in path.read_text()
-    assert load_config(path).instruments == [InstrumentConfig("WISH", 40.0, "TS1")]
 
 
 def test_update_config_file_only_notifications_leaves_instruments(tmp_path):
@@ -436,4 +422,3 @@ notify_counts = 50
 channel = Instrument
 """))
     assert [(i.name, i.channel) for i in config.instruments] == [("PEARL", "experiment"), ("WISH", "instrument")]
-    assert load_config(_write(tmp_path, "")).instruments[0].channel == "experiment"  # legacy

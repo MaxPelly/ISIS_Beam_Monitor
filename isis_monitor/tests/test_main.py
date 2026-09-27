@@ -514,7 +514,8 @@ def test_parse_args_modes():
 
 def _ini(tmp_path) -> str:
     ini = tmp_path / "c.ini"
-    ini.write_text(f"[DATA]\nmcr_news_url = http://x\n[DAEMON]\nlock_file = {tmp_path / 'd.lock'}\n")
+    ini.write_text(f"[DATA]\nmcr_news_url = http://x\n[DAEMON]\nlock_file = {tmp_path / 'd.lock'}\n"
+                   "[INSTRUMENT:PEARL]\nnotify_counts = 130\n")
     return str(ini)
 
 
