@@ -61,6 +61,7 @@ A decoupled notification system.
 ### `isis_monitor/tui.py`
 The live terminal interface.
 -   **`RichTUI`**: Coordinates the layout and rendering. All updates arrive on the event loop from the IPC event stream (`main.tui_connection_loop`); history comes from the daemon's `sample` events.
+-   **Compact layout**: below `COMPACT_WIDTH` (80) columns `_make_layout()` builds a phone-sized layout (header, beams on one line, two lines per instrument, MCR news) with no graph or logs panel; their updates return early but the data is still kept. `set_compact()` rebuilds the layout and swaps it into Live; `main.run_tui` calls `fit_to_width()` at start and on `SIGWINCH`, and the `v` key calls `toggle_compact()`, after which resizes no longer change the layout.
 -   **`sparkline_chars(values, width)`**: a pure, uncoloured sparkline renderer shared with `summary.py`; `_render_sparkline()` wraps it to add per-block colour for the TUI.
 -   **Instruments panel**: `set_instruments()` (from the snapshot) and `update_instrument()` (from `run`/`counts` events) feed a table of run name and a progress bar towards `notify_counts`, capped at 8 rows plus "+N more".
 -   **Keys** (`main.run_tui`): stdin is in cbreak mode and read with `os.read` (not `sys.stdin`, whose buffer can swallow keys or block the loop). `c` hands the terminal to the config editor: the key reader is removed, Live is stopped and canonical mode restored, then everything is put back when the editor exits (or skipped if the TUI is quitting). Keys read in the same chunk as `c` are passed to the editor as `typed_ahead`.
@@ -121,7 +122,7 @@ In `RichTUI._make_layout()`, sections are defined using `split_column` and `spli
 
 ### Potential Features
 -   **Prometheus Exporter**: Add a lightweight HTTP endpoint to export beam metrics and health status for ingestion by Prometheus/Grafana.
--   **Interactive TUI**: The TUI already has `r` (reconnect) and `c` (config editor); further shortcuts could toggle specific notification channels or change view modes. The editor only covers `[NOTIFICATIONS]` and instruments; extending `EDITABLE_NOTIFICATION_KEYS`/`editable_settings()` would expose more (keep secrets like webhook URLs out of it).
+-   **Interactive TUI**: The TUI already has `r` (reconnect) and `c` (config editor) and `v` (compact/full layout); further shortcuts could toggle specific notification channels. The editor only covers `[NOTIFICATIONS]` and instruments; extending `EDITABLE_NOTIFICATION_KEYS`/`editable_settings()` would expose more (keep secrets like webhook URLs out of it).
 -   **Multiple Notifiers**: Add support for Email, Slack, or SMS notifiers by implementing the `Notifier` interface.
 
 ### Best Practices for Extension
