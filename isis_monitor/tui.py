@@ -255,7 +255,7 @@ class RichTUI:
         else:
             header = Panel(
                 Text.assemble(
-                    (f"ISIS Facility Monitor  [{self.connection_state}]", "bold cyan"),
+                    (f"ISIS Monitor  [{self.connection_state}]", "bold cyan"),
                     (f"   {keys}", "dim"),
                     justify="center",
                 ),
