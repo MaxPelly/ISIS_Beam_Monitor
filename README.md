@@ -140,7 +140,13 @@ python main.py tui path/to/config.ini
 In TUI mode, single keys (no Enter needed) control the client:
 - `r`: force reconnect (beam + MCR) on daemon
 - `c`: edit the configuration (see below)
+- `v`: switch between the full and compact layouts
 - `q`: quit TUI client
+
+Terminals narrower than 80 columns (e.g. a phone) get a compact layout with just
+the beam currents (coloured by state), the instruments and the MCR news, stacked
+vertically. The layout follows the terminal as it is resized until `v` picks one
+by hand.
 
 ### Editing the configuration from the TUI
 
