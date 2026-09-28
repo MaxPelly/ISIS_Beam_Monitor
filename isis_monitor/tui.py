@@ -249,7 +249,7 @@ class RichTUI:
 
     def _update_all(self):
         """Force-refresh every panel."""
-        keys = "r reconnect · c config · q quit"
+        keys = "r reconnect · c config · v view · q quit"
         if self.compact:  # no border, and the keys on their own line
             header = Text.assemble((f"ISIS Monitor  [{self.connection_state}]", "bold cyan"), "\n", (keys, "dim"))
         else:

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+import shutil
 import signal
 import sqlite3
 import sys
@@ -458,6 +459,8 @@ def handle_tui_key(
     ch = ch.lower()
     if ch == "q":
         stop_event.set()
+    elif ch == "v":
+        tui.toggle_compact()
     elif ch in ("r", "c"):
         if client is None:
             tui.update_log("Not connected to the daemon.")
@@ -481,6 +484,11 @@ async def run_tui(config, stop_event: asyncio.Event):
         refresh_per_second=config.refresh_per_second,
         logs_maxlen=config.logs_maxlen,
     )
+
+    def fit_layout() -> None:  # compact on narrow terminals, e.g. phones
+        tui.fit_to_width(shutil.get_terminal_size().columns)
+
+    fit_layout()
     tui.start()
 
     client: Optional[IPCClient] = None
@@ -564,12 +572,14 @@ async def run_tui(config, stop_event: asyncio.Event):
                 loop.add_reader(fd, on_key)
 
     loop.add_reader(fd, on_key)
+    loop.add_signal_handler(signal.SIGWINCH, fit_layout)
     try:
         await run_until_stopped(tui_connection_loop(config, tui, set_client), stop_event)
     finally:
         for task in list(key_tasks):  # e.g. an open config editor
             task.cancel()
         await asyncio.gather(*key_tasks, return_exceptions=True)
+        loop.remove_signal_handler(signal.SIGWINCH)
         loop.remove_reader(fd)
         tui.stop()
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)

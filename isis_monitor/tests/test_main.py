@@ -469,6 +469,9 @@ async def test_handle_tui_key():
     await asyncio.gather(*tasks)
     edit_config.assert_awaited_once_with()
 
+    main.handle_tui_key("V", client, stop, tui, tasks)
+    tui.toggle_compact.assert_called_once_with()
+
     main.handle_tui_key("x", client, stop, tui, tasks)
     assert not stop.is_set()
     main.handle_tui_key("Q", client, stop, tui, tasks)
@@ -777,6 +780,24 @@ async def test_run_tui_c_hands_the_terminal_to_the_config_editor_and_back(tmp_pa
             os.write(keys, b"q")
             await asyncio.wait_for(task, 2)
     assert tui.stop.call_count == 2
+
+
+async def test_run_tui_fits_the_layout_to_the_terminal_width_on_resize(tmp_path):
+    async with daemon_with_file(tmp_path) as (_task, _client, _ini):
+        with tui_terminal() as (tui, keys, _termios, _tty), \
+                patch("main.shutil.get_terminal_size", return_value=os.terminal_size((66, 37))):
+            stop = asyncio.Event()
+            task = await start_tui(tui, _config(tmp_path), stop)
+            tui.fit_to_width.assert_called_once_with(66)  # before the display starts
+
+            os.kill(os.getpid(), signal.SIGWINCH)
+            await wait_until(lambda: tui.fit_to_width.call_count == 2)
+
+            os.write(keys, b"q")
+            await asyncio.wait_for(task, 2)
+            os.kill(os.getpid(), signal.SIGWINCH)  # the handler is gone
+            await asyncio.sleep(0.05)
+    assert tui.fit_to_width.call_count == 2
 
 
 async def test_quitting_the_tui_cancels_an_open_config_editor(tmp_path, capsys):
