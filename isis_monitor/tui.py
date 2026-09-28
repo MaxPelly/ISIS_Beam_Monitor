@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Deque, Tuple
 
 from rich import box
+from rich.console import Group
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -248,16 +249,19 @@ class RichTUI:
 
     def _update_all(self):
         """Force-refresh every panel."""
-        self.layout["header"].update(
-            Panel(
+        keys = "r reconnect · c config · q quit"
+        if self.compact:  # no border, and the keys on their own line
+            header = Text.assemble((f"ISIS Monitor  [{self.connection_state}]", "bold cyan"), "\n", (keys, "dim"))
+        else:
+            header = Panel(
                 Text.assemble(
                     (f"ISIS Facility Monitor  [{self.connection_state}]", "bold cyan"),
-                    ("   r reconnect · c config · q quit", "dim"),
+                    (f"   {keys}", "dim"),
                     justify="center",
                 ),
                 style="blue",
             )
-        )
+        self.layout["header"].update(header)
         self._update_beam_panel()
         self._update_beam_graph()
         self._update_instruments_panel()
@@ -266,6 +270,18 @@ class RichTUI:
 
     def _update_beam_panel(self):
         """Render the current-snapshot table into beam_table."""
+        time_str = self.last_update.strftime("%H:%M:%S")
+        if self.compact:  # one line, the state shown by colour alone
+            grid = Table.grid(expand=True)
+            for beam, state in self.beam_states.items():
+                grid.add_column(no_wrap=True)
+            grid.add_row(*(
+                Text(f"{beam} {state['current']:.1f} μA", style=_get_state_colour(state["power"]))
+                for beam, state in self.beam_states.items()
+            ))
+            self.layout["beam_table"].update(Panel(grid, title=f"Beams · {time_str}", border_style="cyan"))
+            return
+
         table = Table(show_header=True, header_style="bold magenta", expand=True)
         table.add_column("Beam Target")
         table.add_column("Current (μA)", justify="right")
@@ -280,7 +296,6 @@ class RichTUI:
                 f"[{power_style}]{str(state['power']).upper()}[/]",
             )
 
-        time_str = self.last_update.strftime("%H:%M:%S")
         self.layout["beam_table"].update(
             Panel(
                 table,
@@ -322,11 +337,39 @@ class RichTUI:
         # panel borders (2) + table header and its rule (2) + one line per
         # shown instrument, plus one for "+N more"
         n = len(self.instruments)
+        if self.compact:  # borders, two lines per instrument, and "+N more"
+            return 2 + 2 * max(min(n, _MAX_INSTRUMENT_ROWS), 1) + (n > _MAX_INSTRUMENT_ROWS)
         if n > _MAX_INSTRUMENT_ROWS:
             return 4 + _MAX_INSTRUMENT_ROWS + 1
         return 4 + max(n, 1)
 
+    def _target_text(self, info: dict) -> Text:
+        """An instrument's beam target, coloured by that beam's power."""
+        target = str(info.get("beam_target", ""))
+        beam = self.beam_states.get(TARGET_LABELS.get(target, target), {})
+        return Text(target, style=_get_state_colour(beam.get("power", "unknown")))
+
     def _update_instruments_panel(self):
+        shown = list(self.instruments.items())[:_MAX_INSTRUMENT_ROWS]
+        hidden = len(self.instruments) - len(shown)
+        if self.compact:  # name, beam and progress, then the run name on a line of its own
+            name_w = max((len(name) for name, _ in shown), default=0)
+            lines = []
+            for name, info in shown:
+                first = Table.grid(expand=True)
+                first.add_column(no_wrap=True, ratio=1)
+                first.add_column(no_wrap=True)
+                first.add_row(
+                    Text.assemble(f"{name:<{name_w}}  ", self._target_text(info)),
+                    _progress_bar(float(info.get("counts", -1.0)), float(info.get("notify_counts", 0.0))),
+                )
+                run = str(info.get("run_name", "")) or "—"
+                lines += [first, Text(f"  {run}", no_wrap=True, overflow="ellipsis")]
+            if hidden:
+                lines.append(Text(f"+{hidden} more", style="dim"))
+            self.layout["instruments"].update(Panel(Group(*lines), title="Instruments", border_style="cyan"))
+            return
+
         # SIMPLE_HEAD (no outer border) leaves the run name as much room as possible.
         table = Table(show_header=True, header_style="bold magenta", expand=True, box=box.SIMPLE_HEAD,
                       pad_edge=False, show_edge=False, collapse_padding=True)
@@ -335,17 +378,13 @@ class RichTUI:
         table.add_column("Run", overflow="ellipsis", no_wrap=True, ratio=1)
         table.add_column("µA·h", no_wrap=True)
 
-        shown = list(self.instruments.items())[:_MAX_INSTRUMENT_ROWS]
         for name, info in shown:
-            target = str(info.get("beam_target", ""))
-            beam = self.beam_states.get(TARGET_LABELS.get(target, target), {})
             table.add_row(
                 name,
-                Text(target, style=_get_state_colour(beam.get("power", "unknown"))),
+                self._target_text(info),
                 str(info.get("run_name", "")) or "—",
                 _progress_bar(float(info.get("counts", -1.0)), float(info.get("notify_counts", 0.0))),
             )
-        hidden = len(self.instruments) - len(shown)
         if hidden:
             table.add_row(Text(f"+{hidden} more", style="dim"), "", "", "")
 

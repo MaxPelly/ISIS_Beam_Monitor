@@ -270,7 +270,6 @@ class TestProgressBar:
         assert _progress_bar(150.0, 100.0).plain == "████████ 150/100"
 
 
-
 # ---------------------------------------------------------------------------
 # Compact layout switching
 # ---------------------------------------------------------------------------
@@ -303,3 +302,32 @@ class TestCompactLayout:
         assert tui.compact
         tui.fit_to_width(120)  # the manual choice sticks
         assert tui.compact
+
+    def test_compact_panels_fit_a_phone_screen(self):
+        from rich.console import Console
+        tui = make_tui()
+        tui.set_compact(True)
+        tui.update_connection_state("connected")
+        tui.update_beam_state("TS1", 172.43, "high")
+        tui.set_instruments({f"I{n}": dict(INSTRUMENTS["PEARL"], run_name="x" * 100) for n in range(9)})
+        assert tui.layout["instruments"].size == 2 + 2 * 8 + 1
+        console = Console(width=66, height=37, record=True)
+        console.print(tui.layout)
+        text = console.export_text()
+        lines = text.splitlines()
+        assert len(lines) == 37 and lines[0].startswith("ISIS Monitor  [CONNECTED]")
+        beams = next(line for line in lines if "TS1" in line)
+        assert "TS1 172.4 μA" in beams and "TS2 0.0 μA" in beams and "HIGH" not in beams
+        assert "I7" in text and "I8" not in text and "+1 more" in text
+        assert any(line.startswith("│   xxx") and line.endswith("x… │") for line in lines)  # run names are cut
+
+    def test_compact_beams_coloured_by_state_and_instruments_by_target(self):
+        tui = make_tui()
+        tui.set_compact(True)
+        tui.set_instruments(INSTRUMENTS)
+        tui.update_beam_state("Muons", 1.0, "off")
+        beams = tui.layout["beam_table"].renderable.renderable.columns
+        assert [c._cells[0].style for c in beams] == ["red", "red", "red"]  # unknown, unknown, off
+        emu_first_line = tui.layout["instruments"].renderable.renderable.renderables[2]
+        assert emu_first_line.columns[0]._cells[0].spans[-1].style == "red"
+        assert tui.layout["instruments"].size == 2 + 2 * 2
