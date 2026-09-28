@@ -272,8 +272,8 @@ class RichTUI:
         """Render the current-snapshot table into beam_table."""
         time_str = self.last_update.strftime("%H:%M:%S")
         if self.compact:  # one line, the state shown by colour alone
-            grid = Table.grid(expand=True)
-            for beam, state in self.beam_states.items():
+            grid = Table.grid(expand=True, padding=(0, 1))
+            for _ in self.beam_states:
                 grid.add_column(no_wrap=True)
             grid.add_row(*(
                 Text(f"{beam} {state['current']:.1f} μA", style=_get_state_colour(state["power"]))
