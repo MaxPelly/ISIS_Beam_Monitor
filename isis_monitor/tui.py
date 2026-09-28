@@ -27,6 +27,8 @@ def _get_state_colour(state):
 _PROGRESS_WIDTH = 8
 # Beyond this the panel shows "+N more", so the MCR news panel keeps its space.
 _MAX_INSTRUMENT_ROWS = 8
+# Terminals narrower than this (e.g. phones) get the compact layout.
+COMPACT_WIDTH = 80
 
 
 def _progress_bar(counts: float, target: float) -> Text:
@@ -130,6 +132,9 @@ class RichTUI:
         self._logs: Deque[str] = deque(maxlen=logs_maxlen)
         self.last_update = datetime.now(timezone.utc)
         self.connection_state = "DISCONNECTED"
+        # Compact: beams, instruments and MCR news only, stacked vertically.
+        self.compact = False
+        self._auto_layout = True  # until the user picks a layout by hand
 
         self.layout = self._make_layout()
         self.live = Live(self.layout, refresh_per_second=refresh_per_second, screen=True)
@@ -140,6 +145,14 @@ class RichTUI:
 
     def _make_layout(self) -> Layout:
         layout = Layout()
+        if self.compact:
+            layout.split_column(
+                Layout(name="header", size=2),
+                Layout(name="beam_table", size=3),
+                Layout(name="instruments", size=self._instruments_panel_height()),
+                Layout(name="mcr"),
+            )
+            return layout
         layout.split_column(
             Layout(name="header", size=3),
             Layout(name="main"),
@@ -171,6 +184,24 @@ class RichTUI:
     def stop(self):
         """Stop the live TUI display."""
         self.live.stop()
+
+    def set_compact(self, compact: bool) -> None:
+        """Switch between the compact and full layouts."""
+        if compact != self.compact:
+            self.compact = compact
+            self.layout = self._make_layout()
+            self._update_all()
+            self.live.update(self.layout)
+
+    def fit_to_width(self, columns: int) -> None:
+        """Pick the layout for a terminal this wide, unless the user chose one."""
+        if self._auto_layout:
+            self.set_compact(columns < COMPACT_WIDTH)
+
+    def toggle_compact(self) -> None:
+        """Switch layout by hand; the choice then sticks through resizes."""
+        self._auto_layout = False
+        self.set_compact(not self.compact)
 
     # ------------------------------------------------------------------
     # Public update API  (called from main.py's IPC event handler)
@@ -260,6 +291,8 @@ class RichTUI:
 
     def _update_beam_graph(self):
         """Render the rolling sparkline graph into beam_graph."""
+        if self.compact:  # not shown; the history is drawn on switching back
+            return
         # Approximate usable width: terminal width minus half for layout split, minus borders/padding and label.
         term_width = shutil.get_terminal_size((120, 24)).columns
         SPARK_WIDTH = max(10, (term_width // 2) - 30)
@@ -354,6 +387,8 @@ class RichTUI:
         self._update_all()
 
     def _update_logs_panel(self):
+        if self.compact:
+            return
         # The panel has 14 rows (layout size 16, less borders), and a log entry
         # can span several lines; long lines are cut rather than wrapped, so
         # the newest lines always fit.

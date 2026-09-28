@@ -269,3 +269,37 @@ class TestProgressBar:
         assert _progress_bar(25.0, 100.0).plain == "██░░░░░░ 25/100"
         assert _progress_bar(150.0, 100.0).plain == "████████ 150/100"
 
+
+
+# ---------------------------------------------------------------------------
+# Compact layout switching
+# ---------------------------------------------------------------------------
+
+class TestCompactLayout:
+    def test_compact_layout_has_only_the_key_panels(self):
+        tui = make_tui()
+        tui.set_compact(True)
+        assert [child.name for child in tui.layout.children] == ["header", "beam_table", "instruments", "mcr"]
+        assert tui.live.renderable is tui.layout
+        tui.update_log("hidden")  # panels not in the layout are skipped, not errors
+        tui.add_history_sample("TS1", datetime.now(timezone.utc), 1.0, "low")
+        assert tui._logs[-1] == "hidden" and len(tui._history["TS1"]) == 1
+
+    def test_switching_back_redraws_the_hidden_panels(self):
+        tui = make_tui()
+        tui.set_compact(True)
+        tui.update_log("while compact")
+        tui.set_compact(False)
+        assert "while compact" in _panel_text(tui, "logs")
+        assert "0/60 samples" in _panel_text(tui, "beam_graph")
+
+    def test_fit_to_width_until_toggled_by_hand(self):
+        tui = make_tui()
+        tui.fit_to_width(66)
+        assert tui.compact
+        tui.fit_to_width(80)
+        assert not tui.compact
+        tui.toggle_compact()
+        assert tui.compact
+        tui.fit_to_width(120)  # the manual choice sticks
+        assert tui.compact
