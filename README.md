@@ -130,6 +130,16 @@ Sends every notification, on all three channels, as HMAC-signed JSON to one URL 
 well as to Teams. It's meant for the optional `push_site` submodule (mobile push
 notifications), but any receiver that checks the signature will work.
 
+The push site is a separate repository, included here as the `push_site` git submodule.
+A plain clone leaves it empty, and the monitor works without it. To use it:
+
+```bash
+git submodule update --init push_site   # or clone with --recurse-submodules
+```
+
+`push_site/README.md` then covers setting it up, sharing this secret with it, and
+inviting people's phones.
+
 ```ini
 [PUSH]
 url = http://127.0.0.1:8765/ingest
