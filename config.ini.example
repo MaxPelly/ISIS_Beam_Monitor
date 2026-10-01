@@ -11,6 +11,17 @@ news_teams_url =
 beam_teams_url =
 experiment_teams_url =
 
+[PUSH]
+# Optional: also POST every notification as HMAC-signed JSON to this URL, e.g. the
+# push_site submodule (mobile push notifications). Leave blank to disable.
+# url = http://127.0.0.1:8765/ingest
+# File holding the shared secret (at least 32 characters, e.g. from
+# `openssl rand -hex 32`); keep it chmod 600.
+# secret_file = push.secret
+# Seconds before a send is abandoned (0.5-30); kept short so a slow receiver
+# barely delays the Teams cards queued behind it.
+# timeout = 2
+
 # One section per monitored instrument; run notifications for all of them go
 # to experiment_teams_url, with the instrument name in the card title.
 #   notify_counts  (required) the run's target, in total µA·h collected; the

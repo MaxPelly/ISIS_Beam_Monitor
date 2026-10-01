@@ -193,6 +193,11 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     (NOTIF + "finish_warning_minutes = nan\n", "finish_warning_minutes must be between"),
     (NOTIF + "summary_time = not-a-time\n", "summary_time"),
     (NOTIF + "summary_time = 25:00\n", "summary_time"),
+    # [PUSH]
+    ("[PUSH]\nurl = ftp://x\nsecret_file = s\n", r"\[PUSH\] url must start with"),
+    ("[PUSH]\nurl = http://127.0.0.1:8765/ingest\n", r"\[PUSH\] secret_file is required"),
+    ("[PUSH]\nurl = http://127.0.0.1:8765/ingest\nsecret_file = /nonexistent/s\n", "could not be read"),
+    ("[PUSH]\ntimeout = 0\n", r"\[PUSH\] timeout must be between"),
 ])
 def test_invalid_config_raises_config_error(tmp_path, extra, match):
     with pytest.raises(ConfigError, match=match):
@@ -422,3 +427,28 @@ notify_counts = 50
 channel = Instrument
 """))
     assert [(i.name, i.channel) for i in config.instruments] == [("PEARL", "experiment"), ("WISH", "instrument")]
+
+
+def test_push_secret_is_read_and_checked(tmp_path, caplog):
+    secret_file = tmp_path / "push.secret"
+    push = f"[PUSH]\nurl = http://127.0.0.1:8765/ingest\nsecret_file = {secret_file}\n"
+
+    secret_file.write_text("short\n")
+    with pytest.raises(ConfigError, match="at least 32"):
+        load_config(_write(tmp_path, push))
+
+    secret_file.write_text("x" * 40 + "\n")
+    secret_file.chmod(0o600)
+    config = load_config(_write(tmp_path, push))
+    assert config.push_secret == b"x" * 40  # surrounding whitespace dropped
+    assert "x" * 40 not in repr(config)
+    assert "world-readable" not in caplog.text
+
+    secret_file.chmod(0o644)
+    load_config(_write(tmp_path, push))
+    assert "world-readable" in caplog.text
+
+
+def test_push_disabled_by_default(tmp_path):
+    config = load_config(_write(tmp_path, ""))
+    assert (config.push_url, config.push_secret, config.push_timeout) == ("", b"", 2.0)

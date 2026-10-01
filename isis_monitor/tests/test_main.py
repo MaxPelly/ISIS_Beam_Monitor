@@ -18,7 +18,7 @@ import main
 from isis_monitor.config import AppConfig, InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.ipc import IPCClient
-from isis_monitor.notifiers import DummyNotifier, TeamsNotifier
+from isis_monitor.notifiers import DummyNotifier, TeamsNotifier, WebhookNotifier
 from isis_monitor.storage import SQLiteStateStore
 from isis_monitor.tests.helpers import FakePVWS, never_answers, serving, wait_until
 from main import SingleInstanceLock, StateLogHandler
@@ -215,6 +215,18 @@ def test_build_channels_only_configured_webhooks(tmp_path):
     assert beam.notifiers[0].timeout == 3
     assert exp.notifiers == []
     assert isinstance(mcr.notifiers[0], TeamsNotifier)
+
+
+def test_build_channels_adds_the_push_webhook_to_every_channel(tmp_path):
+    channels = main.build_channels(
+        _config(tmp_path, beam_teams_url="http://beam", push_url="http://push", push_secret=b"s" * 32, push_timeout=1),
+        dummy=False,
+    )
+    for ch in channels:
+        push = ch.notifiers[-1]
+        assert isinstance(push, WebhookNotifier)
+        assert (push.webhook_url, push.secret, push.timeout) == ("http://push", b"s" * 32, 1)
+    assert [type(n) for n in channels[0].notifiers] == [TeamsNotifier, WebhookNotifier]
 
 
 # ---------------------------------------------------------------------------

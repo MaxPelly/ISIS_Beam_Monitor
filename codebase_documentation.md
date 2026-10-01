@@ -37,7 +37,7 @@ Handles MCR news polling.
 
 ### `isis_monitor/messages.py`
 Builds the structured, channel-agnostic notifications used everywhere else.
--   **`Notification`**: A dataclass (title, text, severity, emoji, facts, flavour, url/url_label, timestamp) with a `to_plain_text()` method used by `DummyNotifier` and log lines.
+-   **`Notification`**: A dataclass (title, text, severity, emoji, facts, flavour, url/url_label, timestamp, channel, topic) with a `to_plain_text()` method used by `DummyNotifier` and log lines.
 -   **`Severity`**: `INFO` / `GOOD` / `WARNING` / `ATTENTION`, mapped to Adaptive Card container styles by `notifiers.py`.
 -   **Builders**: one pure function per notification-worthy event — `beam_change`, `startup_status`, `run_started`, `run_finishing`, `collection_stalled`, `mcr_news`, `daily_summary`, `run_milestone`. Each takes an optional `rng: random.Random` so callers can opt into a `flavour.py` line (only when `fun_mode` is on) while keeping the builders deterministic and pure for tests. The run builders take the instrument name as their first argument and prefix it to the title, and an optional `channel`: blank (the default) is filled with "Experiment Updates" on broadcast, which downstream Power Automate flows route on; `InstrumentTracker._card_channel()` passes the instrument's name instead when its config sets `channel = instrument`.
 -   **`fmt_time` / `fmt_duration` / `set_timezone` / `get_timezone`**: shared formatting helpers; the display timezone is process-global, set once from `[NOTIFICATIONS] timezone` at startup.
@@ -55,7 +55,9 @@ Daily per-target uptime summaries and milestone tracking.
 ### `isis_monitor/notifiers.py`
 A decoupled notification system.
 -   **`Notifier` (Abstract)**: Base class for notification implementations; `send()` takes a `Notification`.
+-   **`HTTPNotifier`**: Base for notifiers that POST JSON: subclasses provide `_create_payload()` (and may override `_request_kwargs()`), and it handles the session, retries and `Retry-After` described under `TeamsNotifier`.
 -   **`TeamsNotifier`**: Renders a `Notification` as a Microsoft Teams Adaptive Card (severity-coloured header, body text, italic flavour line, `FactSet`, optional `Action.OpenUrl` button) and posts it via webhook. A 429, a 5xx or a network error/timeout is retried after `RETRY_DELAYS` (2s, then 4s: three attempts in all), or after the server's `Retry-After` (seconds or HTTP date) capped at `MAX_RETRY_AFTER` (60s); other 4xx responses aren't retried. The channel's worker waits during retries, so later notifications on that channel are delayed (bounded by the attempts, `webhook_timeout` and the delays), but other channels and callers aren't.
+-   **`WebhookNotifier`**: POSTs the `Notification` as versioned JSON (`"v": 1`, a fresh `id`, its fields including `topic`, and `summary`) signed with `X-Timestamp` and `X-Signature` (hex HMAC-SHA256 of `<timestamp>.<body>`). Each attempt is re-signed but keeps the `id`, so a receiver can drop repeats. `[PUSH] url` adds one to every channel, with a short `timeout` (2s default) because the notifiers in a channel are sent together, so a slow receiver delays that channel's next Teams card.
 -   **`NotificationChannel`**: Groups multiple notifiers for a specific category of updates (e.g., "Beam Updates"). `broadcast()` only queues the notification (bounded at 100; the oldest is dropped with a warning when full) and returns; one worker task per channel sends them in order, so a slow or hung webhook never holds up the caller — in particular the beam WebSocket loop, which would otherwise stop reading and miss keepalive pongs. A failing notifier is logged without affecting the others. `close()` gives queued notifications up to `CLOSE_TIMEOUT` (5s) to go out, then stops the worker and releases every notifier's resources; later broadcasts are logged and dropped.
 
 ### `isis_monitor/tui.py`
@@ -89,6 +91,7 @@ Manages local communication between the daemon and clients.
 Configuration is managed via `config.ini` files, loaded through `isis_monitor/config.py`. Key sections include:
 -   **`[DATA]`**: WebSocket and HTTP URLs for data sources, plus the optional `mcr_page_url` link button.
 -   **`[WEBHOOKS]`**: URLs for Teams integration (should be kept secure). A blank URL disables that channel's Teams notifier.
+-   **`[PUSH]`**: optional `url`, `secret_file` and `timeout` for the `WebhookNotifier`. `parse_config()` reads the secret into `AppConfig.push_secret` (left out of `repr`), requiring at least 32 characters and warning if the file is world-readable. These keys aren't TUI-editable.
 -   **`[INSTRUMENT:<NAME>]`**: one per instrument — `notify_counts` (required, µA·h), `beam_target` and `channel` (`experiment`/`instrument`, both optional); at least one is required; parsed into `AppConfig.instruments` (`InstrumentConfig`, with `counts_pv` derived as `IN:<NAME>:DAE:TOTALUAMPS` and `run_name_pv` as `IN:<NAME>:DAE:WDTITLE`).
 -   **`[PVS]`**: `instrument_target` (the default `beam_target` for instrument sections that don't set one; TS1) and the beam-current PVs.
 -   **`[DAEMON]`** / **`[TUI_CLIENT]`**: Paths for UNIX sockets, SQLite database, and retention settings.

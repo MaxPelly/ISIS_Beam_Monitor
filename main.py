@@ -34,7 +34,7 @@ from isis_monitor.daemon_state import DaemonState
 from isis_monitor.ipc import IPCClient, IPCServer
 from isis_monitor.mcr import MCRNewsMonitor
 from isis_monitor.messages import set_timezone
-from isis_monitor.notifiers import DummyNotifier, NotificationChannel, TeamsNotifier
+from isis_monitor.notifiers import DummyNotifier, NotificationChannel, TeamsNotifier, WebhookNotifier
 from isis_monitor.storage import SQLiteStateStore
 from isis_monitor.summary import daily_summary_loop
 from isis_monitor.tui import RichTUI
@@ -150,8 +150,11 @@ def build_channels(config, dummy: bool):
         ch = NotificationChannel(name)
         if dummy:
             ch.add_notifier(DummyNotifier())
-        elif url:
-            ch.add_notifier(TeamsNotifier(url, timeout=config.webhook_timeout))
+        else:
+            if url:
+                ch.add_notifier(TeamsNotifier(url, timeout=config.webhook_timeout))
+            if config.push_url:
+                ch.add_notifier(WebhookNotifier(config.push_url, config.push_secret, timeout=config.push_timeout))
         return ch
 
     return (

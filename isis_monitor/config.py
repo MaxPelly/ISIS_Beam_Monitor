@@ -48,6 +48,7 @@ _BOUNDS = {
     "mcr_poll_interval": (5, 86400),
     "beam_reconnect_interval": (0.5, 3600),
     "webhook_timeout": (1, 300),
+    "push_timeout": (0.5, 30),
     "sample_interval": (1, 3600),
     "history_maxlen": (1, 100_000),
     "refresh_per_second": (1, 60),
@@ -104,6 +105,13 @@ class AppConfig:
     news_teams_url: str = _ini("WEBHOOKS", "")
     beam_teams_url: str = _ini("WEBHOOKS", "")
     experiment_teams_url: str = _ini("WEBHOOKS", "")
+
+    # Optional signed-JSON webhook for every channel (e.g. the push_site
+    # submodule); a blank url disables it.
+    push_url: str = _ini("PUSH", "", "url")
+    push_secret_file: str = _ini("PUSH", "", "secret_file")
+    push_timeout: float = _ini("PUSH", 2.0, "timeout")
+    push_secret: bytes = field(default=b"", repr=False)  # read from push_secret_file
 
     ts1_beam_current_pv: str = _ini("PVS", "AC:TS1:BEAM:CURR")
     ts2_beam_current_pv: str = _ini("PVS", "AC:TS2:BEAM:CURR")
@@ -199,6 +207,30 @@ def _read_instruments(
         channel = parser.get(section, "channel", fallback="").strip().lower() or "experiment"
         instruments.append(InstrumentConfig(name, notify_counts, beam_target, channel=channel, section=section))
     return instruments
+
+
+MIN_PUSH_SECRET_BYTES = 32
+
+
+def _read_push_secret(config: AppConfig) -> bytes:
+    """The [PUSH] shared secret, or b"" when push is disabled."""
+    if not config.push_url:
+        return b""
+    if not config.push_url.startswith(("http://", "https://")):
+        raise ConfigError("[PUSH] url must start with http:// or https://")
+    if not config.push_secret_file:
+        raise ConfigError("[PUSH] secret_file is required when url is set")
+    path = Path(config.push_secret_file)
+    try:
+        secret = path.read_bytes().strip()
+        world_readable = path.stat().st_mode & 0o004
+    except OSError as exc:
+        raise ConfigError(f"[PUSH] secret_file could not be read: {exc}") from exc
+    if len(secret) < MIN_PUSH_SECRET_BYTES:
+        raise ConfigError(f"[PUSH] secret_file must hold at least {MIN_PUSH_SECRET_BYTES} characters")
+    if world_readable:
+        logger.warning(f"[PUSH] secret_file {path} is world-readable; consider chmod 600")
+    return secret
 
 
 def _check_choice(section: str, key: str, value: str, choices) -> None:
@@ -313,6 +345,7 @@ def parse_config(parser: configparser.ConfigParser, config_path: Path) -> AppCon
     config = AppConfig(**values)
     config.instruments = _read_instruments(parser, config)
     _validate(config, config_path)
+    config.push_secret = _read_push_secret(config)
     return config
 
 

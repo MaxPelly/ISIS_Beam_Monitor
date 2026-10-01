@@ -12,6 +12,7 @@ This is a Python application that monitors the status of the ISIS beam, experime
 - **Daily Summary**: Sends a per-target uptime/trip/sparkline summary card once a day at a configurable time.
 - **`fun_mode`**: Optional personality lines, longest-uptime records, run-count milestones and a daily fact, on top of the always-on severity/emoji information.
 - **Microsoft Teams Integration**: Sends rich Adaptive Cards directly to configured Teams webhook URLs.
+- **Signed Webhook (optional)**: Can also POST every notification as HMAC-signed JSON, e.g. to the optional `push_site` for mobile push notifications (see `[PUSH]` below).
 - **Dummy Notifier**: Includes a logging-based dummy notifier for testing and development without sending actual webhooks.
 - **Concurrent Execution**: Uses `asyncio` to run beam and news monitors concurrently for real-time responsiveness.
 - **Live TUI Graph View**: Displays a rolling 1-hour sparkline graph of beam current (μA) for TS1, TS2, and Muons directly in the terminal. The graph is sampled on its own fixed 1-minute timer, fully decoupled from the beam WebSocket update rate — a silent beam produces a flat line at the last-known value.
@@ -122,6 +123,27 @@ the payload's `channel` see "Experiment Updates" unless an instrument sets
 # The beam_target for instrument sections that don't set one (default = TS1).
 # instrument_target = TS1
 ```
+
+### Optional `[PUSH]` signed webhook
+
+Sends every notification, on all three channels, as HMAC-signed JSON to one URL as
+well as to Teams. It's meant for the optional `push_site` submodule (mobile push
+notifications), but any receiver that checks the signature will work.
+
+```ini
+[PUSH]
+url = http://127.0.0.1:8765/ingest
+# At least 32 characters, e.g. `openssl rand -hex 32 > push.secret && chmod 600 push.secret`
+secret_file = push.secret
+# timeout = 2
+```
+
+Each request has an `X-Timestamp` header (Unix seconds) and an `X-Signature` header:
+the hex HMAC-SHA256 of `<timestamp>.<body>` under the secret. The body is a JSON
+object (`"v": 1`) holding the notification's `id`, `title`, `text`, `summary`,
+`severity`, `emoji`, `facts`, `flavour`, `url`, `url_label`, `timestamp`
+(ISO 8601, UTC), `channel` and `topic` (`TS1`/`TS2`/`Muons`, the instrument
+name, `MCR` or `Summary`). A retry keeps the same `id`.
 
 ## Usage
 
