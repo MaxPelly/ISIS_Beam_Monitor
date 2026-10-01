@@ -210,6 +210,7 @@ def _read_instruments(
 
 
 MIN_PUSH_SECRET_BYTES = 32
+MAX_PUSH_SECRET_BYTES = 4096  # the same limits as the push site, so both accept the same file
 
 
 def read_push_secret(config: AppConfig) -> bytes:
@@ -220,12 +221,14 @@ def read_push_secret(config: AppConfig) -> bytes:
     path = Path(config.push_secret_file)
     try:
         with path.open("rb") as f:
-            secret = f.read(4096).strip()
+            secret = f.read(MAX_PUSH_SECRET_BYTES + 1).strip()
         world_readable = path.stat().st_mode & 0o004
     except OSError as exc:
         raise ConfigError(f"[PUSH] secret_file could not be read: {exc}") from exc
-    if len(secret) < MIN_PUSH_SECRET_BYTES:
-        raise ConfigError(f"[PUSH] secret_file must hold at least {MIN_PUSH_SECRET_BYTES} characters")
+    if not MIN_PUSH_SECRET_BYTES <= len(secret) <= MAX_PUSH_SECRET_BYTES:
+        raise ConfigError(
+            f"[PUSH] secret_file must hold {MIN_PUSH_SECRET_BYTES} to {MAX_PUSH_SECRET_BYTES} characters"
+        )
     if world_readable:
         logger.warning(f"[PUSH] secret_file {path} is world-readable; consider chmod 600")
     return secret

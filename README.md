@@ -143,7 +143,7 @@ inviting people's phones.
 ```ini
 [PUSH]
 url = http://127.0.0.1:8765/ingest
-# At least 32 characters, e.g. `openssl rand -hex 32 > push.secret && chmod 600 push.secret`.
+# 32 to 4096 characters, created owner-only, e.g. `(umask 077; openssl rand -hex 32 > push.secret)`.
 # Relative to the daemon's working directory; only the daemon reads it.
 secret_file = push.secret
 # timeout = 2

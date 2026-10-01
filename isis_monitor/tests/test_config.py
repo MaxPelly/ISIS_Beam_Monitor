@@ -437,9 +437,10 @@ def test_push_secret_is_read_and_checked(tmp_path, caplog):
     with pytest.raises(ConfigError, match="could not be read"):
         read_push_secret(config)
 
-    secret_file.write_text("short\n")
-    with pytest.raises(ConfigError, match="at least 32"):
-        read_push_secret(config)
+    for bad in ("short\n", "x" * 5000):
+        secret_file.write_text(bad)
+        with pytest.raises(ConfigError, match="32 to 4096 characters"):
+            read_push_secret(config)
 
     secret_file.write_text("x" * 40 + "\n")
     secret_file.chmod(0o600)
