@@ -30,9 +30,9 @@ _SEVERITY_STYLE = {
 MAX_RETRY_AFTER = 60.0  # cap on a server's Retry-After, so it can't stall the channel
 
 
-def _retry_after(value: object) -> Optional[float]:
+def _retry_after(value: object, cap: float = MAX_RETRY_AFTER) -> Optional[float]:
     """Seconds to wait from a Retry-After header (seconds or an HTTP date),
-    capped at MAX_RETRY_AFTER; None if missing or unreadable."""
+    capped at `cap`; None if missing or unreadable."""
     if not isinstance(value, str):
         return None
     try:
@@ -45,7 +45,7 @@ def _retry_after(value: object) -> Optional[float]:
         if when.tzinfo is None:  # e.g. the obsolete asctime form, which means GMT
             when = when.replace(tzinfo=timezone.utc)
         seconds = (when - datetime.now(timezone.utc)).total_seconds()
-    return min(max(seconds, 0.0), MAX_RETRY_AFTER) if math.isfinite(seconds) else None
+    return min(max(seconds, 0.0), cap) if math.isfinite(seconds) else None
 
 
 class Notifier(ABC):
@@ -67,6 +67,7 @@ class HTTPNotifier(Notifier):
     short and bounded.
     """
     RETRY_DELAYS = (2.0, 4.0)  # seconds before the 2nd and 3rd attempts
+    MAX_RETRY_AFTER = MAX_RETRY_AFTER
     LABEL = "webhook"  # how log messages refer to the destination
 
     def __init__(self, webhook_url: str, timeout: float = 10.0):
@@ -131,7 +132,7 @@ class HTTPNotifier(Notifier):
                 return (
                     f"{self.LABEL} returned HTTP {resp.status}: {body[:200]}",
                     retryable,
-                    _retry_after(resp.headers.get("Retry-After")),
+                    _retry_after(resp.headers.get("Retry-After"), self.MAX_RETRY_AFTER),
                 )
         except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
             return f"Failed to send {self.LABEL}: {e}", True, None
@@ -224,6 +225,10 @@ class WebhookNotifier(HTTPNotifier):
     afresh; the payload's `id` stays the same, so a receiver can drop repeats.
     """
     LABEL = "Push webhook"
+    # Shorter than Teams': the channel's worker waits on retries, and this
+    # extra receiver shouldn't hold up the Teams cards queued behind it.
+    RETRY_DELAYS = (1.0, 2.0)
+    MAX_RETRY_AFTER = 5.0
 
     def __init__(self, url: str, secret: bytes, timeout: float = 2.0):
         super().__init__(url, timeout=timeout)

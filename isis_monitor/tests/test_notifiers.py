@@ -312,11 +312,22 @@ async def test_teams_notifier_honours_retry_after():
     sleep.assert_awaited_once_with(7.0)
 
 
+async def test_webhook_notifier_caps_retry_after_lower_than_teams():
+    notifier = WebhookNotifier("http://127.0.0.1:8765/ingest", b"secret")
+    notifier._session = make_status_session(429, 429, 429, headers={"Retry-After": "60"})
+
+    with patch("isis_monitor.notifiers.asyncio.sleep", new=AsyncMock()) as sleep:
+        await notifier.send(Notification(title="t", text="x"))
+
+    assert [c.args[0] for c in sleep.await_args_list] == [5.0, 5.0]
+
+
 def test_retry_after_parsing():
     in_30s = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=30), usegmt=True)
 
     assert _retry_after("5") == 5.0
     assert _retry_after("3600") == 60.0  # capped
+    assert _retry_after("3600", cap=5.0) == 5.0
     assert 25 <= _retry_after(in_30s) <= 30
     assert _retry_after("Mon, 01 Jan 2001 00:00:00 GMT") == 0.0  # already past
     assert _retry_after("Sun Nov  6 08:49:37 1994") == 0.0  # asctime form, naive

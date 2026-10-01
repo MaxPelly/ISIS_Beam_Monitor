@@ -18,8 +18,9 @@ experiment_teams_url =
 # File holding the shared secret (at least 32 characters, e.g. from
 # `openssl rand -hex 32`); keep it chmod 600.
 # secret_file = push.secret
-# Seconds before a send is abandoned (0.5-30); kept short so a slow receiver
-# barely delays the Teams cards queued behind it.
+# Seconds before each attempt is abandoned (0.5-30). Kept short because a slow
+# receiver delays the Teams cards queued behind it (up to 3 attempts, 1s and
+# 2s apart, or a Retry-After of at most 5s).
 # timeout = 2
 
 # One section per monitored instrument; run notifications for all of them go
