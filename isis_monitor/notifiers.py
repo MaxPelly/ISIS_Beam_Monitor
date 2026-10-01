@@ -1,7 +1,12 @@
 import logging
 import asyncio
 import contextlib
+import hashlib
+import hmac
+import json
 import math
+import time
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -209,6 +214,50 @@ class TeamsNotifier(HTTPNotifier):
                 "content": card,
             }],
         }
+
+class WebhookNotifier(HTTPNotifier):
+    """POSTs notifications as signed JSON, e.g. to the optional push site.
+
+    Each request carries X-Timestamp (Unix seconds) and X-Signature, the hex
+    HMAC-SHA256 of "<timestamp>.<body>" under the shared secret, so the
+    receiver can reject forged or replayed requests. Every attempt is signed
+    afresh; the payload's `id` stays the same, so a receiver can drop repeats.
+    """
+    LABEL = "Push webhook"
+
+    def __init__(self, url: str, secret: bytes, timeout: float = 2.0):
+        super().__init__(url, timeout=timeout)
+        self.secret = secret
+
+    def _create_payload(self, notification: Notification) -> dict:
+        n = notification
+        return {
+            "v": 1,
+            "id": str(uuid.uuid4()),
+            "title": n.title,
+            "text": n.text,
+            "summary": n.to_summary(),
+            "severity": n.severity.value,
+            "emoji": n.emoji,
+            "facts": [list(fact) for fact in n.facts],
+            "flavour": n.flavour,
+            "url": n.url,
+            "url_label": n.url_label,
+            "timestamp": n.timestamp.astimezone(timezone.utc).isoformat() if n.timestamp else None,
+            "channel": n.channel,
+            "topic": n.topic,
+        }
+
+    def _request_kwargs(self, payload: dict) -> dict:
+        body = json.dumps(payload, ensure_ascii=False).encode()
+        timestamp = str(int(time.time()))
+        signature = hmac.new(self.secret, timestamp.encode() + b"." + body, hashlib.sha256).hexdigest()
+        return {"data": body, "headers": {
+            "Content-Type": "application/json",
+            "X-Timestamp": timestamp,
+            "X-Signature": signature,
+        }}
+
 
 class DummyNotifier(Notifier):
     """A dummy notifier for testing — logs the message instead of sending."""

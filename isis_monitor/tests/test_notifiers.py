@@ -1,4 +1,7 @@
 import asyncio
+import hashlib
+import hmac
+import json
 import logging
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -8,7 +11,9 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import aiohttp
 import pytest
 
-from isis_monitor.notifiers import _retry_after, TeamsNotifier, DummyNotifier, NotificationChannel, Notifier
+from isis_monitor.notifiers import (
+    _retry_after, HTTPNotifier, TeamsNotifier, DummyNotifier, NotificationChannel, Notifier, WebhookNotifier,
+)
 from isis_monitor.messages import Notification, Severity
 
 
@@ -45,7 +50,7 @@ def make_status_session(*statuses: int, headers=None):
 
 @pytest.fixture
 def no_retry_delay():
-    with patch.object(TeamsNotifier, "RETRY_DELAYS", (0.0, 0.0)):
+    with patch.object(HTTPNotifier, "RETRY_DELAYS", (0.0, 0.0)):
         yield
 
 
@@ -82,6 +87,47 @@ async def test_teams_notifier_logs_error_on_bad_status(caplog):
         await notifier.send(Notification(title="Test title", text="Test message"))
 
     assert "HTTP 400: body" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# WebhookNotifier
+# ---------------------------------------------------------------------------
+
+async def test_webhook_notifier_posts_signed_json():
+    notifier = WebhookNotifier("http://127.0.0.1:8765/ingest", b"secret")
+    notifier._session = make_status_session(200)
+    when = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+
+    await notifier.send(Notification(
+        title="PEARL: New run started", text="Run 2", severity=Severity.GOOD, emoji="🚀",
+        facts=[("Duration", "1h 0m")], timestamp=when, channel="Experiment Updates", topic="PEARL",
+    ))
+
+    args, kwargs = notifier._session.post.call_args
+    assert args[0] == "http://127.0.0.1:8765/ingest"
+    headers, body = kwargs["headers"], kwargs["data"]
+    expected = hmac.new(b"secret", headers["X-Timestamp"].encode() + b"." + body, hashlib.sha256).hexdigest()
+    assert headers["X-Signature"] == expected
+    assert headers["Content-Type"] == "application/json"
+    payload = json.loads(body)
+    assert payload["v"] == 1 and payload["id"]
+    assert payload["title"] == "PEARL: New run started"
+    assert payload["severity"] == "good"
+    assert payload["facts"] == [["Duration", "1h 0m"]]
+    assert payload["timestamp"] == "2026-01-02T03:04:00+00:00"
+    assert (payload["channel"], payload["topic"]) == ("Experiment Updates", "PEARL")
+    assert payload["summary"].startswith("🚀 PEARL: New run started | Run 2")
+
+
+async def test_webhook_notifier_retries_with_the_same_id(no_retry_delay, caplog):
+    notifier = WebhookNotifier("http://127.0.0.1:8765/ingest", b"secret")
+    notifier._session = make_status_session(503, 200)
+
+    await notifier.send(Notification(title="t", text="x"))
+
+    ids = [json.loads(c.kwargs["data"])["id"] for c in notifier._session.post.call_args_list]
+    assert len(ids) == 2 and ids[0] == ids[1]
+    assert "Push webhook returned HTTP 503" in caplog.text
 
 
 # ---------------------------------------------------------------------------
