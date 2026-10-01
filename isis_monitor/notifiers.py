@@ -53,8 +53,8 @@ class Notifier(ABC):
         """Release any resources held by the notifier."""
 
 
-class TeamsNotifier(Notifier):
-    """Sends notifications to a Microsoft Teams Incoming Webhook.
+class HTTPNotifier(Notifier):
+    """Base for notifiers that POST a JSON payload to a URL.
 
     Rate limiting (429), server errors and network failures are retried
     after each of RETRY_DELAYS (or the server's Retry-After, capped at
@@ -62,6 +62,7 @@ class TeamsNotifier(Notifier):
     short and bounded.
     """
     RETRY_DELAYS = (2.0, 4.0)  # seconds before the 2nd and 3rd attempts
+    LABEL = "webhook"  # how log messages refer to the destination
 
     def __init__(self, webhook_url: str, timeout: float = 10.0):
         self.webhook_url = webhook_url
@@ -79,6 +80,63 @@ class TeamsNotifier(Notifier):
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
+
+    @abstractmethod
+    def _create_payload(self, notification: Notification) -> dict:
+        """The JSON payload to POST for a notification."""
+
+    def _request_kwargs(self, payload: dict) -> dict:
+        """Keyword arguments for session.post(); called again for each attempt."""
+        return {"json": payload}
+
+    async def send(self, notification: Notification):
+        payload = self._create_payload(notification)
+        for attempt, delay in enumerate((*self.RETRY_DELAYS, None), 1):
+            error, retryable, retry_after = await self._post(payload)
+            if error is None:
+                return
+            if delay is None or not retryable:
+                suffix = f" (after {attempt} attempts)" if attempt > 1 else ""
+                logger.error(f"{error}{suffix}")
+                return
+            if retry_after is not None:
+                delay = retry_after
+            logger.warning(f"{error}; retrying in {delay:g}s")
+            await asyncio.sleep(delay)
+
+    async def _post(self, payload: dict) -> Tuple[Optional[str], bool, Optional[float]]:
+        """One attempt: (error message or None on success, whether to retry,
+        the server's Retry-After in seconds if it gave one)."""
+        try:
+            session = await self._get_session()
+            async with session.post(
+                self.webhook_url,
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                **self._request_kwargs(payload),
+            ) as resp:
+                if resp.status < 400:
+                    return None, False, None
+                try:
+                    body = await resp.text()
+                except aiohttp.ClientError:  # e.g. dropped mid-body; the status still counts
+                    body = ""
+                # 429 (rate limited) and 5xx are temporary; any other 4xx won't
+                # get better by resending the same request.
+                retryable = resp.status == 429 or resp.status >= 500
+                return (
+                    f"{self.LABEL} returned HTTP {resp.status}: {body[:200]}",
+                    retryable,
+                    _retry_after(resp.headers.get("Retry-After")),
+                )
+        except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
+            return f"Failed to send {self.LABEL}: {e}", True, None
+        except Exception as e:
+            return f"Failed to send {self.LABEL}: {e}", False, None
+
+
+class TeamsNotifier(HTTPNotifier):
+    """Sends notifications to a Microsoft Teams Incoming Webhook as Adaptive Cards."""
+    LABEL = "Teams webhook"
 
     def _create_payload(self, notification: Notification) -> dict:
         header_text = f"{notification.emoji} {notification.title}".strip()
@@ -151,51 +209,6 @@ class TeamsNotifier(Notifier):
                 "content": card,
             }],
         }
-
-    async def send(self, notification: Notification):
-        payload = self._create_payload(notification)
-        for attempt, delay in enumerate((*self.RETRY_DELAYS, None), 1):
-            error, retryable, retry_after = await self._post(payload)
-            if error is None:
-                return
-            if delay is None or not retryable:
-                suffix = f" (after {attempt} attempts)" if attempt > 1 else ""
-                logger.error(f"{error}{suffix}")
-                return
-            if retry_after is not None:
-                delay = retry_after
-            logger.warning(f"{error}; retrying in {delay:g}s")
-            await asyncio.sleep(delay)
-
-    async def _post(self, payload: dict) -> Tuple[Optional[str], bool, Optional[float]]:
-        """One attempt: (error message or None on success, whether to retry,
-        the server's Retry-After in seconds if it gave one)."""
-        try:
-            session = await self._get_session()
-            async with session.post(
-                self.webhook_url,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=self.timeout),
-            ) as resp:
-                if resp.status < 400:
-                    return None, False, None
-                try:
-                    body = await resp.text()
-                except aiohttp.ClientError:  # e.g. dropped mid-body; the status still counts
-                    body = ""
-                # 429 (rate limited) and 5xx are temporary; any other 4xx won't
-                # get better by resending the same request.
-                retryable = resp.status == 429 or resp.status >= 500
-                return (
-                    f"Teams webhook returned HTTP {resp.status}: {body[:200]}",
-                    retryable,
-                    _retry_after(resp.headers.get("Retry-After")),
-                )
-        except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
-            return f"Failed to send Teams webhook: {e}", True, None
-        except Exception as e:
-            return f"Failed to send Teams webhook: {e}", False, None
-
 
 class DummyNotifier(Notifier):
     """A dummy notifier for testing — logs the message instead of sending."""
