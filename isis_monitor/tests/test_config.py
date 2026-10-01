@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from isis_monitor.config import (
     load_config, ConfigError, ConfigChangedError, AppConfig, InstrumentConfig, config_revision,
-    editable_settings, update_config_file,
+    editable_settings, update_config_file, read_push_secret,
 )
 
 
@@ -196,7 +196,6 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     # [PUSH]
     ("[PUSH]\nurl = ftp://x\nsecret_file = s\n", r"\[PUSH\] url must start with"),
     ("[PUSH]\nurl = http://127.0.0.1:8765/ingest\n", r"\[PUSH\] secret_file is required"),
-    ("[PUSH]\nurl = http://127.0.0.1:8765/ingest\nsecret_file = /nonexistent/s\n", "could not be read"),
     ("[PUSH]\ntimeout = 0\n", r"\[PUSH\] timeout must be between"),
 ])
 def test_invalid_config_raises_config_error(tmp_path, extra, match):
@@ -432,23 +431,28 @@ channel = Instrument
 def test_push_secret_is_read_and_checked(tmp_path, caplog):
     secret_file = tmp_path / "push.secret"
     push = f"[PUSH]\nurl = http://127.0.0.1:8765/ingest\nsecret_file = {secret_file}\n"
+    # load_config() doesn't need the secret (the TUI and stop modes never read it).
+    config = load_config(_write(tmp_path, push))
+    assert config.push_secret == b""
+    with pytest.raises(ConfigError, match="could not be read"):
+        read_push_secret(config)
 
     secret_file.write_text("short\n")
     with pytest.raises(ConfigError, match="at least 32"):
-        load_config(_write(tmp_path, push))
+        read_push_secret(config)
 
     secret_file.write_text("x" * 40 + "\n")
     secret_file.chmod(0o600)
-    config = load_config(_write(tmp_path, push))
-    assert config.push_secret == b"x" * 40  # surrounding whitespace dropped
-    assert "x" * 40 not in repr(config)
+    assert read_push_secret(config) == b"x" * 40  # surrounding whitespace dropped
+    assert "x" * 40 not in repr(replace(config, push_secret=b"x" * 40))
     assert "world-readable" not in caplog.text
 
     secret_file.chmod(0o644)
-    load_config(_write(tmp_path, push))
+    read_push_secret(config)
     assert "world-readable" in caplog.text
 
 
 def test_push_disabled_by_default(tmp_path):
     config = load_config(_write(tmp_path, ""))
     assert (config.push_url, config.push_secret, config.push_timeout) == ("", b"", 2.0)
+    assert read_push_secret(config) == b""

@@ -570,6 +570,19 @@ def test_main_dispatches_each_mode(tmp_path, mode, target):
     runner.assert_awaited_once()
 
 
+def test_main_reads_the_push_secret_only_for_the_daemon(tmp_path, capsys):
+    ini = _ini(tmp_path)
+    with open(ini, "a") as f:
+        f.write(f"[PUSH]\nurl = http://127.0.0.1:1/ingest\nsecret_file = {tmp_path / 'missing'}\n")
+    with patch("main.run_stop", new_callable=AsyncMock) as run_stop:
+        run_main("stop", ini)
+    run_stop.assert_awaited_once()
+    with patch("main.run_daemon", new_callable=AsyncMock) as run_daemon, pytest.raises(SystemExit):
+        run_main("daemon", ini)
+    run_daemon.assert_not_called()
+    assert "secret_file could not be read" in capsys.readouterr().out
+
+
 def test_main_keyboard_interrupt_exits_quietly(tmp_path, capsys):
     with patch("main.run_stop", new_callable=AsyncMock, side_effect=KeyboardInterrupt):
         run_main("stop", _ini(tmp_path))

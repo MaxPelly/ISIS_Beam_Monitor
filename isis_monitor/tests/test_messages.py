@@ -328,7 +328,6 @@ def test_no_builder_bakes_its_own_emoji_into_the_title():
             assert n.emoji not in n.title, f"{n.emoji!r} duplicated in title of {n.title!r}"
 
 
-
 def test_builders_set_topic():
     assert beam_change("Muon", "low", "high", 5.0, 1.0, 5.0, timedelta(hours=1), DT, channel="Muons").topic == "Muons"
     assert mcr_news("Machine update.", DT).topic == "MCR"

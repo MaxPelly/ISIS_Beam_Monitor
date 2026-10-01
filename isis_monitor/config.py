@@ -111,7 +111,7 @@ class AppConfig:
     push_url: str = _ini("PUSH", "", "url")
     push_secret_file: str = _ini("PUSH", "", "secret_file")
     push_timeout: float = _ini("PUSH", 2.0, "timeout")
-    push_secret: bytes = field(default=b"", repr=False)  # read from push_secret_file
+    push_secret: bytes = field(default=b"", repr=False)  # set by the daemon from read_push_secret()
 
     ts1_beam_current_pv: str = _ini("PVS", "AC:TS1:BEAM:CURR")
     ts2_beam_current_pv: str = _ini("PVS", "AC:TS2:BEAM:CURR")
@@ -212,17 +212,15 @@ def _read_instruments(
 MIN_PUSH_SECRET_BYTES = 32
 
 
-def _read_push_secret(config: AppConfig) -> bytes:
-    """The [PUSH] shared secret, or b"" when push is disabled."""
+def read_push_secret(config: AppConfig) -> bytes:
+    """The [PUSH] shared secret (surrounding whitespace dropped), or b"" when
+    push is disabled. Only the daemon needs it, so it isn't read by load_config()."""
     if not config.push_url:
         return b""
-    if not config.push_url.startswith(("http://", "https://")):
-        raise ConfigError("[PUSH] url must start with http:// or https://")
-    if not config.push_secret_file:
-        raise ConfigError("[PUSH] secret_file is required when url is set")
     path = Path(config.push_secret_file)
     try:
-        secret = path.read_bytes().strip()
+        with path.open("rb") as f:
+            secret = f.read(4096).strip()
         world_readable = path.stat().st_mode & 0o004
     except OSError as exc:
         raise ConfigError(f"[PUSH] secret_file could not be read: {exc}") from exc
@@ -306,6 +304,11 @@ def _validate(config: AppConfig, config_path: Path) -> None:
         raise ConfigError("[TUI_CLIENT] reconnect values must be positive")
     if config.tui_reconnect_initial > config.tui_reconnect_max:
         raise ConfigError("[TUI_CLIENT] reconnect_initial cannot be greater than reconnect_max")
+    if config.push_url:
+        if not config.push_url.startswith(("http://", "https://")):
+            raise ConfigError("[PUSH] url must start with http:// or https://")
+        if not config.push_secret_file:
+            raise ConfigError("[PUSH] secret_file is required when url is set")
     _validate_instruments(config)
 
 
@@ -345,7 +348,6 @@ def parse_config(parser: configparser.ConfigParser, config_path: Path) -> AppCon
     config = AppConfig(**values)
     config.instruments = _read_instruments(parser, config)
     _validate(config, config_path)
-    config.push_secret = _read_push_secret(config)
     return config
 
 

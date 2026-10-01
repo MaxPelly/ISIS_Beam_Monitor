@@ -133,13 +133,15 @@ notifications), but any receiver that checks the signature will work.
 ```ini
 [PUSH]
 url = http://127.0.0.1:8765/ingest
-# At least 32 characters, e.g. `openssl rand -hex 32 > push.secret && chmod 600 push.secret`
+# At least 32 characters, e.g. `openssl rand -hex 32 > push.secret && chmod 600 push.secret`.
+# Relative to the daemon's working directory; only the daemon reads it.
 secret_file = push.secret
 # timeout = 2
 ```
 
 Each request has an `X-Timestamp` header (Unix seconds) and an `X-Signature` header:
-the hex HMAC-SHA256 of `<timestamp>.<body>` under the secret. The body is a JSON
+the hex HMAC-SHA256 of `<timestamp>.<body>` under the secret (the file's contents with
+surrounding whitespace, such as the trailing newline, removed). The body is a JSON
 object (`"v": 1`) holding the notification's `id`, `title`, `text`, `summary`,
 `severity`, `emoji`, `facts`, `flavour`, `url`, `url_label`, `timestamp`
 (ISO 8601, UTC), `channel` and `topic` (`TS1`/`TS2`/`Muons`, the instrument

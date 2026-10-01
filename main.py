@@ -28,6 +28,7 @@ from isis_monitor.config import (
     config_revision,
     editable_settings,
     load_config,
+    read_push_secret,
     update_config_file,
 )
 from isis_monitor.daemon_state import DaemonState
@@ -642,6 +643,8 @@ def main():
 
     try:
         config = load_config(args.config)
+        if args.mode == "daemon":
+            config.push_secret = read_push_secret(config)
     except ConfigError as e:
         print(f"Configuration error: {e}")
         raise SystemExit(1)
