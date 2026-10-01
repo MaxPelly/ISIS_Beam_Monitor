@@ -73,6 +73,8 @@ class Notification:
     timestamp: Optional[datetime] = None
     channel: str = ""  # e.g. "TS1" or an instrument name; falls back to the NotificationChannel's
                         # name in NotificationChannel.broadcast() when left blank
+    topic: str = ""  # what it's about, for subscribers filtering it: a beam target's channel
+                     # label, an instrument name, "MCR" or "Summary"
 
     def _parts(self, with_flavour: bool) -> List[str]:
         parts = [f"{self.emoji} {self.title}".strip(), self.text]
@@ -148,6 +150,7 @@ def beam_change(
         flavour=flavour.pick(transition, rng) if rng else "",
         timestamp=time_now,
         channel=channel,
+        topic=channel,
     )
 
 
@@ -166,6 +169,7 @@ def startup_status(
         flavour=flavour.pick("startup", rng) if rng else "",
         timestamp=time_now,
         channel=channel,
+        topic=channel,
     )
 
 
@@ -197,6 +201,7 @@ def run_started(
         flavour=flavour.pick("new_run", rng) if rng else "",
         timestamp=time_now,
         channel=channel,
+        topic=instrument,
     )
 
 
@@ -230,6 +235,7 @@ def run_finishing(
         flavour=flavour.pick("finishing", rng) if rng else "",
         timestamp=time_now,
         channel=channel,
+        topic=instrument,
     )
 
 
@@ -243,6 +249,7 @@ def collection_stalled(
         emoji="⚠️",
         timestamp=time_now,
         channel=channel,
+        topic=instrument,
     )
 
 
@@ -281,6 +288,7 @@ def mcr_news(
         url=url,
         url_label="Open MCR news",
         timestamp=time_now,
+        topic="MCR",
     )
 
 
@@ -321,6 +329,7 @@ def daily_summary(
         flavour=fact_of_the_day,
         timestamp=time_now,
         channel=display_name,  # already the beam target's channel label (e.g. "TS1")
+        topic="Summary",
     )
 
 
@@ -339,4 +348,5 @@ def run_milestone(
         flavour=flavour.pick("milestone", rng) if rng else "",
         timestamp=time_now,
         channel=channel,
+        topic=instrument,
     )

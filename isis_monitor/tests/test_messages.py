@@ -175,7 +175,7 @@ def test_startup_status_builder():
     assert n.emoji == "🛰️"
     assert "150.000 uA" in n.text
     assert n.flavour == ""
-    assert n.channel == "TS1"
+    assert n.channel == n.topic == "TS1"
 
 
 def test_run_started_builder():
@@ -279,6 +279,7 @@ def test_daily_summary_builder():
         ("Runs in last 24h", "7"),
     ]
     assert n.channel == "TS1"  # display_name doubles as the channel label here
+    assert n.topic == "Summary"
     n = daily_summary("TS1", 50.0, 5, timedelta(hours=1), "▁▂", 1, DT)
     assert n.severity == Severity.INFO  # below 90% uptime
 
@@ -326,3 +327,16 @@ def test_no_builder_bakes_its_own_emoji_into_the_title():
         if n.emoji:
             assert n.emoji not in n.title, f"{n.emoji!r} duplicated in title of {n.title!r}"
 
+
+
+def test_builders_set_topic():
+    assert beam_change("Muon", "low", "high", 5.0, 1.0, 5.0, timedelta(hours=1), DT, channel="Muons").topic == "Muons"
+    assert mcr_news("Machine update.", DT).topic == "MCR"
+    # Run cards carry the instrument as their topic whatever their channel.
+    for n in (
+        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, DT),
+        run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", DT),
+        collection_stalled("PEARL", "TS1", timedelta(minutes=17), DT),
+        run_milestone("PEARL", 25, DT, channel="PEARL"),
+    ):
+        assert n.topic == "PEARL", n.title
