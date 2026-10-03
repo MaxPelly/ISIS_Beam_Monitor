@@ -257,18 +257,19 @@ def collection_stalled(
 # Checked in this order — GOOD first, since a resolution message routinely
 # names the fault it just cleared in the same sentence (e.g. "The faulty
 # power supply ... has been repaired").
-_MCR_GOOD_KEYWORDS = ("restored", "back on", "beam on", "resolved", "rectified", "repaired", "fixed")
-_MCR_ATTENTION_KEYWORDS = ("fault", "trip", "issue", "problem", "investigating")
-_MCR_WARNING_KEYWORDS = ("maintenance", "shutdown")
+# Whole words (with common endings), so e.g. "tissue" isn't an issue.
+_MCR_GOOD_RE = re.compile(r"\b(restored|back on|beam on|resolved|rectified|repaired|fixed)\b")
+_MCR_ATTENTION_RE = re.compile(r"\b((fault|issue|problem)(s|y)?|trip(s|ped|ping)?|investigating)\b")
+_MCR_WARNING_RE = re.compile(r"\b(maintenance|shutdowns?)\b")
 
 
 def _mcr_severity_and_emoji(news_text: str) -> Tuple[Severity, str]:
     lowered = news_text.lower()
-    if any(kw in lowered for kw in _MCR_GOOD_KEYWORDS):
+    if _MCR_GOOD_RE.search(lowered):
         return Severity.GOOD, "🎉"
-    if any(kw in lowered for kw in _MCR_ATTENTION_KEYWORDS):
+    if _MCR_ATTENTION_RE.search(lowered):
         return Severity.ATTENTION, "🚨"
-    if any(kw in lowered for kw in _MCR_WARNING_KEYWORDS):
+    if _MCR_WARNING_RE.search(lowered):
         return Severity.WARNING, "🔧"
     return Severity.INFO, MCR_NEWS_EMOJI
 

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from isis_monitor.messages import (
+    MCR_NEWS_EMOJI,
     Notification,
     Severity,
     beam_change,
@@ -237,6 +238,9 @@ def test_mcr_news_builder():
     ("Scheduled maintenance will take place this evening.", Severity.WARNING, "🔧"),
     # A resolution naming the fault it just fixed is GOOD: good keywords are checked first.
     ("The faulty power supply in the Inner Synchrotron has been repaired.", Severity.GOOD, "🎉"),
+    ("Beam tripped twice overnight.", Severity.ATTENTION, "🚨"),
+    # Keywords only count as whole words.
+    ("Tissue samples arriving for the triple-axis study.", Severity.INFO, MCR_NEWS_EMOJI),
 ])
 def test_mcr_news_builder_keywords(news, severity, emoji):
     n = mcr_news(news, DT)
