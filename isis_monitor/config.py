@@ -231,7 +231,7 @@ def read_push_secret(config: AppConfig) -> bytes:
             f"[PUSH] secret_file must hold {MIN_PUSH_SECRET_BYTES} to {MAX_PUSH_SECRET_BYTES} characters"
         )
     if world_readable:
-        logger.warning(f"[PUSH] secret_file {path} is world-readable; consider chmod 600")
+        logger.warning(f"[PUSH] secret_file {path} is world-readable; consider chmod o-r")
     return secret
 
 

@@ -16,7 +16,8 @@ experiment_teams_url =
 # push_site submodule (mobile push notifications). Leave blank to disable.
 # url = http://127.0.0.1:8765/ingest
 # File holding the shared secret (at least 32 characters, e.g. from
-# `openssl rand -hex 32`); keep it chmod 600. Relative to this file's
+# `openssl rand -hex 32`); keep it unreadable by others (the push site's
+# README grants its own user read access by ACL). Relative to this file's
 # directory; with the push_site submodule, the site's own copy is shared.
 # secret_file = push_site/push.secret
 # Seconds before each attempt is abandoned (0.5-30). Kept short because a slow

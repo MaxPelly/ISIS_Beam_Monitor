@@ -245,7 +245,7 @@ run from the checkout as the user the daemon should run as:
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-sed -e "s|/path/to/ISIS_Beam_Monitor|$PWD|g" -e "s|MONITOR_USER|$USER|g" \
+sed -e "/^#/!s|/path/to/ISIS_Beam_Monitor|$PWD|g" -e "/^#/!s|MONITOR_USER|$USER|g" \
   deploy/isis-beam-monitor.service | sudo tee /etc/systemd/system/isis-beam-monitor.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now isis-beam-monitor.service
