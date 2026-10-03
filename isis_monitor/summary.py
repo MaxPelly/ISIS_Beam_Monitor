@@ -80,7 +80,7 @@ def compute_summary(
         if streak_start is not None:
             longest_on_streak = max(longest_on_streak, recent[-1][0] - streak_start)
 
-        values = [cur for _, cur, _ in recent]
+        values = _downsample([cur for _, cur, _ in recent], SPARKLINE_WIDTH)
         summaries[beam] = TargetSummary(
             uptime_pct=uptime_pct,
             trips=trips,
@@ -89,6 +89,15 @@ def compute_summary(
             coverage_pct=min(len(recent) / expected_samples * 100, 100.0),
         )
     return summaries
+
+
+def _downsample(values: List[float], n: int) -> List[float]:
+    """At most `n` values, each the mean of an equal run of `values`, so a
+    sparkline `n` wide spans all of them rather than just the last `n`."""
+    if len(values) <= n:
+        return values
+    bounds = [len(values) * i // n for i in range(n + 1)]
+    return [sum(values[a:b]) / (b - a) for a, b in zip(bounds, bounds[1:])]
 
 
 def _instruments_by_channel(state: DaemonState) -> Dict[str, List[str]]:

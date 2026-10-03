@@ -46,6 +46,16 @@ def test_compute_summary_counts_trips_and_longest_streak():
     assert len(summary.sparkline) == 60
 
 
+def test_compute_summary_sparkline_spans_the_whole_day():
+    """A day of 1-minute samples: off for the first 12 hours, then on. The
+    sparkline shows both halves, not just the last 60 minutes."""
+    t0 = datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc)
+    samples = [(t0 + timedelta(minutes=i), 0.0 if i < 720 else 100.0, "off" if i < 720 else "high")
+               for i in range(1440)]
+    sparkline = compute_summary({"TS1": samples}, since=t0)["TS1"].sparkline
+    assert sparkline == " " * 30 + "█" * 30
+
+
 def test_compute_summary_filters_by_since():
     t0 = datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc)
     samples = [
