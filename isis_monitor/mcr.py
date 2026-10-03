@@ -104,15 +104,15 @@ class MCRNewsMonitor:
 
             failures = 0
             while True:
-                if await self._wait(self.config.mcr_poll_interval * min(2 ** failures, 8)):
+                if await self._wait(self.config.mcr_poll_interval * 2 ** failures):
                     failures = 0
                     self._set_health("reconnecting")
 
                 news = await self.get_news(session)
                 if news is None:
-                    failures += 1
+                    failures = min(failures + 1, 3)  # the backoff stops growing at 8x
                     self._set_health("error")
-                    logger.debug(f"MCR fetch failed (attempt {failures}).")
+                    logger.debug("MCR fetch failed.")
                     continue
 
                 failures = 0
