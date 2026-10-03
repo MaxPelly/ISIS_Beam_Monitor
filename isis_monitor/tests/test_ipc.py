@@ -213,7 +213,7 @@ async def test_socket_is_created_owner_only(tmp_path):
 
     async def spy(*args, path, **kwargs):
         server = await real_start(*args, path=path, **kwargs)
-        modes.append(os.stat(path).st_mode & 0o777)  # before start() chmods it
+        modes.append(os.stat(path).st_mode & 0o777)
         return server
 
     old_umask = os.umask(0o022)
