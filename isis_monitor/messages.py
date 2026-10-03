@@ -258,8 +258,10 @@ def collection_stalled(
 # names the fault it just cleared in the same sentence (e.g. "The faulty
 # power supply ... has been repaired").
 # Whole words (with common endings), so e.g. "tissue" isn't an issue.
-_MCR_GOOD_RE = re.compile(r"\b(restored|back on|beam on|resolved|rectified|repaired|fixed)\b")
-_MCR_ATTENTION_RE = re.compile(r"\b((fault|issue|problem)(s|y)?|trip(s|ped|ping)?|investigating)\b")
+_MCR_GOOD_RE = re.compile(r"\b(restored|(back|beam) on(line)?|resolved|rectified|repaired|fixed)\b")
+_MCR_ATTENTION_RE = re.compile(
+    r"\b(fault(s|y|ed|ing)?|(issue|problem)s?|trip(s|ped|ping)?|investigating)\b"
+)
 _MCR_WARNING_RE = re.compile(r"\b(maintenance|shutdowns?)\b")
 
 

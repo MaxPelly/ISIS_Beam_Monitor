@@ -239,6 +239,8 @@ def test_mcr_news_builder():
     # A resolution naming the fault it just fixed is GOOD: good keywords are checked first.
     ("The faulty power supply in the Inner Synchrotron has been repaired.", Severity.GOOD, "🎉"),
     ("Beam tripped twice overnight.", Severity.ATTENTION, "🚨"),
+    ("A faulted magnet is being replaced.", Severity.ATTENTION, "🚨"),
+    ("Beam back online to TS1.", Severity.GOOD, "🎉"),
     # Keywords only count as whole words.
     ("Tissue samples arriving for the triple-axis study.", Severity.INFO, MCR_NEWS_EMOJI),
 ])
