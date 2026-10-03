@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 # Matches the line-number prefix that separates news entries (2+ digits for robustness)
 _FEED_SPLIT_RE = re.compile(r"\r\n[0-9]{2,}")
+# Only the newest entry, at the top, is used. The limits stop a changed feed
+# format (no split found) from turning the whole feed into one huge news item.
+MAX_FEED_BYTES = 64 * 1024
+MAX_NEWS_CHARS = 1000
 
 
 class MCRNewsMonitor:
@@ -42,9 +46,12 @@ class MCRNewsMonitor:
                 self.url, timeout=aiohttp.ClientTimeout(total=10)
             ) as response:
                 if response.status == 200:
-                    feed = await response.text()
-                    parts = _FEED_SPLIT_RE.split(feed)
+                    raw = await response.content.read(MAX_FEED_BYTES)
+                    feed = raw.decode(response.charset or "utf-8", errors="replace")
+                    parts = _FEED_SPLIT_RE.split(feed, maxsplit=1)
                     cleaned = re.sub(r"\s+", " ", parts[0].replace("\r\n", "")).strip()
+                    if len(cleaned) > MAX_NEWS_CHARS:
+                        cleaned = cleaned[:MAX_NEWS_CHARS - 1] + "…"
                     if not cleaned:
                         logger.warning(
                             "MCR feed parsed to empty string; "

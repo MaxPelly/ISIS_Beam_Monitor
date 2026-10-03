@@ -6,6 +6,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from isis_monitor.config import AppConfig
 from isis_monitor.tests.helpers import fake_channel
+from isis_monitor import mcr
 from isis_monitor.mcr import MCRNewsMonitor
 
 
@@ -27,7 +28,10 @@ def news_session(status=200, text="", error=None):
     """A mock aiohttp session whose get() responds with `status`/`text`, or raises `error` on entry."""
     session = MagicMock()
     ctx = session.get.return_value
-    ctx.__aenter__.return_value = MagicMock(status=status, text=AsyncMock(return_value=text))
+
+    async def read(n):
+        return text.encode()[:n]
+    ctx.__aenter__.return_value = MagicMock(status=status, charset="utf-8", content=MagicMock(read=read))
     ctx.__aenter__.side_effect = error
     ctx.__aexit__ = AsyncMock(return_value=None)
     return session
@@ -43,6 +47,12 @@ def news_session(status=200, text="", error=None):
 ])
 async def test_mcr_get_news(mock_config, mock_channel, session, expected):
     assert await MCRNewsMonitor(mock_config, mock_channel).get_news(session) == expected
+
+
+async def test_mcr_get_news_bounds_a_feed_without_entry_breaks(mock_config, mock_channel):
+    """If the feed format changes and nothing splits it, the item is still short."""
+    news = await MCRNewsMonitor(mock_config, mock_channel).get_news(news_session(text="word " * 100_000))
+    assert len(news) == mcr.MAX_NEWS_CHARS and news.endswith("…")
 
 
 async def test_mcr_get_news_connection_error_and_empty_feed_log(mock_config, mock_channel, caplog):
