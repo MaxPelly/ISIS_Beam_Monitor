@@ -244,7 +244,6 @@ class WebhookNotifier(HTTPNotifier):
             "id": str(uuid.uuid4()),
             "title": n.title,
             "text": n.text,
-            "summary": n.to_summary(),
             "severity": n.severity.value,
             "emoji": n.emoji,
             "facts": [list(fact) for fact in n.facts],
@@ -252,7 +251,6 @@ class WebhookNotifier(HTTPNotifier):
             "url": n.url,
             "url_label": n.url_label,
             "timestamp": n.timestamp.astimezone(timezone.utc).isoformat() if n.timestamp else None,
-            "channel": n.channel,
             "topic": n.topic,
         }
 

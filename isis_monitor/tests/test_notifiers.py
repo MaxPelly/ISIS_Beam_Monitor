@@ -115,8 +115,8 @@ async def test_webhook_notifier_posts_signed_json():
     assert payload["severity"] == "good"
     assert payload["facts"] == [["Duration", "1h 0m"]]
     assert payload["timestamp"] == "2026-01-02T03:04:00+00:00"
-    assert (payload["channel"], payload["topic"]) == ("Experiment Updates", "PEARL")
-    assert payload["summary"].startswith("🚀 PEARL: New run started | Run 2")
+    assert payload["topic"] == "PEARL"
+    assert "summary" not in payload and "channel" not in payload  # the site doesn't use them
 
 
 async def test_webhook_notifier_retries_with_the_same_id(no_retry_delay, caplog):
