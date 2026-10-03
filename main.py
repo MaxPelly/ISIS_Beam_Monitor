@@ -112,14 +112,11 @@ class SingleInstanceLock:
 
 
 def configure_logging(log_file: str, log_level: str, max_bytes: int, backup_count: int) -> None:
-    log_path = Path(log_file)
-    if not log_path.is_absolute():
-        log_path = Path(__file__).parent / log_path
     numeric_level = getattr(logging, log_level.upper(), logging.WARNING)
     logging.basicConfig(
         level=numeric_level,
         format=LOG_FORMAT,
-        handlers=[RotatingFileHandler(log_path, maxBytes=max_bytes, backupCount=backup_count)],
+        handlers=[RotatingFileHandler(log_file, maxBytes=max_bytes, backupCount=backup_count)],
     )
 
 
@@ -413,7 +410,7 @@ async def tui_connection_loop(config, tui: RichTUI, on_client: Callable[[Optiona
     """
     backoff = config.tui_reconnect_initial
     while True:
-        client = IPCClient(Path(config.tui_socket_path))
+        client = IPCClient(Path(config.daemon_socket_path))
         try:
             tui.update_connection_state("connecting")
             await client.connect()

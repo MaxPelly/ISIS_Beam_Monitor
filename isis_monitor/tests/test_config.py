@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from isis_monitor.config import (
     load_config, ConfigError, ConfigChangedError, AppConfig, InstrumentConfig, config_revision,
-    editable_settings, update_config_file, read_push_secret,
+    editable_settings, update_config_file, read_push_secret, _PATH_FIELDS,
 )
 
 
@@ -81,7 +81,6 @@ lock_file = /tmp/beam.lock
 retention_days = 7
 
 [TUI_CLIENT]
-socket_path = /tmp/beam.sock
 reconnect_initial = 2
 reconnect_max = 20
 """))
@@ -89,7 +88,6 @@ reconnect_max = 20
     assert config.daemon_socket_path == "/tmp/beam.sock"
     assert config.daemon_lock_file == "/tmp/beam.lock"
     assert config.retention_days == 7
-    assert config.tui_socket_path == "/tmp/beam.sock"
     assert config.tui_reconnect_initial == 2
     assert config.tui_reconnect_max == 20
 
@@ -129,7 +127,8 @@ def test_load_config_instrument_target_must_be_a_state_key(tmp_path):
 def test_load_config_defaults_match_dataclass_defaults(tmp_path):
     """The loader's fallbacks and AppConfig's defaults come from one place."""
     config = load_config(_write(tmp_path, ""))
-    assert replace(config, instruments=[]) == AppConfig(mcr_news_url="http://test.com/news")
+    paths = {name: str(tmp_path / getattr(AppConfig, name)) for name in _PATH_FIELDS if getattr(AppConfig, name)}
+    assert replace(config, instruments=[]) == AppConfig(mcr_news_url="http://test.com/news", **paths)
     assert config.mcr_poll_interval == 60.0
     assert (config.fun_mode, config.notifications_timezone, config.debounce_seconds) == (
         False, "Europe/London", 20.0)
@@ -209,9 +208,13 @@ def test_load_config_blank_numeric_value_uses_default(tmp_path):
     assert config.history_maxlen == 60
 
 
-def test_load_config_tui_socket_defaults_to_daemon_socket(tmp_path):
-    config = load_config(_write(tmp_path, "[DAEMON]\nsocket_path = /run/beam.sock\n"))
-    assert config.tui_socket_path == "/run/beam.sock"
+def test_load_config_resolves_relative_paths_against_the_config_dir(tmp_path):
+    config = load_config(_write(tmp_path, "[PUSH]\nurl = http://127.0.0.1:9/ingest\nsecret_file = push.secret\n"))
+    assert config.daemon_db_path == str(tmp_path / "beam_monitor.db")
+    assert config.daemon_socket_path == str(tmp_path / "isis_beam_monitor.sock")
+    assert config.daemon_lock_file == str(tmp_path / "isis_beam_monitor.lock")
+    assert config.log_file == str(tmp_path / "monitor.log")
+    assert config.push_secret_file == str(tmp_path / "push.secret")
 
 
 def test_load_config_custom_boundaries(tmp_path):

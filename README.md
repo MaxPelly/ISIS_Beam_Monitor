@@ -264,5 +264,5 @@ sudo systemctl status isis-beam-monitor.service
 ### Troubleshooting
 
 - **`Lock file already held`**: another daemon instance is running (or stale lock path configured).
-- **TUI cannot connect**: ensure daemon is running and `[DAEMON].socket_path` matches `[TUI_CLIENT].socket_path`.
+- **TUI cannot connect**: ensure the daemon is running and the TUI uses the same config file (both use `[DAEMON] socket_path`).
 - **No live updates**: check `monitor.log` for websocket/news source errors; use `r` in TUI to force reconnect.

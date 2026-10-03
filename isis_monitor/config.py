@@ -133,13 +133,14 @@ class AppConfig:
     refresh_per_second: int = _ini("TUI", 4)
     logs_maxlen: int = _ini("TUI", 50)
 
+    # Relative paths (these, log_file and [PUSH] secret_file) are resolved
+    # against the config file's directory. The socket and lock stay out of
+    # shared /tmp, where another local user could pre-create them.
     daemon_db_path: str = _ini("DAEMON", "beam_monitor.db", "db_path")
-    daemon_socket_path: str = _ini("DAEMON", "/tmp/isis_beam_monitor.sock", "socket_path")
-    daemon_lock_file: str = _ini("DAEMON", "/tmp/isis_beam_monitor.lock", "lock_file")
+    daemon_socket_path: str = _ini("DAEMON", "isis_beam_monitor.sock", "socket_path")
+    daemon_lock_file: str = _ini("DAEMON", "isis_beam_monitor.lock", "lock_file")
     retention_days: int = _ini("DAEMON", 7)
 
-    # tui_socket_path falls back to daemon_socket_path when unset
-    tui_socket_path: str = _ini("TUI_CLIENT", "/tmp/isis_beam_monitor.sock", "socket_path")
     tui_reconnect_initial: float = _ini("TUI_CLIENT", 1.0, "reconnect_initial")
     tui_reconnect_max: float = _ini("TUI_CLIENT", 15.0, "reconnect_max")
 
@@ -330,6 +331,9 @@ def _read_parser(config_path: Path) -> configparser.ConfigParser:
     return parser
 
 
+_PATH_FIELDS = ("daemon_db_path", "daemon_socket_path", "daemon_lock_file", "log_file", "push_secret_file")
+
+
 def parse_config(parser: configparser.ConfigParser, config_path: Path) -> AppConfig:
     """Build and validate an AppConfig from an already-read parser."""
     values = {}
@@ -347,7 +351,10 @@ def parse_config(parser: configparser.ConfigParser, config_path: Path) -> AppCon
         except ValueError as exc:
             raise ConfigError(f"[{section}] {key}: {exc}") from exc
 
-    values.setdefault("tui_socket_path", values.get("daemon_socket_path", AppConfig.tui_socket_path))
+    for name in _PATH_FIELDS:
+        path = values.get(name, getattr(AppConfig, name))
+        if path:
+            values[name] = str(config_path.absolute().parent / path)  # an absolute path is kept as is
     config = AppConfig(**values)
     config.instruments = _read_instruments(parser, config)
     _validate(config, config_path)

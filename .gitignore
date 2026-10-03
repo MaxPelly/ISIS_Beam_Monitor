@@ -1,6 +1,8 @@
 *.db
 config.ini
 *.secret
+isis_beam_monitor.sock
+isis_beam_monitor.lock
 test.py
 
 # Byte-compiled / optimized / DLL files

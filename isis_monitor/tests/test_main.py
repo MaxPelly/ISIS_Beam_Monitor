@@ -191,7 +191,6 @@ def _config(tmp_path, **overrides) -> AppConfig:
             mcr_news_url="http://127.0.0.1:9/news",
             daemon_db_path=str(tmp_path / "state.db"),
             daemon_socket_path=str(tmp_path / "d.sock"),
-            tui_socket_path=str(tmp_path / "d.sock"),
             daemon_lock_file=str(tmp_path / "d.lock"),
             log_file=str(tmp_path / "monitor.log"),
             mcr_poll_interval=3600,
@@ -554,12 +553,10 @@ def test_main_daemon_refuses_second_instance(tmp_path, capsys):
     assert "Lock file already held" in capsys.readouterr().out
 
 
-def test_configure_logging_resolves_relative_path_next_to_main(tmp_path):
-    with patch("main.RotatingFileHandler") as handler_cls, patch("main.logging.basicConfig") as basic:
-        main.configure_logging("rel.log", "debug", 10, 2)
-        main.configure_logging(str(tmp_path / "abs.log"), "nonsense", 10, 2)
-    paths = [c.args[0] for c in handler_cls.call_args_list]
-    assert paths == [Path(main.__file__).parent / "rel.log", tmp_path / "abs.log"]
+def test_configure_logging_sets_the_level(tmp_path):
+    with patch("main.RotatingFileHandler"), patch("main.logging.basicConfig") as basic:
+        main.configure_logging(str(tmp_path / "a.log"), "debug", 10, 2)
+        main.configure_logging(str(tmp_path / "a.log"), "nonsense", 10, 2)
     assert [c.kwargs["level"] for c in basic.call_args_list] == [logging.DEBUG, logging.WARNING]
 
 
