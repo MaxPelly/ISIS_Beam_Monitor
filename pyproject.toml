@@ -24,3 +24,5 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Keep the push_site submodule's tests (and dependencies) out of this run.
+testpaths = ["isis_monitor/tests"]
