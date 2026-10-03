@@ -20,7 +20,7 @@ This is a Python application that monitors the status of the ISIS beam, experime
 
 ## Requirements
 
-Ensure you have Python 3.10+ installed.
+Ensure you have Python 3.12+ installed.
 Install the required dependencies using pip:
 
 ```bash
