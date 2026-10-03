@@ -29,8 +29,12 @@ def news_session(status=200, text="", error=None):
     session = MagicMock()
     ctx = session.get.return_value
 
-    async def read(n):
-        return text.encode()[:n]
+    body = bytearray(text.encode())
+
+    async def read(n):  # like aiohttp, a few bytes at a time rather than all n
+        chunk = bytes(body[:min(n, 7)])
+        del body[:len(chunk)]
+        return chunk
     ctx.__aenter__.return_value = MagicMock(status=status, charset="utf-8", content=MagicMock(read=read))
     ctx.__aenter__.side_effect = error
     ctx.__aexit__ = AsyncMock(return_value=None)
