@@ -50,7 +50,7 @@ notify_counts = 130
 # instrument_target = TS1
 
 [TUI]
-# Number of 1-minute samples the TUI shows per beam target (default = 60 → 1-hour rolling window).
+# Number of samples the TUI shows per beam target (1-1000, default = 60 → 1-hour rolling window).
 # history_maxlen = 60
 # Interval in seconds between graph samples (1-3600, default = 60).
 # sample_interval = 60
@@ -82,6 +82,7 @@ notify_counts = 130
 # log_level = INFO
 # log_max_bytes = 5000000
 # log_backup_count = 3
+# (both at least 1: a 0 in either would stop the log rotating)
 
 [TIMEOUTS_INTERVALS]
 # Seconds between MCR news polls (5-86400).

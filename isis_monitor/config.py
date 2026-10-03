@@ -50,12 +50,12 @@ _BOUNDS = {
     "webhook_timeout": (1, 300),
     "push_timeout": (0.5, 30),
     "sample_interval": (1, 3600),
-    "history_maxlen": (1, 100_000),
+    "history_maxlen": (1, 1_000),  # the TUI fetches this many per beam in one IPC reply
     "refresh_per_second": (1, 60),
     "logs_maxlen": (1, 10_000),
     "retention_days": (1, 365),
-    "log_max_bytes": (0, 1_000_000_000),
-    "log_backup_count": (0, 100),
+    "log_max_bytes": (1, 1_000_000_000),  # 0 would turn rotation off
+    "log_backup_count": (1, 100),
 }
 # The daemon keeps retention_days of samples per beam in memory.
 MAX_HISTORY_SAMPLES = 100_000
