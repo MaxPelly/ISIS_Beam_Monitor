@@ -248,8 +248,9 @@ class InstrumentTracker:
 
         Only meaningful while a run is active — between runs, the collected
         count is naturally static, which would otherwise look identical to a
-        stall. A run whose finishing card has gone out has usually ended (the
-        title, and so run_name, stays until the next run), so it isn't checked.
+        stall. A run that has reached notify_counts has usually ended (the
+        title, and so run_name, stays until the next run), so it isn't checked;
+        one merely forecast to finish soon still is.
 
         Movement is judged over STALL_CHECK_WINDOW rather than since the last
         tick: the counts PV can plausibly update in batches, so comparing
@@ -257,7 +258,7 @@ class InstrumentTracker:
         look stalled every time a batch hadn't landed yet in that particular
         minute.
         """
-        if not self.state.run_name or self.state.end_notified:
+        if not self.state.run_name or self.state.current_counts >= self.instrument.notify_counts:
             return
 
         baseline = self._collected_baseline_before(time_now - STALL_CHECK_WINDOW)

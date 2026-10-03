@@ -57,8 +57,9 @@ def title(name, pv=PEARL_TITLE):
 
 
 def stall_monitor(mock_config, mock_channels, run_name="Run 1"):
-    """A monitor connected to PVWS with TS1 on, run_name active and stall_minutes ~0.6s."""
-    m = make_monitor(replace(mock_config, stall_minutes=0.01), mock_channels)
+    """A monitor connected to PVWS with TS1 on, run_name active, stall_minutes ~0.6s
+    and a 1000 µA·h target, so the usual test counts are mid-run."""
+    m = make_monitor(replace(mock_config, stall_minutes=0.01), mock_channels, counts_target=1000)
     m._current_ws = MagicMock()
     tracker(m).state.run_name = run_name
     m.beams["TS1"].power = "high"
@@ -517,18 +518,21 @@ async def test_check_collection_progress_detects_stall_when_instrument_beam_on(m
     assert notification.title == "PEARL: Data collection stalled"
 
 
-async def test_no_stall_warning_after_the_runs_finishing_card(mock_config, mock_channels):
-    """The run has usually ended by then; its static counts aren't a stall."""
+@pytest.mark.parametrize("counts, end_notified, warned", [
+    (1000.0, True, False),  # reached notify_counts: the run has usually ended
+    (100.0, True, True),  # only forecast to finish: a hang now is still a stall
+])
+async def test_stall_checks_stop_once_the_run_reaches_its_target(mock_config, mock_channels, counts, end_notified, warned):
     _, exp_channel = mock_channels
     m = stall_monitor(mock_config, mock_channels)
     now = datetime.now(timezone.utc)
-    _seed_collected_baseline(m, now, 100.0)
-    tracker(m).state.current_counts = 100.0
-    tracker(m).state.end_notified = True
+    _seed_collected_baseline(m, now, counts)
+    tracker(m).state.current_counts = counts
+    tracker(m).state.end_notified = end_notified
 
     await m._check_collection_progress(now)
     await m._check_collection_progress(now + timedelta(seconds=1))
-    exp_channel.broadcast.assert_not_called()
+    assert exp_channel.broadcast.called is warned
 
 
 async def test_check_collection_progress_movement_resets_stall_clock(mock_config, mock_channels):
@@ -891,8 +895,8 @@ async def test_stall_check_uses_each_instruments_beam_target(mock_config, mock_c
     now = datetime.now(timezone.utc)
     for t in m.instruments.values():
         t.state.run_name = "Run 1"
-        t.state.collected_samples.append((now - STALL_CHECK_WINDOW - timedelta(seconds=30), 100.0))
-        t.state.current_counts = 100.0
+        t.state.collected_samples.append((now - STALL_CHECK_WINDOW - timedelta(seconds=30), 40.0))
+        t.state.current_counts = 40.0  # below either instrument's target
 
     await m._check_collection_progress(now)
     await m._check_collection_progress(now + timedelta(seconds=1))
@@ -922,7 +926,7 @@ async def test_run_cards_use_the_instruments_channel_setting(mock_config, mock_c
                      instruments=[replace(mock_config.instruments[0], channel=mode)])
     sink = MagicMock()
     sink.record_run_completed.return_value = 25
-    m = make_monitor(config, mock_channels, sink=sink)
+    m = make_monitor(config, mock_channels, counts_target=130, sink=sink)
     m._current_ws = MagicMock()  # connected to PVWS
     t = tracker(m)
     m.beams["TS1"].power = "high"
