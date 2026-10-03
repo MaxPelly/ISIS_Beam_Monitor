@@ -39,7 +39,8 @@ def make_status_session(*statuses: int, headers=None):
     responses have each of `statuses` in turn."""
     session = MagicMock(closed=False)
     session.responses = [
-        MagicMock(status=status, headers=headers or {}, text=AsyncMock(return_value="body")) for status in statuses
+        MagicMock(status=status, headers=headers or {}, content=MagicMock(read=AsyncMock(return_value=b"body")))
+        for status in statuses
     ]
     contexts = [MagicMock() for _ in statuses]
     for ctx, resp in zip(contexts, session.responses):
@@ -97,6 +98,15 @@ async def test_teams_notifier_logs_error_on_bad_status(caplog):
         await notifier.send(Notification(title="Test title", text="Test message"))
 
     assert "HTTP 400: body" in caplog.text
+
+
+async def test_error_body_excerpt_is_bounded_and_has_no_escapes(caplog, no_retry_delay):
+    notifier = TeamsNotifier("http://fake.webhook.url")
+    notifier._session = make_status_session(400)
+    notifier._session.responses[0].content.read.return_value = b"\x1b[2Jbad"
+    await notifier.send(Notification(title="t", text="x"))
+    notifier._session.responses[0].content.read.assert_awaited_once_with(200)
+    assert "HTTP 400: [2Jbad" in caplog.text and "\x1b" not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +311,7 @@ async def test_teams_notifier_retries_only_temporary_http_errors(statuses, attem
 async def test_teams_notifier_retries_a_5xx_whose_body_cannot_be_read(no_retry_delay):
     notifier = TeamsNotifier("http://example.invalid/hook")
     notifier._session = make_status_session(503, 200)
-    notifier._session.responses[0].text.side_effect = aiohttp.ClientPayloadError("dropped")
+    notifier._session.responses[0].content.read.side_effect = aiohttp.ClientPayloadError("dropped")
 
     await notifier.send(Notification(title="t", text="x"))
     assert notifier._session.post.call_count == 2

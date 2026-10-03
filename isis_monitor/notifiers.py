@@ -15,7 +15,7 @@ from typing import List, Optional, Tuple
 
 import aiohttp
 
-from isis_monitor.messages import Notification, Severity, fmt_time
+from isis_monitor.messages import Notification, Severity, fmt_time, strip_controls
 
 logger = logging.getLogger(__name__)
 
@@ -129,15 +129,15 @@ class HTTPNotifier(Notifier):
             ) as resp:
                 if 200 <= resp.status < 300:
                     return None, False, None
-                try:
-                    body = await resp.text()
+                try:  # an excerpt for the log: bounded, and no terminal escapes
+                    body = strip_controls((await resp.content.read(200)).decode(errors="replace"))
                 except aiohttp.ClientError:  # e.g. dropped mid-body; the status still counts
                     body = ""
                 # 429 (rate limited) and 5xx are temporary; any other 4xx won't
                 # get better by resending the same request.
                 retryable = resp.status == 429 or resp.status >= 500
                 return (
-                    f"{self.LABEL} returned HTTP {resp.status}: {body[:200]}",
+                    f"{self.LABEL} returned HTTP {resp.status}: {body}",
                     retryable,
                     _retry_after(resp.headers.get("Retry-After"), self.MAX_RETRY_AFTER),
                 )
