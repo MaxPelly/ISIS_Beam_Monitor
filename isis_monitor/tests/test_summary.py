@@ -176,8 +176,9 @@ async def test_daily_summary_not_resent_after_restart_same_day(tmp_path):
         store.close()
 
 
-async def test_daily_summary_tolerates_corrupt_persisted_values(store, caplog):
-    store.upsert_snapshot("records", "{not json")
+@pytest.mark.parametrize("records", ["{not json", "[1, 2]", '{"TS1": "x"}'])
+async def test_daily_summary_tolerates_corrupt_persisted_values(store, caplog, records):
+    store.upsert_snapshot("records", records)
     store.upsert_snapshot(LAST_SENT_KEY, "yesterday-ish")
     store.commit()
     now = datetime.now(timezone.utc)
@@ -217,3 +218,11 @@ async def test_daily_summary_loop_survives_database_errors(store, caplog):
     assert channel.broadcast.call_count == 3  # still sent, and only once
     assert "Failed to load daily summary state" in caplog.text
     assert "Failed to save daily summary state" in caplog.text
+
+
+async def test_daily_summary_loop_survives_a_failing_summary(store, caplog):
+    """An unexpected error skips that day's cards, logged, without ending the loop."""
+    with patch("isis_monitor.summary.daily_summary", side_effect=RuntimeError("boom")):
+        channel = await run_summary(store)
+    channel.broadcast.assert_not_called()
+    assert caplog.text.count("Failed to send the daily summary") == 1  # not retried every tick

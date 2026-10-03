@@ -8,7 +8,6 @@ import os
 import random
 import shutil
 import signal
-import sqlite3
 import sys
 import termios
 import tty
@@ -172,23 +171,23 @@ async def state_persistence_loop(config, state: DaemonState, store: SQLiteStateS
         except asyncio.TimeoutError:
             pass
 
-        ts = datetime.now(timezone.utc)
-        # While the beam feed is down the values are stale, and sampling them
-        # would count as beam time in the daily summary; leave a gap instead.
-        rows = state.sample_all_currents(ts) if state.health["beam"] == "connected" else []
-        cutoff = ts - timedelta(days=config.retention_days)
-        state.trim_history_before(cutoff)
-        snap = json.dumps(state.snapshot())
-
-        def _persist():
-            store.write_samples(rows)
-            store.prune_older_than(cutoff)
-            store.upsert_snapshot("daemon_state", snap)
-            store.commit()
-
         try:
+            ts = datetime.now(timezone.utc)
+            # While the beam feed is down the values are stale, and sampling them
+            # would count as beam time in the daily summary; leave a gap instead.
+            rows = state.sample_all_currents(ts) if state.health["beam"] == "connected" else []
+            cutoff = ts - timedelta(days=config.retention_days)
+            state.trim_history_before(cutoff)
+            snap = json.dumps(state.snapshot())
+
+            def _persist():
+                store.write_samples(rows)
+                store.prune_older_than(cutoff)
+                store.upsert_snapshot("daemon_state", snap)
+                store.commit()
+
             await store.run(_persist)
-        except sqlite3.Error:
+        except Exception:  # not just sqlite3.Error: no failure here may stop the daemon
             logger.exception("Failed to persist daemon state; will retry next interval")
 
 

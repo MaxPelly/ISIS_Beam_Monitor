@@ -117,11 +117,14 @@ class MCRNewsMonitor:
                 logger.info(f"New MCR Update: {news}")
                 self._publish_news(news)
                 rng = self._rng if self.config.fun_mode else None
-                notification = mcr_news(
-                    news, datetime.now(timezone.utc),
-                    url=self.config.mcr_page_url or None, rng=rng,
-                )
-                await self.channel.broadcast(notification)
+                try:
+                    notification = mcr_news(
+                        news, datetime.now(timezone.utc),
+                        url=self.config.mcr_page_url or None, rng=rng,
+                    )
+                    await self.channel.broadcast(notification)
+                except Exception:
+                    logger.exception("Failed to send the MCR news notification")
 
     def request_reconnect(self) -> bool:
         if self._force_reconnect.is_set():

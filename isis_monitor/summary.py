@@ -106,8 +106,9 @@ def _load_records(store: SQLiteStateStore) -> Dict[str, float]:
     if not raw:
         return {}
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
+        records = json.loads(raw)
+        return {str(k): float(v) for k, v in records.items()}
+    except (ValueError, TypeError, AttributeError):  # including JSONDecodeError
         logger.warning("Corrupt records snapshot, starting fresh.")
         return {}
 
@@ -164,31 +165,36 @@ async def daily_summary_loop(
             continue
 
         last_sent_date = now_local.date()
-        since = now_utc - SUMMARY_WINDOW
-        summaries = compute_summary(state.history, since, now_utc, config.sample_interval)
-        instruments_by_channel = _instruments_by_channel(state)
-        todays_fact = fact_of_the_day(rng) if (config.fun_mode and rng) else ""
+        # One failure skips today's summary rather than stopping the daemon
+        # (and last_sent_date is already set, so it isn't retried every minute).
+        try:
+            since = now_utc - SUMMARY_WINDOW
+            summaries = compute_summary(state.history, since, now_utc, config.sample_interval)
+            instruments_by_channel = _instruments_by_channel(state)
+            todays_fact = fact_of_the_day(rng) if (config.fun_mode and rng) else ""
 
-        for beam, target_summary in summaries.items():
-            prior_record = records.get(beam, 0.0)
-            streak_seconds = target_summary.longest_on_streak.total_seconds()
-            is_new_record = config.fun_mode and streak_seconds > prior_record
-            if is_new_record:
-                records[beam] = streak_seconds
+            for beam, target_summary in summaries.items():
+                prior_record = records.get(beam, 0.0)
+                streak_seconds = target_summary.longest_on_streak.total_seconds()
+                is_new_record = config.fun_mode and streak_seconds > prior_record
+                if is_new_record:
+                    records[beam] = streak_seconds
 
-            notification = daily_summary(
-                beam,
-                target_summary.uptime_pct,
-                target_summary.trips,
-                target_summary.longest_on_streak,
-                target_summary.sparkline,
-                state.count_runs_completed_since(since, instruments_by_channel.get(beam, [])),
-                now_utc,
-                is_new_record=is_new_record,
-                fact_of_the_day=todays_fact,
-                coverage_pct=target_summary.coverage_pct,
-            )
-            await beam_channel.broadcast(notification)
+                notification = daily_summary(
+                    beam,
+                    target_summary.uptime_pct,
+                    target_summary.trips,
+                    target_summary.longest_on_streak,
+                    target_summary.sparkline,
+                    state.count_runs_completed_since(since, instruments_by_channel.get(beam, [])),
+                    now_utc,
+                    is_new_record=is_new_record,
+                    fact_of_the_day=todays_fact,
+                    coverage_pct=target_summary.coverage_pct,
+                )
+                await beam_channel.broadcast(notification)
+        except Exception:
+            logger.exception("Failed to send the daily summary")
 
         try:
             await store.run(_save_progress, store, last_sent_date, records)
