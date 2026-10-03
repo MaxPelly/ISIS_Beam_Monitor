@@ -144,18 +144,19 @@ inviting people's phones.
 [PUSH]
 url = http://127.0.0.1:8765/ingest
 # 32 to 4096 characters, created owner-only, e.g. `(umask 077; openssl rand -hex 32 > push.secret)`.
-# Relative to the daemon's working directory; only the daemon reads it.
-secret_file = push.secret
+# Relative to this config file's directory; only the daemon reads it. With the
+# push_site submodule, use the site's own copy: push_site/push.secret.
+secret_file = push_site/push.secret
 # timeout = 2
 ```
 
 Each request has an `X-Timestamp` header (Unix seconds) and an `X-Signature` header:
 the hex HMAC-SHA256 of `<timestamp>.<body>` under the secret (the file's contents with
 surrounding whitespace, such as the trailing newline, removed). The body is a JSON
-object (`"v": 1`) holding the notification's `id`, `title`, `text`, `summary`,
+object (`"v": 1`) holding the notification's `id`, `title`, `text`,
 `severity`, `emoji`, `facts`, `flavour`, `url`, `url_label`, `timestamp`
-(ISO 8601, UTC), `channel` and `topic` (`TS1`/`TS2`/`Muons`, the instrument
-name, `MCR` or `Summary`). A retry keeps the same `id`.
+(ISO 8601, UTC) and `topic` (`TS1`/`TS2`/`Muons`, the instrument name, `MCR`
+or `Summary`). A retry keeps the same `id`.
 
 ## Usage
 
