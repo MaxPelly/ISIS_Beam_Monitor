@@ -75,17 +75,28 @@ def make_monitor(mock_config, mock_channels, counts_target=100, rng=None, sink=N
 
 
 # ---------------------------------------------------------------------------
-# _safe_float
+# _parse_current
 # ---------------------------------------------------------------------------
 
-def test_safe_float(mock_config, mock_channels):
+def test_parse_current(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels)
-    assert m._safe_float("123.4") == 123.4
-    assert m._safe_float(123.4) == 123.4
-    assert m._safe_float("NaN") == 0.0
-    assert m._safe_float("nan") == 0.0
-    assert m._safe_float("bad_string") == 0.0
-    assert m._safe_float(None) == 0.0
+    assert m._parse_current("123.4") == 123.4
+    assert m._parse_current(0) == 0.0
+    for junk in ("NaN", "nan", "inf", "bad_string", None):
+        assert m._parse_current(junk) is None
+
+
+@pytest.mark.parametrize("junk", ["NaN", None, "bad_string"])
+async def test_unreadable_beam_current_is_ignored_not_off(mock_config, mock_channels, junk):
+    """E.g. PVWS's NaN before a PV has a value: no "beam off" card or sample."""
+    beam_channel, _ = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": junk})
+    beam_channel.broadcast.assert_not_called()
+    assert m.beams["TS1"].power == ""
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": junk})
+    assert (m.beams["TS1"].power, m.beams["TS1"].current) == ("medium", 60.0)
 
 
 # ---------------------------------------------------------------------------

@@ -225,13 +225,14 @@ class BeamMonitor:
         }
 
     @staticmethod
-    def _safe_float(value: Any) -> float:
-        """Converts value to float, mapping NaN, None and junk to 0.0."""
+    def _parse_current(value: Any) -> Optional[float]:
+        """The beam current, or None for NaN (PVWS's "no value yet"), None or
+        junk, which must not be read as the beam going off."""
         try:
             val = float(value)
         except (ValueError, TypeError):
-            return 0.0
-        return 0.0 if math.isnan(val) else val
+            return None
+        return val if math.isfinite(val) else None
 
     def _get_power_label(self, beam_uA: float, beam: str) -> str:
         boundaries = self.beam_boundaries[beam]
@@ -244,7 +245,10 @@ class BeamMonitor:
         self, bt: BeamTarget, raw_val: Any, time_now: datetime
     ):
         """Handle a beam-current value update for a single target."""
-        beam_val = self._safe_float(raw_val)
+        beam_val = self._parse_current(raw_val)
+        if beam_val is None:
+            logger.debug(f"Ignoring {bt.state_key} beam current {raw_val!r}")
+            return
         new_state = self._get_power_label(beam_val, bt.state_key)
         beam_state = self.beams[bt.state_key]
         prev_state = beam_state.power
