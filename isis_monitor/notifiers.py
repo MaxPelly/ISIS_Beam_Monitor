@@ -196,7 +196,7 @@ class TeamsNotifier(HTTPNotifier):
                 "wrap": True,
             })
 
-        summary = notification.to_summary()
+        summary = _no_links(notification.to_summary())
 
         card = {
             # Not part of the Adaptive Card schema — kept for downstream (e.g.

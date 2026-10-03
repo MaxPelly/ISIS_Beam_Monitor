@@ -86,6 +86,7 @@ def test_teams_card_breaks_markdown_links_in_remote_text():
         Notification(title=f"PEARL: {evil}", text=evil, flavour=evil, facts=[("Previous run", evil)]))
     card = json.dumps(payload["attachments"][0]["content"]["body"])
     assert "](" not in card and card.count("]\\u200b(") == 4
+    assert "](" not in payload["summary"]  # read by plain-text clients and flows
 
 
 async def test_teams_notifier_logs_error_on_bad_status(caplog):
