@@ -27,9 +27,6 @@ _SEVERITY_STYLE = {
 }
 
 
-MAX_RETRY_AFTER = 60.0  # cap on a server's Retry-After, so it can't stall the channel
-
-
 def _no_links(text: str) -> str:
     """Card text with markdown links broken by a zero-width space, so remote
     text (e.g. a run title "[Sign in](https://evil)") shows as typed rather
@@ -37,7 +34,7 @@ def _no_links(text: str) -> str:
     return text.replace("](", "]\u200b(")
 
 
-def _retry_after(value: object, cap: float = MAX_RETRY_AFTER) -> Optional[float]:
+def _retry_after(value: object, cap: float) -> Optional[float]:
     """Seconds to wait from a Retry-After header (seconds or an HTTP date),
     capped at `cap`; None if missing or unreadable."""
     if not isinstance(value, str):
@@ -74,7 +71,7 @@ class HTTPNotifier(Notifier):
     short and bounded.
     """
     RETRY_DELAYS = (2.0, 4.0)  # seconds before the 2nd and 3rd attempts
-    MAX_RETRY_AFTER = MAX_RETRY_AFTER
+    MAX_RETRY_AFTER = 60.0  # cap on a server's Retry-After, so it can't stall the channel
     LABEL = "webhook"  # how log messages refer to the destination
 
     def __init__(self, webhook_url: str, timeout: float = 10.0):

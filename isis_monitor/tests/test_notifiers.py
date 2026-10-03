@@ -341,14 +341,14 @@ async def test_webhook_notifier_caps_retry_after_lower_than_teams():
 def test_retry_after_parsing():
     in_30s = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=30), usegmt=True)
 
-    assert _retry_after("5") == 5.0
-    assert _retry_after("3600") == 60.0  # capped
-    assert _retry_after("3600", cap=5.0) == 5.0
-    assert 25 <= _retry_after(in_30s) <= 30
-    assert _retry_after("Mon, 01 Jan 2001 00:00:00 GMT") == 0.0  # already past
-    assert _retry_after("Sun Nov  6 08:49:37 1994") == 0.0  # asctime form, naive
+    assert _retry_after("5", 60.0) == 5.0
+    assert _retry_after("3600", 60.0) == 60.0  # capped
+    assert _retry_after("3600", 5.0) == 5.0
+    assert 25 <= _retry_after(in_30s, 60.0) <= 30
+    assert _retry_after("Mon, 01 Jan 2001 00:00:00 GMT", 60.0) == 0.0  # already past
+    assert _retry_after("Sun Nov  6 08:49:37 1994", 60.0) == 0.0  # asctime form, naive
     for bad in (None, "", "soon", "nan", "inf"):
-        assert _retry_after(bad) is None, bad
+        assert _retry_after(bad, 60.0) is None, bad
 
 
 async def test_closing_the_channel_cancels_a_send_waiting_to_retry():
