@@ -250,16 +250,9 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
     async def command_handler(name: str) -> dict:
         if name == "force_reconnect_all":
             return {"beam": beam_monitor.request_reconnect(), "mcr": mcr_monitor.request_reconnect()}
-        if name == "force_reconnect_beam":
-            return {"beam": beam_monitor.request_reconnect()}
-        if name == "force_reconnect_mcr":
-            return {"mcr": mcr_monitor.request_reconnect()}
         if name == "shutdown":
             stop_event.set()
             return {"shutdown": "ok"}
-        if name == "restart":
-            request_restart("Restart requested over IPC")
-            return {"restart": "ok"}
         return {"error": "unknown_command", "name": name}
 
     def current_config() -> dict:

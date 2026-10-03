@@ -344,12 +344,8 @@ async def test_run_daemon_serves_ipc_and_shuts_down_cleanly_with_tui_attached(tm
             assert await ts1_power() == "high"
             await wait_until(lambda: _persisted_samples(tmp_path / "state.db"))
 
-            replies = {
-                name: (await client.request({"method": "command", "name": name}))["result"]
-                for name in ("force_reconnect_mcr", "bogus")
-            }
-            assert replies["force_reconnect_mcr"] == {"mcr": True}
-            assert replies["bogus"] == {"error": "unknown_command", "name": "bogus"}
+            bogus = (await client.request({"method": "command", "name": "bogus"}))["result"]
+            assert bogus == {"error": "unknown_command", "name": "bogus"}
 
             shutdown = await client.request({"method": "command", "name": "shutdown"})
             assert shutdown["result"] == {"shutdown": "ok"}
@@ -379,15 +375,13 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
         await client.connect()
         snap = (await client.request({"method": "get_snapshot"}))["snapshot"]
         history = (await client.request({"method": "get_history"}))["history"]
-        beam_only = (await client.request({"method": "command", "name": "force_reconnect_beam"}))["result"]
-        both = (await client.request({"method": "command", "name": "force_reconnect_all"}))["result"]
+        reconnect = (await client.request({"method": "command", "name": "force_reconnect_all"}))["result"]
         await client.close()
 
     assert snap["mcr_news"] == "old news"
     assert snap["instruments"]["PEARL"]["total_runs"] == 30
     assert history["TS2"][0]["current"] == 7.0
-    assert set(beam_only) == {"beam"}
-    assert set(both) == {"beam", "mcr"}
+    assert set(reconnect) == {"beam", "mcr"}
 
 
 # ---------------------------------------------------------------------------
@@ -708,13 +702,6 @@ async def test_daemon_update_config_writes_file_and_requests_restart(tmp_path):
         assert reply == {"ok": True, "restarting": True, "version": 1}
         assert await asyncio.wait_for(task, 5) is True
     assert "fun_mode = true" in ini.read_text()
-
-
-async def test_daemon_restart_command_requests_restart(tmp_path):
-    async with daemon_with_file(tmp_path) as (task, client, ini):
-        reply = await client.request({"method": "command", "name": "restart"})
-        assert reply["result"] == {"restart": "ok"}
-        assert await asyncio.wait_for(task, 5) is True
 
 
 def test_main_restarts_after_lock_is_released(tmp_path, no_exec):
