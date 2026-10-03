@@ -74,7 +74,7 @@ def test_single_instance_lock_writes_pid_and_releases(tmp_path):
 def test_single_instance_lock_rejects_second_holder(tmp_path):
     lock_file = tmp_path / "test.lock"
     with SingleInstanceLock(lock_file):
-        with pytest.raises(RuntimeError, match="Lock file already held"):
+        with pytest.raises(main.LockHeldError, match="Lock file already held"):
             with SingleInstanceLock(lock_file):
                 pass
 
@@ -997,3 +997,15 @@ async def test_run_stop_gives_up_on_a_daemon_that_does_not_answer(tmp_path, caps
                 await main.run_stop(_config(tmp_path))
     assert exc.value.code == 1
     assert "didn't answer" in capsys.readouterr().out
+
+
+async def test_run_stop_reports_a_dropped_connection(tmp_path, capsys):
+    with patch("main.IPCClient") as client_cls:
+        client = client_cls.return_value
+        client.connect = AsyncMock()
+        client.close = AsyncMock()
+        client.request = AsyncMock(side_effect=ConnectionError("IPC client closed"))
+        with pytest.raises(SystemExit) as exc:
+            await main.run_stop(_config(tmp_path))
+    assert exc.value.code == 1
+    assert "Lost the connection" in capsys.readouterr().out

@@ -78,6 +78,10 @@ def _running_loop() -> Optional[asyncio.AbstractEventLoop]:
         return None
 
 
+class LockHeldError(RuntimeError):
+    """Another daemon already holds the lock file."""
+
+
 class SingleInstanceLock:
     """Holds an exclusive flock on `path` for the lifetime of the daemon.
 
@@ -96,7 +100,7 @@ class SingleInstanceLock:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             fh.close()
-            raise RuntimeError(f"Lock file already held: {self.path}") from exc
+            raise LockHeldError(f"Lock file already held: {self.path}") from exc
         fh.seek(0)
         fh.truncate()
         fh.write(str(os.getpid()))
@@ -599,6 +603,9 @@ async def run_stop(config) -> None:
     except TimeoutError:
         print(f"The daemon didn't answer within {IPC_REQUEST_TIMEOUT:.0f}s; it may be stuck.")
         raise SystemExit(1)
+    except (OSError, ValueError) as exc:  # e.g. the daemon closed the connection
+        print(f"Lost the connection to the daemon: {exc!r}")
+        raise SystemExit(1)
     finally:
         await client.close()
     if not response.get("ok"):
@@ -661,7 +668,7 @@ def main():
             asyncio.run(run_tui(config, stop_event))
         elif args.mode == "stop":
             asyncio.run(run_stop(config))
-    except RuntimeError as exc:
+    except LockHeldError as exc:  # anything else keeps its traceback
         print(str(exc))
         raise SystemExit(1)
     except (KeyboardInterrupt, asyncio.CancelledError):
