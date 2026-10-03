@@ -254,7 +254,9 @@ async def test_notification_channel_logs_failing_notifier_and_still_delivers(cap
 
 @pytest.mark.parametrize("error, attempts, logged", [
     (aiohttp.ClientConnectionError("refused"), 3, "Failed to send Teams webhook: refused (after 3 attempts)"),
-    (ValueError("bad payload"), 1, "Failed to send Teams webhook: bad payload"),  # unexpected: not retried
+    # Unexpected: not retried, and only its type is logged, since aiohttp
+    # errors such as InvalidURL carry the (secret) webhook URL.
+    (aiohttp.InvalidURL("https://hook.invalid/secret-token"), 1, "Failed to send Teams webhook: InvalidURL"),
 ])
 async def test_teams_notifier_retries_only_connection_errors(caplog, no_retry_delay, error, attempts, logged):
     notifier = TeamsNotifier("http://example.invalid/hook")
@@ -264,6 +266,7 @@ async def test_teams_notifier_retries_only_connection_errors(caplog, no_retry_de
     await notifier.send(Notification(title="t", text="x"))
     assert notifier._session.post.call_count == attempts
     assert logged in caplog.text
+    assert "secret-token" not in caplog.text
 
 
 @pytest.mark.parametrize("statuses, attempts", [
@@ -272,13 +275,17 @@ async def test_teams_notifier_retries_only_connection_errors(caplog, no_retry_de
     ((500, 500, 500), 3),  # gives up after the last attempt
     ((400,), 1),  # a bad request won't get better by resending it
     ((404,), 1),
+    ((302,), 1),  # a redirect isn't followed (it would drop the body) or retried
 ])
-async def test_teams_notifier_retries_only_temporary_http_errors(statuses, attempts, no_retry_delay):
+async def test_teams_notifier_retries_only_temporary_http_errors(statuses, attempts, no_retry_delay, caplog):
     notifier = TeamsNotifier("http://example.invalid/hook")
     notifier._session = make_status_session(*statuses)
 
     await notifier.send(Notification(title="t", text="x"))
     assert notifier._session.post.call_count == attempts
+    assert notifier._session.post.call_args.kwargs["allow_redirects"] is False
+    gave_up = any(r.levelno == logging.ERROR for r in caplog.records)
+    assert gave_up is (statuses[-1] != 200)
 
 
 async def test_teams_notifier_retries_a_5xx_whose_body_cannot_be_read(no_retry_delay):

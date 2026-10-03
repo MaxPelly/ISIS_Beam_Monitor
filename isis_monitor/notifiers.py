@@ -115,12 +115,15 @@ class HTTPNotifier(Notifier):
         the server's Retry-After in seconds if it gave one)."""
         try:
             session = await self._get_session()
+            # A redirect would turn the POST into a bodyless GET whose 200
+            # looks like success, so it's reported as a failure instead.
             async with session.post(
                 self.webhook_url,
                 timeout=aiohttp.ClientTimeout(total=self.timeout),
+                allow_redirects=False,
                 **self._request_kwargs(payload),
             ) as resp:
-                if resp.status < 400:
+                if 200 <= resp.status < 300:
                     return None, False, None
                 try:
                     body = await resp.text()
@@ -136,8 +139,8 @@ class HTTPNotifier(Notifier):
                 )
         except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
             return f"Failed to send {self.LABEL}: {e}", True, None
-        except Exception as e:
-            return f"Failed to send {self.LABEL}: {e}", False, None
+        except Exception as e:  # its message may hold the URL, which is a secret
+            return f"Failed to send {self.LABEL}: {type(e).__name__}", False, None
 
 
 class TeamsNotifier(HTTPNotifier):
