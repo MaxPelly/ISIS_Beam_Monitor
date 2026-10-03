@@ -3,7 +3,8 @@ import contextlib
 import json
 import pytest
 from websockets.datastructures import Headers
-from websockets.exceptions import InvalidStatusCode
+from websockets.exceptions import InvalidStatus
+from websockets.http11 import Response
 import base64
 import random
 from dataclasses import replace
@@ -757,17 +758,20 @@ async def test_run_loop_bad_url_marks_health_and_retries(mock_config, mock_chann
     assert call("beam", "disconnected") not in sink.update_health.call_args_list
 
 
+def rejected_with(status: int) -> InvalidStatus:
+    """What connect() raises when PVWS answers the handshake with `status`."""
+    return InvalidStatus(Response(status, "", Headers()))
+
+
 def test_classify_ws_error():
     import socket
     import ssl
-    from websockets.exceptions import ConnectionClosedError, InvalidMessage, InvalidStatus, InvalidURI, SecurityError
-    from websockets.http11 import Response
+    from websockets.exceptions import ConnectionClosedError, InvalidMessage, InvalidURI, SecurityError
 
     cases = {
-        InvalidStatusCode(403, Headers()): "rejected",
-        InvalidStatusCode(404, Headers()): "rejected",
-        InvalidStatusCode(503, Headers()): "transient",
-        InvalidStatus(Response(401, "Unauthorized", Headers())): "rejected",
+        rejected_with(403): "rejected",
+        rejected_with(404): "rejected",
+        rejected_with(503): "transient",
         InvalidURI("nope", "not a ws URL"): "config",
         ssl.SSLCertVerificationError("certificate verify failed"): "tls",
         socket.gaierror(socket.EAI_NONAME, "Name or service not known"): "dns",
@@ -781,14 +785,14 @@ def test_classify_ws_error():
     }
     for exc, kind in cases.items():
         assert _classify_ws_error(exc)[0] == kind, exc
-    assert "HTTP 403" in _classify_ws_error(InvalidStatusCode(403, Headers()))[1]
+    assert "HTTP 403" in _classify_ws_error(rejected_with(403))[1]
 
 
 async def test_run_loop_backs_off_only_for_persistent_problems(mock_config, mock_channels):
     """Transient failures retry after reconnect_interval; persistent ones
     double the wait each time up to BEAM_MAX_BACKOFF, resetting on connect."""
     m = ws_monitor(mock_config, mock_channels, "ws://pvws.invalid", reconnect_interval=5.0)
-    rejected = InvalidStatusCode(403, Headers())
+    rejected = rejected_with(403)
     failures = [rejected] * 8 + [None, rejected, OSError("reset"), rejected]
     waits = []
 

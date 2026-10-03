@@ -27,9 +27,8 @@ BEAM_MAX_BACKOFF = 300.0  # longest wait between retries of a persistent connect
 def _classify_ws_error(exc: BaseException) -> Tuple[str, str]:
     """(kind, description) of a failed or lost beam connection. Only
     "transient" problems are likely to clear by themselves within seconds."""
-    # InvalidStatusCode (websockets' legacy client) / InvalidStatus (the new one)
-    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
-    if isinstance(status, int):
+    if isinstance(exc, websockets.InvalidStatus):  # the server answered the handshake with an error
+        status = exc.response.status_code
         if status >= 500:
             return "transient", f"PVWS server error (HTTP {status})"
         return "rejected", f"PVWS rejected the connection (HTTP {status}); check [DATA] isis_websocket_url"

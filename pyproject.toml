@@ -9,7 +9,7 @@ description = "ISIS Facility Beam and MCR News Monitor"
 requires-python = ">=3.10"
 dependencies = [
     "aiohttp>=3.12.14,<4",
-    "websockets>=12,<14",
+    "websockets>=15,<17",
     "rich>=13,<14",
 ]
 
