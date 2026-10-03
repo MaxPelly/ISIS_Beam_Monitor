@@ -1,5 +1,6 @@
 """Shared formatting helpers and structured notification builders."""
 import random
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -350,6 +351,15 @@ def run_milestone(
         channel=channel,
         topic=instrument,
     )
+
+
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def strip_controls(text: str) -> str:
+    """Remote text (run titles, MCR news) with each control character made a
+    space, so e.g. ESC sequences can't drive a terminal showing the TUI or log."""
+    return _CONTROL_RE.sub(" ", text).strip()
 
 
 # Eight Unicode block heights, index 0 = shortest

@@ -1108,3 +1108,16 @@ async def test_reconnect_requested_during_handshake_does_not_block_later_ones(mo
             await wait_until(lambda: m._current_ws is not None)
             assert m.request_reconnect() is True  # not ignored as "already pending"
             await wait_until(lambda: server.connections == 2)
+
+
+async def test_run_title_control_characters_are_stripped(mock_config, mock_channels):
+    """A title can't carry terminal escape sequences into the TUI, log or cards."""
+    m = make_monitor(mock_config, mock_channels)
+    await m._handle_update(title(b"\x1b]0;pwn\x07Run\x1b[2J 1\x00\x00"))
+    assert tracker(m).state.run_name == "]0;pwn Run [2J 1"
+
+
+def test_restored_run_name_is_cleaned_like_a_live_one(mock_config, mock_channels):
+    m = make_monitor(mock_config, mock_channels)
+    m.restore_instruments({"PEARL": {"run_name": "Run 1\x00", "run_started_at": "2026-01-01T00:00:00+00:00"}})
+    assert tracker(m).state.run_name == "Run 1"

@@ -9,7 +9,7 @@ from typing import Optional
 
 from isis_monitor.config import AppConfig
 from isis_monitor.daemon_state import DaemonState
-from isis_monitor.messages import mcr_news
+from isis_monitor.messages import mcr_news, strip_controls
 from isis_monitor.notifiers import NotificationChannel
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ class MCRNewsMonitor:
                     raw = await response.content.read(MAX_FEED_BYTES)
                     feed = raw.decode(response.charset or "utf-8", errors="replace")
                     parts = _FEED_SPLIT_RE.split(feed, maxsplit=1)
-                    cleaned = re.sub(r"\s+", " ", parts[0].replace("\r\n", "")).strip()
+                    cleaned = re.sub(r"\s+", " ", strip_controls(parts[0].replace("\r\n", ""))).strip()
                     if len(cleaned) > MAX_NEWS_CHARS:
                         cleaned = cleaned[:MAX_NEWS_CHARS - 1] + "…"
                     if not cleaned:

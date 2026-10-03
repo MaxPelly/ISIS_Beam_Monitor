@@ -10,7 +10,7 @@ from typing import Any, Callable, Deque, Optional, Sequence, Tuple
 
 from isis_monitor.config import InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
-from isis_monitor.messages import collection_stalled, run_finishing, run_milestone, run_started
+from isis_monitor.messages import collection_stalled, run_finishing, run_milestone, run_started, strip_controls
 from isis_monitor.notifiers import NotificationChannel
 
 logger = logging.getLogger(__name__)
@@ -98,11 +98,11 @@ class InstrumentTracker:
         if _is_blank(b64_data):
             return
         try:
-            name = base64.b64decode(b64_data).decode().strip("\x00")
+            name = strip_controls(base64.b64decode(b64_data).decode())  # e.g. NUL padding
         except Exception as e:
             logger.warning(f"Failed to decode run name b64: {e}")
             return
-        if not name.strip():
+        if not name:
             return  # e.g. all NULs; treating it as a run would hide the next real one
 
         if self.state.run_name and self.state.run_name != name:
@@ -218,7 +218,7 @@ class InstrumentTracker:
         re-sends the same run title on connect, which then changes nothing."""
         if not saved.get("run_name") or not saved.get("run_started_at"):
             return
-        self.state.run_name = str(saved["run_name"])
+        self.state.run_name = strip_controls(str(saved["run_name"]))  # as handle_run_name stores it
         self.state.run_started_at = datetime.fromisoformat(saved["run_started_at"])
         self.state.current_counts = float(saved.get("counts", -1.0))
         # DaemonState has already cleared this if notify_counts has changed.
