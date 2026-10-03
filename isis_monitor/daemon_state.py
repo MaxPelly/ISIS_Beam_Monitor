@@ -70,7 +70,6 @@ class DaemonState:
             for inst in instruments
         }
         self.run_completions: Deque[Tuple[datetime, str]] = deque(maxlen=2000)  # (time, instrument)
-        self.last_update = datetime.now(timezone.utc)
         self.health: Dict[str, str] = {
             "daemon": "starting",
             "beam": "unknown",
@@ -105,19 +104,14 @@ class DaemonState:
         if dropped:
             logger.warning(f"Dropped {dropped} IPC subscriber(s) whose event queue was full")
 
-    def _touch(self, ts: Optional[datetime] = None) -> None:
-        self.last_update = ts or datetime.now(timezone.utc)
-
     def update_log(self, message: str) -> None:
         self.logs.append(message)
-        self._touch()
         self._publish("log", {"message": message})
 
     def update_beam_state(self, beam: str, current: float, power: str) -> None:
         if beam not in self.beam_states:
             return
         self.beam_states[beam] = {"current": float(current), "power": str(power)}
-        self._touch()
         self._publish("beam", {"beam": beam, "current": current, "power": power})
 
     def append_beam_sample(
@@ -132,7 +126,6 @@ class DaemonState:
         if beam not in self.history:
             return
         self.history[beam].append((ts, float(current), str(power)))
-        self._touch(ts)
         if publish:
             self._publish(
                 "sample",
@@ -160,14 +153,12 @@ class DaemonState:
 
     def update_mcr_news(self, news: str) -> None:
         self.mcr_news = news
-        self._touch()
         self._publish("mcr", {"news": news})
 
     def update_run_name(self, instrument: str, run_name: str) -> None:
         if instrument not in self.instruments:
             return
         self.instruments[instrument]["run_name"] = run_name
-        self._touch()
         self._publish("run", {"instrument": instrument, "run_name": run_name})
 
     def update_run_progress(
@@ -182,7 +173,6 @@ class DaemonState:
         if instrument not in self.instruments:
             return
         self.instruments[instrument]["counts"] = float(counts)
-        self._touch()
         self._publish("counts", {"instrument": instrument, "counts": counts})
 
     def update_health(self, component: str, status: str) -> None:
@@ -191,7 +181,6 @@ class DaemonState:
         if self.health.get(component) == status:
             return
         self.health[component] = status
-        self._touch()
         self._publish("health", {"component": component, "status": status})
         if component == "beam" and status != "connected":
             # No readings arrive without the feed, so the last ones can't be
@@ -206,7 +195,6 @@ class DaemonState:
             return 0
         self.run_completions.append((ts, instrument))
         self.instruments[instrument]["total_runs"] += 1
-        self._touch(ts)
         return self.instruments[instrument]["total_runs"]
 
     def count_runs_completed_since(self, since: datetime, instruments: Optional[Iterable[str]] = None) -> int:
@@ -220,14 +208,12 @@ class DaemonState:
     def snapshot(self) -> dict:
         cutoff = datetime.now(timezone.utc) - RUN_COMPLETIONS_WINDOW
         return {
-            "last_update": self.last_update.isoformat(),
             "beam_states": {beam: dict(state) for beam, state in self.beam_states.items()},
             "mcr_news": self.mcr_news,
             "instruments": {name: dict(info) for name, info in self.instruments.items()},
             "run_completions": [
                 [ts.isoformat(), name] for ts, name in self.run_completions if ts >= cutoff
             ],
-            "health": dict(self.health),
         }
 
     def get_history_snapshot(self, limit: Optional[int] = None) -> dict:
@@ -266,8 +252,6 @@ class DaemonState:
         self.mcr_news = str(snap.get("mcr_news", self.mcr_news))
         self._restore_instruments(snap)
         self._restore_run_completions(snap.get("run_completions"))
-        # Health isn't restored: saved values describe connections from before
-        # the restart, and would show "connected" before anything has connected.
 
     def _restore_instruments(self, snap: dict) -> None:
         """Restore run state for instruments still in the config; instruments

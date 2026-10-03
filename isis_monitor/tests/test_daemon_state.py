@@ -21,7 +21,7 @@ def test_daemon_state_snapshot():
     snap = state.snapshot()
     assert snap["mcr_news"] == "Breaking News"
     assert snap["beam_states"]["TS1"]["current"] == 45.0
-    assert snap["health"]["daemon"] == "running"
+    assert "health" not in snap  # live state, not saved: it describes this run's connections
     
     # History and logs are fetched separately, not in the snapshot
     assert "history" not in snap
@@ -174,18 +174,14 @@ def test_snapshot_is_a_copy():
     state = DaemonState()
     snap = state.snapshot()
     snap["beam_states"]["TS1"]["current"] = 999.0
-    snap["health"]["daemon"] = "hacked"
     assert state.beam_states["TS1"]["current"] == 0.0
-    assert state.health["daemon"] == "starting"
 
 
-def test_restore_from_snapshot_ignores_empty_and_saved_health():
+def test_restore_from_snapshot_ignores_empty():
     state = DaemonState()
     state.restore_from_snapshot_json(None)
     state.restore_from_snapshot_json("")
-    assert state.health["beam"] == "unknown"
-    state.restore_from_snapshot_json(json.dumps({"health": {"beam": "connected"}}))
-    assert state.health["beam"] == "unknown"  # describes the previous run, not this one
+    assert state.snapshot() == DaemonState().snapshot()
 
 
 def test_restore_from_snapshot():

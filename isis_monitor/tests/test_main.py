@@ -357,7 +357,6 @@ async def test_run_daemon_serves_ipc_and_shuts_down_cleanly_with_tui_attached(tm
     store = SQLiteStateStore(tmp_path / "state.db")
     snap = json.loads(store.load_snapshot("daemon_state"))
     store.close()
-    assert snap["health"]["daemon"] == "stopping"
     assert snap["beam_states"]["TS1"]["power"] == "high"
 
 
