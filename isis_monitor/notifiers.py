@@ -30,6 +30,13 @@ _SEVERITY_STYLE = {
 MAX_RETRY_AFTER = 60.0  # cap on a server's Retry-After, so it can't stall the channel
 
 
+def _no_links(text: str) -> str:
+    """Card text with markdown links broken by a zero-width space, so remote
+    text (e.g. a run title "[Sign in](https://evil)") shows as typed rather
+    than as a disguised link; bare URLs stay visible as themselves."""
+    return text.replace("](", "]\u200b(")
+
+
 def _retry_after(value: object, cap: float = MAX_RETRY_AFTER) -> Optional[float]:
     """Seconds to wait from a Retry-After header (seconds or an HTTP date),
     capped at `cap`; None if missing or unreadable."""
@@ -148,7 +155,7 @@ class TeamsNotifier(HTTPNotifier):
     LABEL = "Teams webhook"
 
     def _create_payload(self, notification: Notification) -> dict:
-        header_text = f"{notification.emoji} {notification.title}".strip()
+        header_text = _no_links(f"{notification.emoji} {notification.title}".strip())
         body: list = [
             {
                 "type": "Container",
@@ -164,13 +171,13 @@ class TeamsNotifier(HTTPNotifier):
                     },
                 ],
             },
-            {"type": "TextBlock", "text": notification.text, "wrap": True},
+            {"type": "TextBlock", "text": _no_links(notification.text), "wrap": True},
         ]
 
         if notification.flavour:
             body.append({
                 "type": "TextBlock",
-                "text": f"_{notification.flavour}_",
+                "text": f"_{_no_links(notification.flavour)}_",
                 "isSubtle": True,
                 "wrap": True,
             })
@@ -179,7 +186,7 @@ class TeamsNotifier(HTTPNotifier):
             body.append({
                 "type": "FactSet",
                 "facts": [
-                    {"title": key, "value": value} for key, value in notification.facts
+                    {"title": _no_links(key), "value": _no_links(value)} for key, value in notification.facts
                 ],
             })
 

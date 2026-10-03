@@ -79,6 +79,15 @@ async def test_teams_notifier_sends_request():
     assert card["summary"] == payload["summary"]
 
 
+def test_teams_card_breaks_markdown_links_in_remote_text():
+    """A run title can't become a disguised link in the Experiment Updates channel."""
+    evil = "[Session expired - sign in](https://evil.example)"
+    payload = TeamsNotifier("http://x")._create_payload(
+        Notification(title=f"PEARL: {evil}", text=evil, flavour=evil, facts=[("Previous run", evil)]))
+    card = json.dumps(payload["attachments"][0]["content"]["body"])
+    assert "](" not in card and card.count("]\\u200b(") == 4
+
+
 async def test_teams_notifier_logs_error_on_bad_status(caplog):
     notifier = TeamsNotifier("http://fake.webhook.url")
     notifier._session = make_status_session(400)
