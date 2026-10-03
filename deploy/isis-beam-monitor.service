@@ -1,0 +1,59 @@
+# ISIS Beam Monitor daemon.
+# EDIT before installing: /path/to/ISIS_Beam_Monitor (the checkout, with a
+# venv in .venv) and MONITOR_USER (the user that owns it). From the checkout:
+#   sed -e "s|/path/to/ISIS_Beam_Monitor|$PWD|g" -e "s|MONITOR_USER|$USER|g" \
+#     deploy/isis-beam-monitor.service | sudo tee /etc/systemd/system/isis-beam-monitor.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now isis-beam-monitor
+# Logs:    journalctl -u isis-beam-monitor (and monitor.log in the checkout)
+
+[Unit]
+Description=ISIS Beam Monitor daemon
+After=network-online.target isis-push-site.service
+# The push site, if installed, is started first so startup cards reach it.
+Wants=network-online.target isis-push-site.service
+# Never give up restarting (a start limit could leave it down for good after a
+# brief outage); RestartSteps backs off from 5s to 5min instead.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=MONITOR_USER
+WorkingDirectory=/path/to/ISIS_Beam_Monitor
+ExecStart=/path/to/ISIS_Beam_Monitor/.venv/bin/python /path/to/ISIS_Beam_Monitor/main.py daemon /path/to/ISIS_Beam_Monitor/config.ini
+Environment=PYTHONUNBUFFERED=1
+# on-failure rather than always, so `main.py stop` (a clean exit) stays stopped.
+# Config edits from the TUI restart the daemon in place (same PID), which systemd doesn't see.
+Restart=on-failure
+RestartSec=5
+RestartSteps=6
+RestartMaxDelaySec=5min
+UMask=0077
+MemoryMax=512M
+
+# Sandboxing. The daemon writes its database, log, config (TUI edits, with
+# a .bak), IPC socket and lock file in the repo, and needs nothing in /tmp.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/path/to/ISIS_Beam_Monitor
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

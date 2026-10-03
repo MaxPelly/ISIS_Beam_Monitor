@@ -234,29 +234,19 @@ To run TUI from an SSH session on the same host:
 python main.py tui config.ini
 ```
 
-### Linux service example (systemd)
+### Running as a service (systemd)
 
-Create `/etc/systemd/system/isis-beam-monitor.service`:
-
-```ini
-[Unit]
-Description=ISIS Beam Monitor Daemon
-After=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=/path/to/ISIS_Beam_Monitor
-ExecStart=/usr/bin/python /path/to/ISIS_Beam_Monitor/main.py daemon /path/to/ISIS_Beam_Monitor/config.ini
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Then run:
+`deploy/isis-beam-monitor.service` runs the daemon in a systemd sandbox that
+can only write to the checkout. It restarts after a crash with backoff, but
+stays stopped after `main.py stop`. Its paths and user are placeholders:
+`/path/to/ISIS_Beam_Monitor` (the checkout, with the dependencies installed
+in a venv at `.venv`) and `MONITOR_USER`. To fill them in and install it,
+run from the checkout as the user the daemon should run as:
 
 ```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+sed -e "s|/path/to/ISIS_Beam_Monitor|$PWD|g" -e "s|MONITOR_USER|$USER|g" \
+  deploy/isis-beam-monitor.service | sudo tee /etc/systemd/system/isis-beam-monitor.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now isis-beam-monitor.service
 sudo systemctl status isis-beam-monitor.service
