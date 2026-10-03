@@ -4,6 +4,7 @@ config.ini
 isis_beam_monitor.sock
 isis_beam_monitor.lock
 test.py
+*_PLAN.md
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
