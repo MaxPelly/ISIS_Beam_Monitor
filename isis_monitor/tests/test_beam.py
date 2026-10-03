@@ -517,6 +517,20 @@ async def test_check_collection_progress_detects_stall_when_instrument_beam_on(m
     assert notification.title == "PEARL: Data collection stalled"
 
 
+async def test_no_stall_warning_after_the_runs_finishing_card(mock_config, mock_channels):
+    """The run has usually ended by then; its static counts aren't a stall."""
+    _, exp_channel = mock_channels
+    m = stall_monitor(mock_config, mock_channels)
+    now = datetime.now(timezone.utc)
+    _seed_collected_baseline(m, now, 100.0)
+    tracker(m).state.current_counts = 100.0
+    tracker(m).state.end_notified = True
+
+    await m._check_collection_progress(now)
+    await m._check_collection_progress(now + timedelta(seconds=1))
+    exp_channel.broadcast.assert_not_called()
+
+
 async def test_check_collection_progress_movement_resets_stall_clock(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = stall_monitor(mock_config, mock_channels)
@@ -917,15 +931,16 @@ async def test_run_cards_use_the_instruments_channel_setting(mock_config, mock_c
 
     await m._handle_update(title("Run 25"))
     now = datetime.now(timezone.utc)
-    _seed_collected_baseline(m, now, 150.0)  # samples are oldest first
-    await m._handle_update({"pv": PEARL_UAMPS, "value": 150.0})
+    _seed_collected_baseline(m, now, 100.0)  # samples are oldest first; below the 130 target
+    t.state.current_counts = 100.0
     await m._check_collection_progress(now)
     await m._check_collection_progress(now + timedelta(seconds=1))
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 150.0})
 
     titles_channels = [(c.args[0].title, c.args[0].channel) for c in exp_channel.broadcast.call_args_list]
     assert [title for title, _ in titles_channels] == [
-        "PEARL: New run started", "PEARL: 25 runs completed", "PEARL: Run about to finish",
-        "PEARL: Data collection stalled",
+        "PEARL: New run started", "PEARL: 25 runs completed", "PEARL: Data collection stalled",
+        "PEARL: Run about to finish",
     ]
     assert {channel for _, channel in titles_channels} == {expected}
 
