@@ -699,7 +699,7 @@ async def test_daemon_update_config_writes_file_and_requests_restart(tmp_path):
             "revision": await _revision(client),
             "settings": {"notifications": {"fun_mode": "true"}},
         })
-        assert reply == {"ok": True, "restarting": True, "version": 1}
+        assert reply == {"ok": True, "restarting": True}
         assert await asyncio.wait_for(task, 5) is True
     assert "fun_mode = true" in ini.read_text()
 

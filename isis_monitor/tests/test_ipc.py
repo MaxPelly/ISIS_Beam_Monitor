@@ -97,8 +97,8 @@ async def test_invalid_and_unknown_requests(tmp_path):
     async with serving(tmp_path) as server:
         not_object = await raw_request(server, b"[1, 2]\n")
         unknown = await raw_request(server, b'{"method": "nope"}\n')
-    assert not_object == {"ok": False, "error": "invalid_request", "version": 1}
-    assert unknown == {"ok": False, "error": "unknown_method", "version": 1}
+    assert not_object == {"ok": False, "error": "invalid_request"}
+    assert unknown == {"ok": False, "error": "unknown_method"}
 
 
 async def test_failing_command_returns_error_and_keeps_connection(tmp_path):

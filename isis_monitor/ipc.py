@@ -1,6 +1,6 @@
 """Newline-delimited JSON over a UNIX socket between the daemon and its clients.
 
-Every reply carries "ok" and "version". Once a client sends
+Every reply carries "ok". Once a client sends
 `subscribe_updates`, pushed events (which carry an "event" key) are
 interleaved with replies on the same connection.
 """
@@ -18,7 +18,6 @@ from isis_monitor.daemon_state import DaemonState
 
 logger = logging.getLogger(__name__)
 
-PROTOCOL_VERSION = 1
 # Requests are tiny; replies (the history snapshot) can be large.
 SERVER_LINE_LIMIT = 64 * 1024
 # How long stop() lets clients take already-buffered replies before cutting
@@ -127,7 +126,7 @@ class IPCServer:
                         except Exception as exc:
                             logger.exception(f"IPC request {req.get('method')!r} failed")
                             reply = {"ok": False, "error": "internal_error", "detail": str(exc)}
-                writer.write(_encode({"ok": True, **reply, "version": PROTOCOL_VERSION}))
+                writer.write(_encode({"ok": True, **reply}))
                 await writer.drain()
         except (ConnectionError, ValueError):
             pass  # client went away, or sent a line over SERVER_LINE_LIMIT
@@ -146,9 +145,7 @@ class IPCServer:
     async def _forward_events(self, queue: asyncio.Queue, writer: asyncio.StreamWriter) -> None:
         try:
             while (ev := await queue.get()) is not None:
-                writer.write(_encode({
-                    "ok": True, "version": PROTOCOL_VERSION, "event": ev.event, "payload": ev.payload,
-                }))
+                writer.write(_encode({"ok": True, "event": ev.event, "payload": ev.payload}))
                 # Bounded: a client that stops reading would otherwise leave
                 # this blocked here, never seeing the drop sentinel above.
                 await asyncio.wait_for(writer.drain(), SUBSCRIBER_DRAIN_TIMEOUT)
