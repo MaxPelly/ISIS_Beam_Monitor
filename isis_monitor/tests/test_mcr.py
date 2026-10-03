@@ -213,6 +213,12 @@ async def test_mcr_request_reconnect_polls_immediately(mock_config, mock_channel
     assert monitor.request_reconnect() is True  # flag was consumed
 
 
+async def test_mcr_get_news_falls_back_to_utf8_for_an_unknown_charset(mock_config, mock_channel):
+    session = news_session(text="Beam on ✓\r\n12 more")
+    session.get.return_value.__aenter__.return_value.charset = "no-such-charset"
+    assert await MCRNewsMonitor(mock_config, mock_channel).get_news(session) == "Beam on ✓"
+
+
 async def test_mcr_get_news_strips_control_characters(mock_config, mock_channel):
     news = await MCRNewsMonitor(mock_config, mock_channel).get_news(news_session(text="Beam\x1b[2J on\x07\r\n12 more"))
     assert news == "Beam [2J on"

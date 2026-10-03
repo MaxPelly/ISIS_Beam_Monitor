@@ -52,7 +52,10 @@ class MCRNewsMonitor:
                         chunk := await response.content.read(MAX_FEED_BYTES - len(raw))
                     ):
                         raw += chunk
-                    feed = raw.decode(response.charset or "utf-8", errors="replace")
+                    try:
+                        feed = raw.decode(response.charset or "utf-8", errors="replace")
+                    except LookupError:  # a charset Python doesn't know
+                        feed = raw.decode("utf-8", errors="replace")
                     parts = _FEED_SPLIT_RE.split(feed, maxsplit=1)
                     cleaned = re.sub(r"\s+", " ", strip_controls(parts[0].replace("\r\n", ""))).strip()
                     if len(cleaned) > MAX_NEWS_CHARS:
