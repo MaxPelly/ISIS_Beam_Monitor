@@ -176,7 +176,7 @@ async def state_persistence_loop(config, state: DaemonState, store: SQLiteStateS
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=config.sample_interval)
             return
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
         try:
@@ -594,7 +594,7 @@ async def run_stop(config) -> None:
     client = IPCClient(Path(config.daemon_socket_path))
     try:
         await asyncio.wait_for(client.connect(), IPC_REQUEST_TIMEOUT)
-    except (OSError, asyncio.TimeoutError) as exc:  # distinct classes before Python 3.11
+    except OSError as exc:  # including TimeoutError
         print(f"Could not connect to daemon at {config.daemon_socket_path}: {exc!r}")
         raise SystemExit(1)
 

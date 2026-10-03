@@ -46,7 +46,7 @@ def news_session(status=200, text="", error=None):
     (news_session(text="Current news text\r\n\r\n12 more lines\r\n"), "Current news text"),
     (news_session(text="News content\r\n123 old line\r\n"), "News content"),
     (news_session(status=500), None),
-    (news_session(error=asyncio.TimeoutError()), None),
+    (news_session(error=TimeoutError()), None),
     (news_session(text="  \r\n  "), None),  # parses to empty
 ])
 async def test_mcr_get_news(mock_config, mock_channel, session, expected):

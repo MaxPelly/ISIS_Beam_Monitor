@@ -780,7 +780,7 @@ def test_classify_ws_error():
         SecurityError("too many redirects"): "rejected",
         ConnectionClosedError(None, None): "transient",
         ConnectionRefusedError(111, "refused"): "transient",
-        asyncio.TimeoutError(): "transient",
+        TimeoutError(): "transient",
         RuntimeError("bug"): "unexpected",
     }
     for exc, kind in cases.items():
@@ -823,7 +823,7 @@ async def test_run_loop_backs_off_only_for_persistent_problems(mock_config, mock
         waits.append(timeout)
         if not failures:
             raise asyncio.CancelledError
-        raise asyncio.TimeoutError
+        raise TimeoutError
 
     with patch("isis_monitor.beam.websockets.connect", side_effect=connect), \
             patch("isis_monitor.beam.asyncio.wait_for", side_effect=fake_wait_for):

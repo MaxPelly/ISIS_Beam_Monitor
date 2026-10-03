@@ -141,7 +141,7 @@ class HTTPNotifier(Notifier):
                     retryable,
                     _retry_after(resp.headers.get("Retry-After"), self.MAX_RETRY_AFTER),
                 )
-        except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
+        except (aiohttp.ClientConnectionError, TimeoutError) as e:
             return f"Failed to send {self.LABEL}: {e}", True, None
         except Exception as e:  # its message may hold the URL, which is a secret
             return f"Failed to send {self.LABEL}: {type(e).__name__}", False, None
@@ -344,7 +344,7 @@ class NotificationChannel:
         try:
             await asyncio.wait_for(self._queue.join(), timeout)
             return True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
 
     async def close(self) -> None:

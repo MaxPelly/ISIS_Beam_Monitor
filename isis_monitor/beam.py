@@ -41,7 +41,7 @@ def _classify_ws_error(exc: BaseException) -> Tuple[str, str]:
     if isinstance(exc, socket.gaierror) and exc.errno != socket.EAI_AGAIN:
         return "dns", f"can't resolve the PVWS host ({exc}); network down or wrong URL?"
     # InvalidMessage: the handshake was cut off, e.g. while PVWS restarts.
-    if isinstance(exc, (websockets.ConnectionClosed, websockets.InvalidMessage, OSError, asyncio.TimeoutError)):
+    if isinstance(exc, (websockets.ConnectionClosed, websockets.InvalidMessage, OSError)):  # OSError: incl. TimeoutError
         return "transient", f"connection lost: {str(exc) or repr(exc)}"
     if isinstance(exc, websockets.InvalidHandshake):  # e.g. too many redirects, a bad upgrade
         return "rejected", f"PVWS handshake failed ({exc}); check [DATA] isis_websocket_url"
@@ -435,7 +435,7 @@ class BeamMonitor:
                 else:
                     logger.error(message, exc_info=error)
                 last_kind = kind
-                with contextlib.suppress(asyncio.TimeoutError):
+                with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._force_reconnect.wait(), timeout=delay)
             if self._force_reconnect.is_set():
                 self._force_reconnect.clear()

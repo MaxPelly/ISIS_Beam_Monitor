@@ -69,7 +69,7 @@ class MCRNewsMonitor:
                     return cleaned
                 else:
                     logger.warning(f"Failed to fetch MCR news. Status: {response.status}")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Timeout while fetching MCR news.")
         except Exception as e:
             logger.warning(f"Connection error while fetching MCR news: {e}")
@@ -81,7 +81,7 @@ class MCRNewsMonitor:
 
     async def _wait(self, seconds: float) -> bool:
         """Sleep for `seconds`, or less if a reconnect is requested (returns True)."""
-        with contextlib.suppress(asyncio.TimeoutError):
+        with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(self._force_reconnect.wait(), timeout=seconds)
         requested = self._force_reconnect.is_set()
         self._force_reconnect.clear()

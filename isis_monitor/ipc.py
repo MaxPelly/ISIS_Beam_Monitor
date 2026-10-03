@@ -77,7 +77,7 @@ class IPCServer:
                 writer.close()
             try:
                 await asyncio.wait_for(asyncio.shield(self.server.wait_closed()), STOP_FLUSH_TIMEOUT)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 for writer in writers:
                     writer.transport.abort()
                 await self.server.wait_closed()
@@ -148,7 +148,7 @@ class IPCServer:
                 # Bounded: a client that stops reading would otherwise leave
                 # this blocked here, never seeing the drop sentinel above.
                 await asyncio.wait_for(writer.drain(), SUBSCRIBER_DRAIN_TIMEOUT)
-        except (ConnectionError, asyncio.TimeoutError):
+        except (ConnectionError, TimeoutError):
             pass
         # Dropped for falling behind, not reading, or the peer is gone: dropping the
         # connection makes the client reconnect and resync from a snapshot.
@@ -222,7 +222,7 @@ class IPCClient:
         self.writer.write(_encode(payload))
         try:
             return await asyncio.wait_for(self._send_and_take(), timeout)
-        except asyncio.TimeoutError:  # not the built-in TimeoutError before Python 3.11
+        except TimeoutError:
             await self.close()
             raise TimeoutError(f"No reply to {payload.get('method')!r} within {timeout}s") from None
 

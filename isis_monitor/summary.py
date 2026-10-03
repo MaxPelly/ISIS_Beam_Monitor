@@ -158,7 +158,7 @@ async def daily_summary_loop(
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=SUMMARY_CHECK_INTERVAL)
             break
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
         now_utc = datetime.now(timezone.utc)
