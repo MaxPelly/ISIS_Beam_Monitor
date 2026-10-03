@@ -196,18 +196,16 @@ class BeamMonitor:
         self._current_ws = None
         self._close_task: Optional[asyncio.Task] = None
 
-        # Build dynamic lookups from Config
+        # Each target's current PV and power boundaries, by its state key.
+        per_target = {
+            "TS1": (config.ts1_beam_current_pv, config.ts1_boundaries),
+            "TS2": (config.ts2_beam_current_pv, config.ts2_boundaries),
+            "Muon": (config.muon_beam_current_pv, config.muon_boundaries),
+        }
         self.pv_to_beam: Dict[str, BeamTarget] = {
-            config.ts1_beam_current_pv: BEAM_TARGETS[0],
-            config.ts2_beam_current_pv: BEAM_TARGETS[1],
-            config.muon_beam_current_pv: BEAM_TARGETS[2],
+            per_target[bt.state_key][0]: bt for bt in BEAM_TARGETS
         }
-        
-        self.beam_boundaries = {
-            "TS1": config.ts1_boundaries,
-            "TS2": config.ts2_boundaries,
-            "Muon": config.muon_boundaries,
-        }
+        self.beam_boundaries = {key: boundaries for key, (_, boundaries) in per_target.items()}
 
         self.instruments: Dict[str, InstrumentTracker] = {
             inst.name: InstrumentTracker(
