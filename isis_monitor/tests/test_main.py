@@ -765,7 +765,7 @@ def tui_terminal():
         with patch.object(main.sys, "stdin", stdin), \
              patch("main.termios") as termios_mock, \
              patch("main.tty") as tty_mock, \
-             patch("main.RichTUI", return_value=tui), \
+             patch("isis_monitor.tui.RichTUI", return_value=tui), \
              patch("main.install_signal_handlers"):
             termios_mock.tcgetattr.return_value = "saved"
             yield tui, write_fd, termios_mock, tty_mock

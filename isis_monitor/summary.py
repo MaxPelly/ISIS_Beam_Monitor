@@ -11,10 +11,9 @@ from typing import Deque, Dict, List, Optional, Tuple
 from isis_monitor.config import TARGET_LABELS, AppConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.flavour import fact_of_the_day
-from isis_monitor.messages import daily_summary, get_timezone
+from isis_monitor.messages import daily_summary, get_timezone, sparkline_chars
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.storage import SQLiteStateStore
-from isis_monitor.tui import sparkline_chars
 
 logger = logging.getLogger(__name__)
 

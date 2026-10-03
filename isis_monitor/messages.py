@@ -350,3 +350,39 @@ def run_milestone(
         channel=channel,
         topic=instrument,
     )
+
+
+# Eight Unicode block heights, index 0 = shortest
+_BLOCKS = " ▁▂▃▄▅▆▇█"
+
+
+def sparkline_chars(values: list[float], width: int) -> str:
+    """Return a plain-text sparkline of `width` block characters, min-max normalised.
+
+    Shared between the daily summary (plain text in a notification card) and
+    the TUI (which colours each block); kept here so the daemon needn't
+    import the TUI and rich.
+    """
+    if not values:
+        return " " * width
+
+    tail = values[-width:]
+    min_val = min(tail)
+    max_val = max(tail)
+    span = max_val - min_val
+
+    pad_len = width - len(tail)
+    chars = []
+    for v in tail:
+        if span == 0:
+            idx = 0 if max_val == 0 else len(_BLOCKS) // 2
+        else:
+            norm = (v - min_val) / span
+            # only use empty block for 0
+            if min_val == 0:
+                idx = round(norm * (len(_BLOCKS) - 1))
+            else:
+                idx = round(norm * (len(_BLOCKS) - 2)) + 1
+        chars.append(_BLOCKS[idx])
+
+    return (" " * pad_len) + "".join(chars)

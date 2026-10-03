@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import asyncio
 import fcntl
@@ -14,7 +16,7 @@ import tty
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from isis_monitor.beam import BeamMonitor
 from isis_monitor.config_editor import run_config_editor
@@ -37,7 +39,9 @@ from isis_monitor.messages import set_timezone
 from isis_monitor.notifiers import DummyNotifier, NotificationChannel, TeamsNotifier, WebhookNotifier
 from isis_monitor.storage import SQLiteStateStore
 from isis_monitor.summary import daily_summary_loop
-from isis_monitor.tui import RichTUI
+
+if TYPE_CHECKING:  # the daemon never loads the TUI (or rich); run_tui imports it
+    from isis_monitor.tui import RichTUI
 
 logger = logging.getLogger("MAIN")
 
@@ -482,6 +486,8 @@ async def run_tui(config, stop_event: asyncio.Event):
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     tty.setcbreak(fd)
+
+    from isis_monitor.tui import RichTUI
 
     tui = RichTUI(
         history_maxlen=config.history_maxlen,

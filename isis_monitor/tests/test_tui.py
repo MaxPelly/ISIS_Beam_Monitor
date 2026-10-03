@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from isis_monitor.tui import RichTUI, _fmt_window, _progress_bar, _render_sparkline, sparkline_chars
+from isis_monitor.messages import sparkline_chars
+from isis_monitor.tui import RichTUI, _fmt_window, _progress_bar, _render_sparkline
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +101,7 @@ class TestSparklineChars:
         assert sparkline_chars([0.0] * 5, 5).strip() == ""
 
     def test_max_value_uses_full_block(self):
-        from isis_monitor.tui import _BLOCKS
+        from isis_monitor.messages import _BLOCKS
         result = sparkline_chars([0.0, 100.0], 2)
         assert _BLOCKS[-1] in result
 
