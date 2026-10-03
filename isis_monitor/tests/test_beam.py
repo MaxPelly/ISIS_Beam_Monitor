@@ -100,6 +100,15 @@ async def test_unreadable_beam_current_is_ignored_not_off(mock_config, mock_chan
     assert (m.beams["TS1"].power, m.beams["TS1"].current) == ("medium", 60.0)
 
 
+async def test_unreadable_beam_current_shows_as_unknown(mock_config, mock_channels):
+    """Unknown isn't sampled into the history, so a dead PV doesn't count as uptime."""
+    sink = MagicMock()
+    m = make_monitor(mock_config, mock_channels, sink=sink)
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "NaN"})
+    sink.update_beam_state.assert_called_with("TS1", 60.0, "unknown")
+
+
 # ---------------------------------------------------------------------------
 # _get_power_label
 # ---------------------------------------------------------------------------

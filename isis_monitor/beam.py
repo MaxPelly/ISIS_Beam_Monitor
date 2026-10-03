@@ -245,7 +245,11 @@ class BeamMonitor:
         """Handle a beam-current value update for a single target."""
         beam_val = self._parse_current(raw_val)
         if beam_val is None:
-            logger.debug(f"Ignoring {bt.state_key} beam current {raw_val!r}")
+            # No notification either way, but the last reading can't be
+            # trusted: "unknown" keeps it out of the history (and uptime).
+            logger.debug(f"Unreadable {bt.state_key} beam current {raw_val!r}")
+            if self.sink:
+                self.sink.update_beam_state(bt.channel_label, self.beams[bt.state_key].current, "unknown")
             return
         new_state = self._get_power_label(beam_val, bt.state_key)
         beam_state = self.beams[bt.state_key]
