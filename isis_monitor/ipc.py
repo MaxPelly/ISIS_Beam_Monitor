@@ -111,7 +111,7 @@ class IPCServer:
             while line := await reader.readline():
                 try:
                     req = json.loads(line)
-                except json.JSONDecodeError:
+                except (ValueError, RecursionError):  # e.g. JSONDecodeError, or "[[[[…"
                     reply = {"ok": False, "error": "invalid_json"}
                 else:
                     if not isinstance(req, dict):

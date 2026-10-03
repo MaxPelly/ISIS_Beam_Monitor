@@ -24,9 +24,9 @@ from isis_monitor.config import (
     CHANNEL_MODES,
     ConfigChangedError,
     ConfigError,
-    config_revision,
     editable_settings,
     load_config,
+    read_config,
     read_push_secret,
     update_config_file,
 )
@@ -258,12 +258,13 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             return {"restart": "ok"}
         return {"error": "unknown_command", "name": name}
 
-    def read_config() -> dict:
+    def current_config() -> dict:
         # Read from the file rather than the running config, so edits build
         # on anything changed by hand since the daemon started.
+        file_config, revision = read_config(args.config)
         return {
-            "config": editable_settings(load_config(args.config)),
-            "revision": config_revision(args.config),
+            "config": editable_settings(file_config),
+            "revision": revision,
             "beam_targets": list(BEAM_TARGET_KEYS),
             "channel_modes": list(CHANNEL_MODES),
         }
@@ -274,7 +275,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
         async with config_lock:
             try:
                 if method == "get_config":
-                    return await asyncio.to_thread(read_config)
+                    return await asyncio.to_thread(current_config)
                 if restart_requested or stop_event.is_set():
                     # A save accepted during a shutdown would turn it into a restart.
                     return {"ok": False, "error": "restart_pending",

@@ -10,7 +10,7 @@ import stat
 import tempfile
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("isis_monitor.config")
@@ -317,18 +317,29 @@ def _validate(config: AppConfig, config_path: Path) -> None:
 
 
 def load_config(config_path: Path) -> AppConfig:
-    return parse_config(_read_parser(config_path), config_path)
+    return read_config(config_path)[0]
 
 
-def _read_parser(config_path: Path) -> configparser.ConfigParser:
-    if not config_path.exists():
-        raise ConfigError(f"Config file not found: {config_path}")
+def read_config(config_path: Path) -> Tuple[AppConfig, str]:
+    """The config and its revision, an identifier that changes whenever the
+    file's contents do, both from one read of the file."""
+    parser, revision = _read_parser(config_path)
+    return parse_config(parser, config_path), revision
+
+
+def _read_parser(config_path: Path) -> Tuple[configparser.ConfigParser, str]:
+    try:
+        data = config_path.read_bytes()
+    except FileNotFoundError:
+        raise ConfigError(f"Config file not found: {config_path}") from None
+    except OSError as exc:
+        raise ConfigError(f"Could not read {config_path}: {exc}") from exc
     parser = configparser.ConfigParser(interpolation=None)
     try:
-        parser.read(config_path)
-    except configparser.Error as exc:  # e.g. the same section written twice
+        parser.read_string(data.decode("utf-8"), str(config_path))
+    except (configparser.Error, UnicodeDecodeError) as exc:  # e.g. the same section written twice
         raise ConfigError(f"Could not parse {config_path}: {exc}") from exc
-    return parser
+    return parser, hashlib.sha256(data).hexdigest()
 
 
 _PATH_FIELDS = ("daemon_db_path", "daemon_socket_path", "daemon_lock_file", "log_file", "push_secret_file")
@@ -443,7 +454,7 @@ def _write_atomically(parser: configparser.ConfigParser, config_path: Path) -> N
     shutil.copy2(target, target.with_name(target.name + ".bak"))
     fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             parser.write(fh)
             fh.flush()
             os.fsync(fh.fileno())
@@ -465,24 +476,18 @@ def _write_atomically(parser: configparser.ConfigParser, config_path: Path) -> N
         logger.warning(f"Could not fsync {target.parent} after writing {target.name}: {exc}")
 
 
-def config_revision(config_path: Path) -> str:
-    """An identifier that changes whenever the config file's contents do."""
-    return hashlib.sha256(config_path.read_bytes()).hexdigest()
-
-
-def update_config_file(config_path: Path, settings: Any, revision: Optional[str] = None) -> AppConfig:
-    """Apply `settings` (see editable_settings) to the config file and return
-    the new config. Nothing is written unless the result is valid and, if
-    `revision` is given, the file still matches that config_revision() — so
-    an edit based on a stale read can't overwrite someone else's changes.
+def update_config_file(config_path: Path, settings: Any, revision: Optional[str] = None) -> None:
+    """Apply `settings` (see editable_settings) to the config file. Nothing
+    is written unless the result is valid and, if `revision` is given, the
+    file still matches that revision from read_config() — so an edit based
+    on a stale read can't overwrite someone else's changes.
 
     configparser can't round-trip comments, so the rewritten file has none;
     config.ini.example documents every setting.
     """
-    parser = _read_parser(config_path)
-    _apply_settings(parser, settings)
-    config = parse_config(parser, config_path)
-    if revision is not None and config_revision(config_path) != revision:
+    parser, current = _read_parser(config_path)
+    if revision is not None and current != revision:
         raise ConfigChangedError(f"{config_path} has changed since it was read; reload and try again")
+    _apply_settings(parser, settings)
+    parse_config(parser, config_path)  # validates
     _write_atomically(parser, config_path)
-    return config

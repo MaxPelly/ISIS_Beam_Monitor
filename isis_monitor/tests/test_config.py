@@ -6,7 +6,7 @@ from dataclasses import replace
 from unittest.mock import patch
 
 from isis_monitor.config import (
-    load_config, ConfigError, ConfigChangedError, AppConfig, InstrumentConfig, config_revision,
+    load_config, ConfigError, ConfigChangedError, AppConfig, InstrumentConfig, read_config,
     editable_settings, update_config_file, read_push_secret, _PATH_FIELDS,
 )
 
@@ -304,10 +304,9 @@ def test_update_config_file_round_trips_and_keeps_other_settings(tmp_path):
     settings["instruments"][0]["channel"] = "instrument"
     settings["instruments"].append({"name": "wish", "notify_counts": "50", "beam_target": "TS2"})
 
-    returned = update_config_file(path, settings)
+    update_config_file(path, settings)
 
     reloaded = load_config(path)
-    assert reloaded == returned
     assert reloaded.fun_mode is True and reloaded.stall_minutes == 10.0
     assert reloaded.beam_teams_url == "http://secret"
     assert [(i.name, i.notify_counts, i.beam_target, i.channel) for i in reloaded.instruments] == [
@@ -382,9 +381,9 @@ def test_update_config_file_cleans_up_temp_file_on_write_failure(tmp_path):
 
 def test_update_config_file_checks_revision(tmp_path):
     path = _editable_file(tmp_path)
-    revision = config_revision(path)
+    revision = read_config(path)[1]
     update_config_file(path, {"notifications": {"fun_mode": "true"}}, revision)
-    assert config_revision(path) != revision
+    assert read_config(path)[1] != revision
 
     with pytest.raises(ConfigChangedError, match="has changed since it was read"):
         update_config_file(path, {"notifications": {"fun_mode": "false"}}, revision)
