@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+from isis_monitor import __version__
 from isis_monitor.messages import sparkline_chars
 from isis_monitor.tui import RichTUI, _fmt_window, _progress_bar, _render_sparkline
 
@@ -166,6 +167,13 @@ class TestDaemonHistory:
         tui.update_connection_state("connected")
         assert tui.connection_state == "CONNECTED"
         assert "[CONNECTED]" in _panel_text(tui, "header")
+
+    def test_header_shows_the_daemon_version_and_a_differing_tui_version(self):
+        tui = make_tui()
+        tui.set_daemon_version(__version__)
+        assert f"ISIS Monitor v{__version__}  [" in _panel_text(tui, "header")
+        tui.set_daemon_version("0.9.0")
+        assert f"ISIS Monitor v0.9.0 (TUI v{__version__})  [" in _panel_text(tui, "header")
 
 
 # ---------------------------------------------------------------------------

@@ -136,7 +136,7 @@ async def test_webhook_notifier_posts_signed_json():
     assert payload["severity"] == "good"
     assert payload["facts"] == [["Duration", "1h 0m"]]
     assert payload["timestamp"] == "2026-01-02T03:04:00+00:00"
-    assert payload["topic"] == "PEARL"
+    assert payload["topic"] == "PEARL" and payload["monitor_version"] == __version__
     assert "summary" not in payload and "channel" not in payload  # the site doesn't use them
 
 

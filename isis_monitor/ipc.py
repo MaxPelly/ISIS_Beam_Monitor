@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 from typing import Awaitable, Callable, Optional, Set
 
+from isis_monitor import __version__
 from isis_monitor.daemon_state import DaemonState
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ class IPCServer:
     async def _reply(self, req: dict) -> dict:
         method = req.get("method")
         if method == "get_snapshot":
-            return {"snapshot": self.state.snapshot()}
+            return {"snapshot": self.state.snapshot(), "version": __version__}
         if method == "get_history":
             limit = req.get("limit")
             return {"history": self.state.get_history_snapshot(limit if isinstance(limit, int) else None)}

@@ -157,8 +157,8 @@ the hex HMAC-SHA256 of `<timestamp>.<body>` under the secret (the file's content
 surrounding whitespace, such as the trailing newline, removed). The body is a JSON
 object (`"v": 1`) holding the notification's `id`, `title`, `text`,
 `severity`, `emoji`, `facts`, `flavour`, `url`, `url_label`, `timestamp`
-(ISO 8601, UTC) and `topic` (`TS1`/`TS2`/`Muons`, the instrument name, `MCR`
-or `Summary`). A retry keeps the same `id`.
+(ISO 8601, UTC), `topic` (`TS1`/`TS2`/`Muons`, the instrument name, `MCR`
+or `Summary`) and `monitor_version`. A retry keeps the same `id`.
 
 ## Usage
 

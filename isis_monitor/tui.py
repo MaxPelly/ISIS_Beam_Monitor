@@ -11,6 +11,7 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.table import Table
 
+from isis_monitor import __version__
 from isis_monitor.config import CHANNEL_LABELS, TARGET_LABELS
 from isis_monitor.messages import sparkline_chars
 
@@ -99,6 +100,7 @@ class RichTUI:
         self._logs: Deque[str] = deque(maxlen=logs_maxlen)
         self.last_update = datetime.now(timezone.utc)
         self.connection_state = "DISCONNECTED"
+        self.daemon_version = ""  # from the daemon's snapshot reply
         # Compact: beams, instruments and MCR news only, stacked vertically.
         self.compact = False
         self._auto_layout = True  # until the user picks a layout by hand
@@ -216,12 +218,16 @@ class RichTUI:
     def _update_all(self):
         """Force-refresh every panel."""
         keys = "r reconnect · c config · v view · q quit"
+        title = f"ISIS Monitor v{self.daemon_version}" if self.daemon_version else "ISIS Monitor"
+        if self.daemon_version and self.daemon_version != __version__:  # e.g. updated but not restarted
+            title += f" (TUI v{__version__})"
+        title += f"  [{self.connection_state}]"
         if self.compact:  # no border, and the keys on their own line
-            header = Text.assemble((f"ISIS Monitor  [{self.connection_state}]", "bold cyan"), "\n", (keys, "dim"))
+            header = Text.assemble((title, "bold cyan"), "\n", (keys, "dim"))
         else:
             header = Panel(
                 Text.assemble(
-                    (f"ISIS Monitor  [{self.connection_state}]", "bold cyan"),
+                    (title, "bold cyan"),
                     (f"   {keys}", "dim"),
                     justify="center",
                 ),
@@ -389,6 +395,10 @@ class RichTUI:
 
     def update_connection_state(self, state: str) -> None:
         self.connection_state = state.upper()
+        self._update_all()
+
+    def set_daemon_version(self, version: str) -> None:
+        self.daemon_version = version
         self._update_all()
 
     def _update_logs_panel(self):

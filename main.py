@@ -389,6 +389,7 @@ async def _sync_tui(client: IPCClient, tui: RichTUI, history_limit: int) -> None
 
     snapshot_resp = await client.request({"method": "get_snapshot"}, timeout=IPC_REQUEST_TIMEOUT)
     if snapshot_resp.get("ok"):
+        tui.set_daemon_version(str(snapshot_resp.get("version", "")))
         _apply_snapshot_to_tui(tui, snapshot_resp.get("snapshot", {}))
 
     history_resp = await client.request(

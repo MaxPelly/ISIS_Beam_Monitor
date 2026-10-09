@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from isis_monitor import __version__
 from isis_monitor.daemon_state import SUBSCRIBER_QUEUE_SIZE, DaemonState
 from isis_monitor.ipc import SERVER_LINE_LIMIT, IPCClient, IPCServer
 from isis_monitor.tests.helpers import connected, never_answers, raw_request, serving, wait_until
@@ -20,7 +21,7 @@ async def test_ipc_snapshot_and_command(tmp_path):
     async with serving(tmp_path, state) as server, connected(server) as client:
         snap = await client.request({"method": "get_snapshot"})
         cmd = await client.request({"method": "command", "name": "force_reconnect_all"})
-    assert snap["ok"] is True and snap["snapshot"]["mcr_news"] == "hello"
+    assert snap["ok"] is True and snap["snapshot"]["mcr_news"] == "hello" and snap["version"] == __version__
     assert cmd["ok"] is True and cmd["result"] == {"handled": "force_reconnect_all"}
 
 

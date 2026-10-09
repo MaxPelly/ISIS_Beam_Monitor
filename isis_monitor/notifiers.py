@@ -259,6 +259,7 @@ class WebhookNotifier(HTTPNotifier):
             "url_label": n.url_label,
             "timestamp": n.timestamp.astimezone(timezone.utc).isoformat() if n.timestamp else None,
             "topic": n.topic,
+            "monitor_version": __version__,
         }
 
     def _request_kwargs(self, payload: dict) -> dict:
