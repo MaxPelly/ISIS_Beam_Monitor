@@ -218,19 +218,21 @@ class RichTUI:
     def _update_all(self):
         """Force-refresh every panel."""
         keys = "r reconnect · c config · v view · q quit"
-        title = f"ISIS Monitor v{self.daemon_version}" if self.daemon_version else "ISIS Monitor"
-        if self.daemon_version and self.daemon_version != __version__:  # e.g. updated but not restarted
-            title += f" (TUI v{__version__})"
-        title += f"  [{self.connection_state}]"
+        title = f"ISIS Monitor  [{self.connection_state}]"
+        version = f"v{self.daemon_version}" if self.daemon_version else ""
+        if version and self.daemon_version != __version__:  # e.g. updated but not restarted
+            version += f" (TUI v{__version__})"
         if self.compact:  # no border, and the keys on their own line
-            header = Text.assemble((title, "bold cyan"), "\n", (keys, "dim"))
-        else:
+            header = Text.assemble((title, "bold cyan"), (f"  {version}", "dim"), "\n", (keys, "dim"))
+        else:  # the version on the bottom border, so the line still fits 80 columns
             header = Panel(
                 Text.assemble(
                     (title, "bold cyan"),
                     (f"   {keys}", "dim"),
                     justify="center",
                 ),
+                subtitle=Text(version, style="dim") if version else None,
+                subtitle_align="right",
                 style="blue",
             )
         self.layout["header"].update(header)

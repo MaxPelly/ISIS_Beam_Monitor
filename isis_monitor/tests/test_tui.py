@@ -171,9 +171,20 @@ class TestDaemonHistory:
     def test_header_shows_the_daemon_version_and_a_differing_tui_version(self):
         tui = make_tui()
         tui.set_daemon_version(__version__)
-        assert f"ISIS Monitor v{__version__}  [" in _panel_text(tui, "header")
+        assert f"v{__version__}" in _panel_text(tui, "header")
         tui.set_daemon_version("0.9.0")
-        assert f"ISIS Monitor v0.9.0 (TUI v{__version__})  [" in _panel_text(tui, "header")
+        assert f"v0.9.0 (TUI v{__version__})" in _panel_text(tui, "header")
+
+    def test_full_header_fits_80_columns_with_differing_versions(self):
+        from rich.console import Console
+        tui = make_tui()
+        tui.update_connection_state("disconnected")
+        tui.set_daemon_version("10.10.10")
+        console = Console(width=80, record=True)
+        console.print(tui.layout["header"].renderable)
+        text = console.export_text()
+        assert len(text.splitlines()) == 3  # the header's size: no wrapped line to clip
+        assert "q quit" in text and f"v10.10.10 (TUI v{__version__})" in text
 
 
 # ---------------------------------------------------------------------------
