@@ -5,9 +5,9 @@ name: Python application
 
 on:
   push:
-    branches: [ "antigravity" ]
+    branches: [ "AI_assisted_main" ]
   pull_request:
-    branches: [ "antigravity" ]
+    branches: [ "AI_assisted_main" ]
 
 permissions:
   contents: read
