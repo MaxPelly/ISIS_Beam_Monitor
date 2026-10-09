@@ -8,6 +8,10 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-09
+
+Includes push site v1.0.1.
+
 - The TUI header shows the daemon's version, and the TUI's own if it differs (e.g. after an update without a restart).
 - Push notifications carry the daemon's version as `monitor_version`, which the push site shows in its footer.
 
