@@ -375,9 +375,11 @@ class BeamMonitor:
             logger.exception(f"Failed to handle PV update: {data!r:.200}")
 
     async def _run_loop(self) -> None:
+        # Titles before counts, so a run that changed while disconnected is
+        # reported under its new title rather than started by its counts reset.
         subscribe_msg = json.dumps({
             "type": "subscribe",
-            "pvs": [*self.pv_to_beam, *self.pv_to_counts, *self.pv_to_run_name],
+            "pvs": [*self.pv_to_beam, *self.pv_to_run_name, *self.pv_to_counts],
         })
         logger.info(f"Beam Monitor started. Connecting to {self.data_url}...")
         interval = self.config.beam_reconnect_interval

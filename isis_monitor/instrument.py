@@ -22,6 +22,10 @@ STALL_CHECK_WINDOW = timedelta(minutes=5)
 ETA_MIN_HISTORY = timedelta(minutes=3)
 ETA_CHECK_INTERVAL = timedelta(seconds=30)  # at most one rate fit per this, per instrument
 RUN_MILESTONE_INTERVAL = 25
+# A title change this soon after a counts reset started a run (e.g. one titled
+# after its BEGIN) names that run rather than starting another; the card has
+# already gone out under the old title.
+RESET_RETITLE_WINDOW = timedelta(minutes=2)
 
 
 def _fit_rate(samples: Sequence[Tuple[datetime, float]]) -> float:
@@ -55,6 +59,10 @@ class InstrumentState:
     collected_samples: Deque[Tuple[datetime, float]] = field(default_factory=deque)  # (time, current_counts)
     end_notified: bool = False
     eta_checked_at: Optional[datetime] = None
+    counts_reset_at: Optional[datetime] = None  # when a counts reset last started a run
+    # The previous run's total, after a title change started a run, until
+    # BEGIN resets the DAE's counts; -1 when not waiting for that reset.
+    stale_counts: float = -1.0
 
     # Periodic collection-progress check (InstrumentTracker.check_collection_progress)
     collection_stalled_since: Optional[datetime] = None
@@ -105,40 +113,58 @@ class InstrumentTracker:
         if not name:
             return  # e.g. all NULs; treating it as a run would hide the next real one
 
-        if self.state.run_name and self.state.run_name != name:
-            notification = run_started(
-                self.instrument.name,
-                name,
-                self.state.run_name,
-                time_now - self.state.run_started_at,
-                self.state.current_counts,
-                time_now,
-                rng=self.flavour_rng,
-                channel=self._card_channel(),
-            )
-            logger.info(f"New Run: {notification.to_plain_text()}")
-            await self.experiment_channel.broadcast(notification)
-            self.state.current_counts = 0
-            self.state.end_notified = False  # saved below with the new run's start
-            self.state.collected_samples.clear()
-            self.state.collection_stalled_since = None
-            self.state.stall_warned = False
+        # PVWS re-sends the current title on every (re)subscribe, so a repeat
+        # of the same name mustn't restart the run's clock; a new run that keeps
+        # its title (e.g. "Hidden") is caught by handle_counts instead.
+        if name == self.state.run_name and self.state.run_started_at is not None:
+            return
+        reset_at = self.state.counts_reset_at
+        retitled = reset_at is not None and time_now - reset_at <= RESET_RETITLE_WINDOW
+        if self.state.run_name and not retitled:
+            await self._start_run(name, time_now, from_title=True)
+            return
+        # The first title seen, or the title of a run a counts reset just started.
+        self.state.run_name = name
+        self.state.counts_reset_at = None
+        if not retitled:
+            self.state.run_started_at = time_now
+        if self.sink:
+            self.sink.update_run_name(self.instrument.name, name)
+        self._save_progress()
 
-            total_runs = self.sink.record_run_completed(self.instrument.name, time_now) if self.sink else 0
-        else:
-            # PVWS re-sends the current title on every (re)subscribe, so a repeat
-            # of the same name mustn't restart the run's clock. (A new run that
-            # reuses the old title can't be told apart, so it isn't reported.)
-            if name == self.state.run_name and self.state.run_started_at is not None:
-                return
-            total_runs = 0
+    async def _start_run(self, name: str, time_now: datetime, from_title: bool) -> None:
+        """Send the new-run card for `name`, reporting on the run just ended."""
+        notification = run_started(
+            self.instrument.name,
+            name,
+            self.state.run_name,
+            time_now - self.state.run_started_at,
+            self.state.current_counts,
+            time_now,
+            rng=self.flavour_rng,
+            channel=self._card_channel(),
+        )
+        logger.info(f"New Run: {notification.to_plain_text()}")
+        await self.experiment_channel.broadcast(notification)
+        if not from_title:
+            self.state.stale_counts = -1.0
+        elif self.state.stale_counts < 0:  # kept through title edits before BEGIN
+            self.state.stale_counts = self.state.current_counts
+        self.state.counts_reset_at = None if from_title else time_now
+        self.state.current_counts = 0
+        self.state.end_notified = False  # saved below with the new run's start
+        self.state.collected_samples.clear()
+        self.state.collection_stalled_since = None
+        self.state.stall_warned = False
 
+        total_runs = self.sink.record_run_completed(self.instrument.name, time_now) if self.sink else 0
         # Saved before any further await, so a snapshot can't pair the new
         # completion count with the old run (which a restart would re-report).
         self.state.run_name = name
         self.state.run_started_at = time_now
         if self.sink:
             self.sink.update_run_name(self.instrument.name, name)
+            self.sink.update_counts(self.instrument.name, 0)
         self._save_progress()
 
         if self.flavour_rng and total_runs and total_runs % RUN_MILESTONE_INTERVAL == 0:
@@ -159,7 +185,24 @@ class InstrumentTracker:
         if not math.isfinite(total_collected):
             return  # PVWS sends NaN for a PV with no value yet
 
-        previous = self.state.current_counts
+        stale = self.state.stale_counts
+        if stale >= 0:
+            # A new title came before BEGIN: PVWS may re-send the old total (on
+            # reconnect) until BEGIN's reset, which mustn't start another run.
+            # (So if that total was under ~1, the new run's first ~1 is ignored.)
+            if abs(total_collected - stale) <= 1:
+                return
+            self.state.stale_counts = -1.0
+            self._save_progress()
+        elif (
+            # Counts only fall when the DAE resets them for a new run, which is
+            # the only sign of one whose title is unchanged (e.g. "Hidden").
+            self.state.run_name
+            and self.state.run_started_at is not None
+            and total_collected < self.state.current_counts - 1
+        ):
+            await self._start_run(self.state.run_name, time_now, from_title=False)
+
         self.state.current_counts = total_collected
         samples = self.state.collected_samples
         samples.append((time_now, total_collected))
@@ -170,11 +213,6 @@ class InstrumentTracker:
 
         counts_target = self.instrument.notify_counts
         if self.state.end_notified:
-            # Counts only fall when the DAE resets them, e.g. a new run that
-            # kept the old title; then the next finish needs a card too.
-            if total_collected < previous - 1 and total_collected < counts_target - 25:
-                self.state.end_notified = False
-                self._save_progress()
             return
 
         remaining = counts_target - total_collected
@@ -210,7 +248,8 @@ class InstrumentTracker:
     def _save_progress(self) -> None:
         if self.sink:
             self.sink.update_run_progress(
-                self.instrument.name, self.state.run_started_at, self.state.end_notified
+                self.instrument.name, self.state.run_started_at, self.state.end_notified,
+                self.state.stale_counts,
             )
 
     def restore(self, saved: dict) -> None:
@@ -223,6 +262,7 @@ class InstrumentTracker:
         self.state.current_counts = float(saved.get("counts", -1.0))
         # DaemonState has already cleared this if notify_counts has changed.
         self.state.end_notified = bool(saved.get("end_notified", False))
+        self.state.stale_counts = float(saved.get("stale_counts", -1.0))
 
     def reset_stall_clock(self) -> None:
         self.state.collection_stalled_since = None

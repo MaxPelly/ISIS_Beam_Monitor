@@ -344,6 +344,79 @@ async def test_handle_update_run_name_change_no_milestone(mock_config, mock_chan
 # _handle_update — counts (IN:<NAME>:DAE:TOTALUAMPS) arm
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("final", [300.5, 10.0])  # 10: stopped early, far short of the target
+async def test_counts_reset_starts_a_run_whose_title_is_unchanged(mock_config, mock_channels, final):
+    """A hidden title stays "Hidden" across runs, so only the counts reset shows a new one."""
+    _, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels, counts_target=400)
+    t0 = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
+    await tracker(m).handle_run_name(title("Hidden")["b64byt"], t0)
+    await tracker(m).handle_counts(final + 0.5, t0 + timedelta(hours=2))
+    await tracker(m).handle_counts(final, t0 + timedelta(hours=2, minutes=1))  # tiny dips don't count
+    exp_channel.broadcast.assert_not_called()
+
+    await tracker(m).handle_counts(0.0, t0 + timedelta(hours=3))
+    exp_channel.broadcast.assert_called_once()
+    notification = exp_channel.broadcast.call_args[0][0]
+    assert notification.title == "PEARL: New run started" and notification.text == "Hidden"
+    facts = dict(notification.facts)
+    assert facts["Previous run"] == "Hidden" and facts["Duration"].startswith("3h")
+    assert f"{final:.1f}" in facts["Final total collected"]
+    assert tracker(m).state.run_started_at == t0 + timedelta(hours=3)
+    assert tracker(m).state.current_counts == 0.0
+
+
+@pytest.mark.parametrize("delay, cards", [(timedelta(minutes=1), 1), (timedelta(minutes=5), 2)])
+async def test_title_soon_after_a_counts_reset_names_that_run(mock_config, mock_channels, delay, cards):
+    """A counts reset that lands before the new title mustn't give one run two cards."""
+    _, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels, counts_target=1000)
+    t0 = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
+    await tracker(m).handle_run_name(title("Run 1")["b64byt"], t0)
+    await tracker(m).handle_counts(300.0, t0 + timedelta(hours=1))
+    reset_at = t0 + timedelta(hours=2)
+    await tracker(m).handle_counts(0.0, reset_at)
+    await tracker(m).handle_run_name(title("Run 2")["b64byt"], reset_at + delay)
+
+    assert exp_channel.broadcast.call_count == cards
+    assert tracker(m).state.run_name == "Run 2"
+    assert tracker(m).state.run_started_at == (reset_at if cards == 1 else reset_at + delay)
+
+
+@pytest.mark.parametrize("restart", [False, True])
+@pytest.mark.parametrize("titles", [["Run 2"], ["Run 2 typo", "Run 2"]])
+async def test_old_total_resent_before_begin_doesnt_start_another_run(mock_config, mock_channels, restart, titles):
+    """Title first, then BEGIN resets the counts: a reconnect or restart in between
+    brings the old total back, and neither it nor BEGIN's reset is a new run."""
+    _, exp_channel = mock_channels
+    sink = DaemonState(instruments=mock_config.instruments)
+    m = make_monitor(mock_config, mock_channels, counts_target=100, sink=sink)
+    t0 = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
+    await tracker(m).handle_run_name(title("Run 1")["b64byt"], t0)
+    await tracker(m).handle_counts(300.0, t0 + timedelta(hours=1))
+    for name in titles:  # a title edited before BEGIN keeps Run 1's total as the stale one
+        await tracker(m).handle_run_name(title(name)["b64byt"], t0 + timedelta(hours=2))
+    exp_channel.broadcast.reset_mock()  # Run 1's finishing card and Run 2's new-run card(s)
+    if restart:
+        sink, saved = DaemonState(instruments=mock_config.instruments), sink
+        sink.restore_from_snapshot_json(json.dumps(saved.snapshot()))
+        m = make_monitor(mock_config, mock_channels, counts_target=100, sink=sink)
+        m.restore_instruments(sink.instruments)
+
+    later = t0 + timedelta(hours=2, minutes=10)
+    await tracker(m).handle_run_name(title("Run 2")["b64byt"], later)  # re-sent on (re)connect
+    await tracker(m).handle_counts(300.0, later)  # Run 1's total, not yet reset
+    await tracker(m).handle_counts(0.0, later + timedelta(minutes=5))  # BEGIN
+    await tracker(m).handle_counts(2.0, later + timedelta(minutes=6))
+
+    exp_channel.broadcast.assert_not_called()  # no second new-run card, nor a finishing one
+    assert tracker(m).state.run_name == "Run 2" and tracker(m).state.current_counts == 2.0
+    assert tracker(m).state.stale_counts == -1.0
+    # A later reset (a new run that keeps the title) is still caught.
+    await tracker(m).handle_counts(0.0, later + timedelta(hours=1))
+    exp_channel.broadcast.assert_called_once()
+
+
 async def test_handle_update_counts_triggers_notification_past_the_target(mock_config, mock_channels):
     """TOTALUAMPS publishes the total µA·h collected this run as a number."""
     beam_channel, exp_channel = mock_channels
@@ -378,6 +451,7 @@ async def test_finishing_card_is_sent_ahead_of_the_target_on_its_eta(mock_config
     _, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels, counts_target=100)  # finish_warning_minutes = 15
     tracker(m).state.run_name = "Run 1"
+    tracker(m).state.run_started_at = datetime(2026, 9, 27, 11, 0, tzinfo=timezone.utc)
 
     # 1 µA·h a minute: 20 minutes to go at 80, 15 at 85.
     await _feed_counts(m, [(0, 70.0), (5, 75.0), (10, 80.0)])
@@ -390,8 +464,10 @@ async def test_finishing_card_is_sent_ahead_of_the_target_on_its_eta(mock_config
     # Sent once, however the ETA wobbles or the target is then passed.
     await _feed_counts(m, [(16, 85.5), (17, 90.0), (30, 101.0)])
     exp_channel.broadcast.assert_called_once()
-    # Counts reset (e.g. a new run that kept its title): the next finish gets a card.
+    # Counts reset (a new run that kept its title): a new-run card, and the
+    # next finish gets a card too.
     await _feed_counts(m, [(31, 0.0)])
+    assert "New run" in exp_channel.broadcast.call_args[0][0].title
     assert tracker(m).state.end_notified is False
 
 
@@ -893,8 +969,11 @@ async def test_run_loop_subscribes_to_every_instruments_pvs(mock_config, mock_ch
         async with running(m):
             await wait_until(lambda: server.subscriptions)
 
-    assert {"IN:PEARL:DAE:TOTALUAMPS", "IN:PEARL:DAE:WDTITLE", "IN:WISH:DAE:TOTALUAMPS", "IN:WISH:DAE:WDTITLE"} <= set(
-        server.subscriptions[0]["pvs"]
+    pvs = server.subscriptions[0]["pvs"]
+    assert {"IN:PEARL:DAE:TOTALUAMPS", "IN:PEARL:DAE:WDTITLE", "IN:WISH:DAE:TOTALUAMPS", "IN:WISH:DAE:WDTITLE"} <= set(pvs)
+    # Titles first, so a run changed while disconnected is started by its title.
+    assert max(pvs.index(f"IN:{n}:DAE:WDTITLE") for n in ("PEARL", "WISH")) < min(
+        pvs.index(f"IN:{n}:DAE:TOTALUAMPS") for n in ("PEARL", "WISH")
     )
 
 
@@ -1044,7 +1123,7 @@ async def test_restored_run_is_not_reset_or_renotified_after_a_restart(mock_conf
     await m._handle_update(title("Run 2"))
     card = exp_channel.broadcast.call_args[0][0]
     assert dict(card.facts)["Duration"].startswith("3h")
-    sink.update_run_progress.assert_called_with("PEARL", ANY, False)
+    sink.update_run_progress.assert_called_with("PEARL", ANY, False, 121.0)
 
 
 async def test_restore_ignores_entries_without_a_run(mock_config, mock_channels):
@@ -1057,11 +1136,12 @@ async def test_finishing_card_state_is_saved_to_the_sink(mock_config, mock_chann
     sink = MagicMock()
     m = make_monitor(mock_config, mock_channels, counts_target=100, sink=sink)
     tracker(m).state.run_name = "Run 1"
+    tracker(m).state.run_started_at = started = datetime.now(timezone.utc)
     await m._handle_update({"pv": PEARL_UAMPS, "value": 110.0})
-    sink.update_run_progress.assert_called_with("PEARL", None, True)
-    await m._handle_update({"pv": PEARL_UAMPS, "value": 10.0})  # back below target - 25
+    sink.update_run_progress.assert_called_with("PEARL", started, True, -1.0)
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 10.0})  # reset by a new run
     assert tracker(m).state.end_notified is False
-    sink.update_run_progress.assert_called_with("PEARL", None, False)
+    sink.update_run_progress.assert_called_with("PEARL", tracker(m).state.run_started_at, False, -1.0)
 
 
 

@@ -64,6 +64,7 @@ class DaemonState:
                 # run's clock and "about to finish" card aren't reset by it.
                 "run_started_at": None,  # ISO timestamp
                 "end_notified": False,
+                "stale_counts": -1.0,
                 "notify_counts": inst.notify_counts,
                 "beam_target": inst.beam_target,
             }
@@ -162,12 +163,14 @@ class DaemonState:
         self._publish("run", {"instrument": instrument, "run_name": run_name})
 
     def update_run_progress(
-        self, instrument: str, run_started_at: Optional[datetime], end_notified: bool
+        self, instrument: str, run_started_at: Optional[datetime], end_notified: bool,
+        stale_counts: float,
     ) -> None:
         if instrument not in self.instruments:
             return
         self.instruments[instrument]["run_started_at"] = run_started_at.isoformat() if run_started_at else None
         self.instruments[instrument]["end_notified"] = bool(end_notified)
+        self.instruments[instrument]["stale_counts"] = float(stale_counts)
 
     def update_counts(self, instrument: str, counts: float) -> None:
         if instrument not in self.instruments:
@@ -276,6 +279,7 @@ class DaemonState:
                     # the new one, which may still be ahead.
                     "end_notified": bool(info.get("end_notified", False))
                     and float(info.get("notify_counts", current["notify_counts"])) == current["notify_counts"],
+                    "stale_counts": float(info.get("stale_counts", -1.0)),
                 }
             except (TypeError, ValueError):
                 logger.warning(f"Skipping malformed snapshot state for instrument {name}")

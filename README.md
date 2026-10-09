@@ -71,10 +71,12 @@ notify_counts = 130
 ```
 
 Both PVs are derived from the name: progress (total µA·h collected this run) from
-`IN:<NAME>:DAE:TOTALUAMPS`, and the run name from `IN:<NAME>:DAE:WDTITLE`. Names may
-contain letters, digits, `_` and `-`, and are upper-cased. Downstream flows that route on
-the payload's `channel` see "Experiment Updates" unless an instrument sets
-`channel = instrument`. At least one `[INSTRUMENT:*]` section is required.
+`IN:<NAME>:DAE:TOTALUAMPS`, and the run name from `IN:<NAME>:DAE:WDTITLE`. A new run is
+spotted by its title changing or its total collected resetting, so runs with a hidden
+title are still reported. Names may contain letters, digits, `_` and `-`, and are
+upper-cased. Downstream flows that route on the payload's `channel` see "Experiment
+Updates" unless an instrument sets `channel = instrument`. At least one `[INSTRUMENT:*]`
+section is required.
 
 ### Optional `[TUI]` section
 
