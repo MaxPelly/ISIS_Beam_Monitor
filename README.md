@@ -259,3 +259,13 @@ sudo systemctl status isis-beam-monitor.service
 - **`Lock file already held`**: another daemon instance is running (or stale lock path configured).
 - **TUI cannot connect**: ensure the daemon is running and the TUI uses the same config file (both use `[DAEMON] socket_path`).
 - **No live updates**: check `monitor.log` for websocket/news source errors; use `r` in TUI to force reconnect.
+
+## Releases
+
+Versions follow [Semantic Versioning](https://semver.org/) and are set in `isis_monitor/__init__.py` (`__version__`), which is shown at the foot of every Teams card and by `python main.py --version`. The push site is versioned separately in its own repo. To release:
+
+1. If the push site has changed, release it first, then point the submodule at its tag: `git -C push_site fetch --tags && git -C push_site checkout vX.Y.Z && git add push_site`.
+2. Move the `[Unreleased]` entries in `CHANGELOG.md` into a new `## [X.Y.Z] - YYYY-MM-DD` section, noting the push site version, and set `__version__` to `X.Y.Z`.
+3. Commit, then tag and push: `git tag -a vX.Y.Z -m vX.Y.Z && git push origin AI_assisted_main vX.Y.Z`.
+
+The release workflow checks the tag matches `__version__`, runs the tests and publishes a GitHub release with that section's notes.
