@@ -15,6 +15,7 @@ from typing import List, Optional, Tuple
 
 import aiohttp
 
+from isis_monitor import __version__
 from isis_monitor.messages import Notification, Severity, fmt_time, strip_controls
 
 logger = logging.getLogger(__name__)
@@ -187,14 +188,16 @@ class TeamsNotifier(HTTPNotifier):
                 ],
             })
 
+        footer = f"ISIS Beam Monitor v{__version__}"
         if notification.timestamp:
-            body.append({
-                "type": "TextBlock",
-                "text": fmt_time(notification.timestamp),
-                "isSubtle": True,
-                "size": "Small",
-                "wrap": True,
-            })
+            footer = f"{fmt_time(notification.timestamp)} · {footer}"
+        body.append({
+            "type": "TextBlock",
+            "text": footer,
+            "isSubtle": True,
+            "size": "Small",
+            "wrap": True,
+        })
 
         summary = _no_links(notification.to_summary())
 

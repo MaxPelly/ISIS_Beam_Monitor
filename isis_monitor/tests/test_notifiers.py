@@ -11,6 +11,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import aiohttp
 import pytest
 
+from isis_monitor import __version__
 from isis_monitor.notifiers import (
     _retry_after, HTTPNotifier, TeamsNotifier, DummyNotifier, NotificationChannel, Notifier, WebhookNotifier,
 )
@@ -194,7 +195,13 @@ def test_create_payload_includes_flavour_and_timestamp_lines():
     texts = [item["text"] for item in body if "text" in item]
     assert "_Beam's back, baby._" in texts
     assert body[-1]["isSubtle"] is True
-    assert "Jan" in body[-1]["text"]
+    assert "Jan" in body[-1]["text"] and body[-1]["text"].endswith(f"ISIS Beam Monitor v{__version__}")
+
+
+def test_create_payload_ends_with_the_version_without_a_timestamp():
+    body = TeamsNotifier("http://fake.webhook.url")._create_payload(
+        Notification(title="Title", text="Text"))["attachments"][0]["content"]["body"]
+    assert body[-1]["text"] == f"ISIS Beam Monitor v{__version__}" and body[-1]["size"] == "Small"
 
 
 def test_create_payload_url_action_only_when_url_given():

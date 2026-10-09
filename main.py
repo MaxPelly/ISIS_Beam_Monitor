@@ -18,6 +18,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
+from isis_monitor import __version__
 from isis_monitor.beam import BeamMonitor
 from isis_monitor.config_editor import run_config_editor
 from isis_monitor.config import (
@@ -228,6 +229,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
     state_log_handler = StateLogHandler(state, asyncio.get_running_loop())
     state_log_handler.setFormatter(logging.Formatter(LOG_FORMAT))
     logging.getLogger().addHandler(state_log_handler)
+    logger.info(f"ISIS Beam Monitor v{__version__} starting")
 
     channels = build_channels(config, args.dummy)
     beam_channel, exp_channel, mcr_channel = channels
@@ -620,6 +622,7 @@ async def run_stop(config) -> None:
 
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ISIS Beam and MCR News Monitor")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
     for mode, help_text in (

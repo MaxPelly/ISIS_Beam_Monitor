@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "isis-monitor"
-version = "0.1.0"
+dynamic = ["version"]
 description = "ISIS Facility Beam and MCR News Monitor"
 requires-python = ">=3.12"
 dependencies = [
@@ -13,7 +13,6 @@ dependencies = [
     "rich>=13,<14",
 ]
 
-
 [project.optional-dependencies]
 dev = [
     "pytest",
@@ -21,6 +20,9 @@ dev = [
     "pytest-mock",
     "pytest-cov",
 ]
+
+[tool.setuptools.dynamic]
+version = {attr = "isis_monitor.__version__"}
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
