@@ -1217,6 +1217,7 @@ async def test_auto_target_comes_from_recent_runs_once_there_are_enough(mock_con
 
 async def test_fixed_target_ignores_run_totals(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels, counts_target=100)
+    m.restore_instruments({"PEARL": {"run_totals": [50.0, 52.0, 48.0]}})
     tracker(m).state.run_name = "Run 0"
     tracker(m).state.run_started_at = datetime.now(timezone.utc)
     await _finish_runs(m, 60.0, 61.0, 62.0)

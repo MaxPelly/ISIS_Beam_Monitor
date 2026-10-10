@@ -297,7 +297,8 @@ class InstrumentTracker:
     def restore(self, saved: dict) -> None:
         """Seed state from a DaemonState snapshot entry after a restart. PVWS
         re-sends the same run title on connect, which then changes nothing."""
-        self.state.run_totals.extend(saved.get("run_totals", ()))
+        if self.instrument.auto_counts:  # a fixed target's old totals would be stale by the time auto is on
+            self.state.run_totals.extend(saved.get("run_totals", ()))
         self._set_target()
         if not saved.get("run_name") or not saved.get("run_started_at"):
             return
