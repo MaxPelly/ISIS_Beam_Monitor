@@ -234,8 +234,8 @@ class TestUpdateLog:
 # ---------------------------------------------------------------------------
 
 INSTRUMENTS = {
-    "PEARL": {"run_name": "Pearl run", "counts": 65.0, "total_runs": 3, "notify_counts": 130.0, "beam_target": "TS1"},
-    "EMU": {"run_name": "", "counts": -1.0, "total_runs": 0, "notify_counts": 10.0, "beam_target": "Muon"},
+    "PEARL": {"run_name": "Pearl run", "counts": 65.0, "total_runs": 3, "target": 130.0, "beam_target": "TS1"},
+    "EMU": {"run_name": "", "counts": -1.0, "total_runs": 0, "target": 10.0, "beam_target": "Muon"},
 }
 
 
@@ -288,6 +288,7 @@ class TestProgressBar:
     def test_partial_and_capped_at_full(self):
         assert _progress_bar(25.0, 100.0).plain == "██░░░░░░ 25/100"
         assert _progress_bar(150.0, 100.0).plain == "████████ 150/100"
+        assert _progress_bar(25.0, 100.0, estimated=True).plain == "██░░░░░░ 25/≈100"
 
 
 # ---------------------------------------------------------------------------

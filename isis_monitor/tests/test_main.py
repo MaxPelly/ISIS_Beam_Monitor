@@ -399,10 +399,13 @@ def test_apply_event_to_tui_dispatches_each_event_type():
         {"event": "health", "payload": {"component": "beam", "status": "connected"}},
         {"event": "run", "payload": {"instrument": "WISH", "run_name": "Run 9"}},
         {"event": "counts", "payload": {"instrument": "WISH", "counts": 12}},
+        {"event": "target", "payload": {"instrument": "WISH", "target": 98.5, "auto_runs": 3}},
     ]:
         main._apply_event_to_tui(tui, message)
 
-    assert tui.update_instrument.call_args_list == [call("WISH", run_name="Run 9"), call("WISH", counts=12.0)]
+    assert tui.update_instrument.call_args_list == [
+        call("WISH", run_name="Run 9"), call("WISH", counts=12.0), call("WISH", target=98.5, auto_runs=3),
+    ]
 
     tui.update_beam_state.assert_called_once_with("TS1", 5.0, "low")
     tui.update_mcr_news.assert_called_once_with("hi")

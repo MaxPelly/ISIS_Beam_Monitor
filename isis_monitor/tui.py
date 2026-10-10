@@ -34,17 +34,24 @@ _MAX_INSTRUMENT_ROWS = 8
 COMPACT_WIDTH = 80
 
 
-def _progress_bar(counts: float, target: float) -> Text:
-    """A fixed-width bar of counts collected towards the notify count, then
-    e.g. "65/130"."""
+def _progress_bar(counts: float, target: float, estimated: bool = False) -> Text:
+    """A fixed-width bar of counts collected towards the run's target, then
+    e.g. "65/130", or "65/≈128" for an auto target estimated from recent runs."""
+    goal = f"{'≈' if estimated else ''}{target:.0f}"
     if counts < 0 or target <= 0:
-        return Text(f"{'·' * _PROGRESS_WIDTH} —/{target:.0f}", style="dim")
+        return Text(f"{'·' * _PROGRESS_WIDTH} —/{goal}", style="dim")
     fraction = min(counts / target, 1.0)
     filled = round(fraction * _PROGRESS_WIDTH)
     bar = Text("█" * filled, style="green" if fraction >= 1.0 else "cyan")
     bar.append("░" * (_PROGRESS_WIDTH - filled), style="dim")
-    bar.append(f" {counts:.0f}/{target:.0f}")
+    bar.append(f" {counts:.0f}/{goal}")
     return bar
+
+
+def _instrument_progress(info: dict) -> Text:
+    return _progress_bar(
+        float(info.get("counts", -1.0)), float(info.get("target", 0.0)), bool(info.get("auto_runs", 0))
+    )
 
 
 def _render_sparkline(
@@ -93,7 +100,7 @@ class RichTUI:
             for beam in self.beam_states
         }
 
-        # name -> {"run_name", "counts", "notify_counts", "beam_target", ...}
+        # name -> {"run_name", "counts", "target", "auto_runs", "beam_target", ...}
         self.instruments: dict[str, dict] = {}
 
         self.mcr_news = "Waiting for initial MCR news..."
@@ -335,7 +342,7 @@ class RichTUI:
                 first.add_column(no_wrap=True)
                 first.add_row(
                     Text.assemble(f"{name:<{name_w}}  ", self._target_text(info)),
-                    _progress_bar(float(info.get("counts", -1.0)), float(info.get("notify_counts", 0.0))),
+                    _instrument_progress(info),
                 )
                 run = str(info.get("run_name", "")) or "—"
                 lines += [first, Text(f"  {run}", no_wrap=True, overflow="ellipsis")]
@@ -357,7 +364,7 @@ class RichTUI:
                 name,
                 self._target_text(info),
                 str(info.get("run_name", "")) or "—",
-                _progress_bar(float(info.get("counts", -1.0)), float(info.get("notify_counts", 0.0))),
+                _instrument_progress(info),
             )
         if hidden:
             table.add_row(Text(f"+{hidden} more", style="dim"), "", "", "")
