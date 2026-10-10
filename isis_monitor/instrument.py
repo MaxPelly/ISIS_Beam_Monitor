@@ -3,6 +3,7 @@ import base64
 import logging
 import math
 import random
+import statistics
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -26,6 +27,14 @@ RUN_MILESTONE_INTERVAL = 25
 # after its BEGIN) names that run rather than starting another; the card has
 # already gone out under the old title.
 RESET_RETITLE_WINDOW = timedelta(minutes=2)
+# notify_counts = auto: a run's target is the median of the experiment's last
+# AUTO_RUNS run totals, leaving out very short ones (e.g. a mistaken setup),
+# once AUTO_MIN_RUNS are left; AUTO_HISTORY totals are kept to allow for them.
+AUTO_HISTORY = 7
+AUTO_RUNS = 5
+AUTO_MIN_RUNS = 3
+AUTO_SHORT_UAH = 1.0  # µA·h; a run below this, or AUTO_SHORT_FRACTION of
+AUTO_SHORT_FRACTION = 0.25  # the median of all kept totals, is "very short"
 
 
 def _fit_rate(samples: Sequence[Tuple[datetime, float]]) -> float:
@@ -43,6 +52,18 @@ def _fit_rate(samples: Sequence[Tuple[datetime, float]]) -> float:
         return 0.0
     numer = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
     return numer / denom
+
+
+def auto_target(totals: Sequence[float], fallback: float) -> Tuple[float, int]:
+    """The target for a run from recent run totals (oldest first), and how
+    many runs it came from: 0 means there weren't enough, so it's `fallback`."""
+    if not totals:
+        return fallback, 0
+    floor = max(AUTO_SHORT_UAH, AUTO_SHORT_FRACTION * statistics.median(totals))
+    kept = [t for t in totals if t >= floor][-AUTO_RUNS:]
+    if len(kept) < AUTO_MIN_RUNS:
+        return fallback, 0
+    return statistics.median(kept), len(kept)
 
 
 def _is_blank(value: Any) -> bool:

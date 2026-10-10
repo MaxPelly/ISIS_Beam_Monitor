@@ -18,7 +18,7 @@ from isis_monitor.beam import (
     _classify_ws_error,
     _PendingChange,
 )
-from isis_monitor.instrument import STALL_CHECK_WINDOW, _fit_rate
+from isis_monitor.instrument import STALL_CHECK_WINDOW, _fit_rate, auto_target
 from isis_monitor.tests.helpers import FakePVWS, fake_channel, running, wait_until
 
 
@@ -545,6 +545,22 @@ def test_fit_rate_computes_slope_per_second():
     t0 = datetime(2026, 9, 23, 12, 0, tzinfo=timezone.utc)
     samples = [(t0, 0.0), (t0 + timedelta(seconds=10), 100.0)]
     assert _fit_rate(samples) == pytest.approx(10.0)
+
+
+@pytest.mark.parametrize("totals, expected", [
+    ([], (130.0, 0)),
+    ([100.0, 102.0], (130.0, 0)),  # too few runs: the fallback
+    ([100.0, 0.4, 102.0], (130.0, 0)),  # a short run doesn't count towards them
+    ([100.0, 102.0, 98.0], (100.0, 3)),
+    # One or two mistaken short runs are left out, not averaged in.
+    ([100.0, 5.0, 102.0, 0.2, 98.0], (100.0, 3)),
+    # Only the last AUTO_RUNS of the rest count; an odd long run is outvoted.
+    ([50.0, 50.0, 100.0, 100.0, 300.0, 100.0, 100.0], (100.0, 5)),
+    # An aborted run that still counts is outvoted by the median too.
+    ([100.0, 40.0, 100.0, 104.0], (100.0, 4)),
+])
+def test_auto_target(totals, expected):
+    assert auto_target(totals, 130.0) == expected
 
 
 # ---------------------------------------------------------------------------
