@@ -153,9 +153,9 @@ class InstrumentTracker:
             return
         if self.state.rb_number:
             logger.info(f"{self.instrument.name} RB number {self.state.rb_number} -> {rb}: run history cleared")
-            self.state.run_totals.clear()
         else:
             self.state.run_rb = rb  # the first seen; the run in progress is taken to be its
+        self.state.run_totals.clear()  # also runs from before any RB number, e.g. while it was "0"
         self.state.rb_number = rb
         self._set_target()
 

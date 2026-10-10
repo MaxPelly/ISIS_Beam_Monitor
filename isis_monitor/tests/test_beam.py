@@ -1245,6 +1245,14 @@ async def test_rb_number_is_only_subscribed_for_auto_targets(mock_config, mock_c
     assert list(m.pv_to_rb_number) == [PEARL_RB]
 
 
+async def test_runs_before_any_rb_number_are_not_in_its_history(mock_config, mock_channels):
+    m = auto_monitor(mock_config, mock_channels)
+    await m._handle_update(rb("0"))  # e.g. commissioning between experiments
+    await _finish_runs(m, 60.0, 61.0, 62.0)
+    await m._handle_update(rb("2610028"))
+    assert tracker(m).state.run_target == 100.0 and not tracker(m).state.run_totals
+
+
 async def test_new_rb_number_starts_a_new_run_history(mock_config, mock_channels):
     m = auto_monitor(mock_config, mock_channels)
     await m._handle_update({"pv": PEARL_RB})  # PVWS's first message can have no value

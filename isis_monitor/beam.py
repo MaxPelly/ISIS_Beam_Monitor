@@ -383,9 +383,9 @@ class BeamMonitor:
 
     async def _run_loop(self) -> None:
         # Titles before counts, so a run that changed while disconnected is
-        # reported under its new title rather than started by its counts reset;
-        # RB numbers before both, so a new experiment's first run isn't counted
-        # in the old one's run history.
+        # reported under its new title rather than started by its counts reset.
+        # RB numbers go first too, which can save a new experiment's first run
+        # for its history (the server may still send them later).
         subscribe_msg = json.dumps({
             "type": "subscribe",
             "pvs": [*self.pv_to_beam, *self.pv_to_rb_number, *self.pv_to_run_name, *self.pv_to_counts],
