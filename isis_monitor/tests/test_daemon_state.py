@@ -278,8 +278,11 @@ def test_auto_target_is_published_and_run_totals_survive_a_snapshot():
     restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
     assert restored.instruments["WISH"]["run_totals"] == [97.0, 98.5, 99.0]
     assert restored.instruments["WISH"]["rb_number"] == restored.instruments["WISH"]["run_rb"] == "2610028"
-    # The target itself is the tracker's to work out again from them.
-    assert restored.instruments["WISH"]["target"] == restored.instruments["WISH"]["notify_counts"]
+    assert (restored.instruments["WISH"]["target"], restored.instruments["WISH"]["auto_runs"]) == (98.5, 3)
+    # One for another notify_counts isn't kept.
+    changed = DaemonState(instruments=[InstrumentConfig("WISH", 60.0, "TS2")])
+    changed.restore_from_snapshot_json(json.dumps(state.snapshot()))
+    assert (changed.instruments["WISH"]["target"], changed.instruments["WISH"]["auto_runs"]) == (60.0, 0)
 
 
 @pytest.mark.parametrize("run_totals", ["12", [1.0, "x"], [float("nan")], None])

@@ -1181,10 +1181,10 @@ async def test_finishing_card_after_restart_depends_on_the_threshold_it_was_sent
     assert exp_channel.broadcast.called is renotified
 
 
-def auto_monitor(mock_config, mock_channels, sink=None):
-    """A monitor whose PEARL has notify_counts = auto, 100, mid-run."""
+def auto_monitor(mock_config, mock_channels, sink=None, fallback=100):
+    """A monitor whose PEARL has notify_counts = auto, <fallback>, mid-run."""
     instruments = [replace(i, auto_counts=True) for i in mock_config.instruments]
-    m = make_monitor(replace(mock_config, instruments=instruments), mock_channels, counts_target=100, sink=sink)
+    m = make_monitor(replace(mock_config, instruments=instruments), mock_channels, counts_target=fallback, sink=sink)
     tracker(m).state.run_name = "Run 0"
     tracker(m).state.run_started_at = datetime.now(timezone.utc)
     return m
@@ -1245,12 +1245,36 @@ async def test_rb_number_is_only_subscribed_for_auto_targets(mock_config, mock_c
     assert list(m.pv_to_rb_number) == [PEARL_RB]
 
 
+async def test_rb_change_mid_run_keeps_that_runs_target_through_a_restart(mock_config, mock_channels):
+    _, exp_channel = mock_channels
+    m = auto_monitor(mock_config, mock_channels, fallback=30)
+    tracker(m).sink = state = DaemonState(instruments=[tracker(m).instrument])
+    await m._handle_update(rb("A"))
+    await _finish_runs(m, 100.0, 100.0, 100.0)
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 40.0})
+    await m._handle_update(rb("B"))  # the next experiment's, while A's last run counts
+    exp_channel.broadcast.reset_mock()
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 40.5})
+    assert tracker(m).state.run_target == 100.0
+    exp_channel.broadcast.assert_not_called()
+
+    restored = DaemonState(instruments=[tracker(m).instrument])
+    restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
+    m2 = auto_monitor(mock_config, mock_channels, fallback=30)
+    m2.restore_instruments(restored.instruments)
+    assert (tracker(m2).state.run_target, tracker(m2).state.auto_runs) == (100.0, 3)
+    await _finish_runs(m2, 101.0)  # A's last run ends: B's first run starts on the fallback
+    assert tracker(m2).state.run_target == 30.0 and not tracker(m2).state.run_totals
+    await m2._handle_update({"pv": PEARL_UAMPS, "value": 30.5})
+    assert dict(exp_channel.broadcast.call_args[0][0].facts)["Collected"] == "30.5 / 30 µA·h"  # not "(auto)"
+
+
 async def test_runs_before_any_rb_number_are_not_in_its_history(mock_config, mock_channels):
     m = auto_monitor(mock_config, mock_channels)
     await m._handle_update(rb("0"))  # e.g. commissioning between experiments
     await _finish_runs(m, 60.0, 61.0, 62.0)
     await m._handle_update(rb("2610028"))
-    assert tracker(m).state.run_target == 100.0 and not tracker(m).state.run_totals
+    assert not tracker(m).state.run_totals
 
 
 async def test_new_rb_number_starts_a_new_run_history(mock_config, mock_channels):
@@ -1268,9 +1292,10 @@ async def test_new_rb_number_starts_a_new_run_history(mock_config, mock_channels
     # The last run of the old experiment ended; the new one's RB comes first.
     await m._handle_update({"pv": PEARL_UAMPS, "value": 63.0})
     await m._handle_update(rb("2620381"))
-    assert tracker(m).state.run_target == 100.0 and not tracker(m).state.run_totals
+    assert tracker(m).state.run_target == 61.0 and not tracker(m).state.run_totals  # still the old run's
     await m._handle_update({"pv": PEARL_UAMPS, "value": 0.0})  # its first run begins
     assert not tracker(m).state.run_totals  # the 63 was the old experiment's
+    assert tracker(m).state.run_target == 100.0
     await _finish_runs(m, 20.0, 21.0, 22.0)
     assert tracker(m).state.run_target == 21.0
 

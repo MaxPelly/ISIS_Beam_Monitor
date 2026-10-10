@@ -297,23 +297,30 @@ class DaemonState:
             current = self.instruments[name]
             try:
                 started = info.get("run_started_at")
+                # A finishing card sent for, or a target from, another
+                # notify_counts (changed by the config save behind this
+                # restart) doesn't cover the new one, which may still be ahead.
+                same_target = (
+                    float(info.get("notify_counts", current["notify_counts"])) == current["notify_counts"]
+                    and info.get("auto", False) == current["auto"]
+                )
                 restored = {
                     "run_name": str(info.get("run_name", current["run_name"])),
                     "counts": float(info.get("counts", current["counts"])),
                     "total_runs": int(info.get("total_runs", current["total_runs"])),
                     # Validated here (raises ValueError) but kept as ISO text.
                     "run_started_at": _aware_iso(started) if started else None,
-                    # A finishing card sent for another notify_counts (changed
-                    # by the config save behind this restart) doesn't cover
-                    # the new one, which may still be ahead.
-                    "end_notified": bool(info.get("end_notified", False))
-                    and float(info.get("notify_counts", current["notify_counts"])) == current["notify_counts"]
-                    and info.get("auto", False) == current["auto"],
+                    "end_notified": bool(info.get("end_notified", False)) and same_target,
                     "stale_counts": float(info.get("stale_counts", -1.0)),
                     "run_totals": _finite_floats(info.get("run_totals", [])),
                     "rb_number": str(info.get("rb_number", "")),
                     "run_rb": str(info.get("run_rb", "")),
                 }
+                if same_target:
+                    restored.update(
+                        target=float(info.get("target", current["target"])),
+                        auto_runs=int(info.get("auto_runs", current["auto_runs"])),
+                    )
             except (TypeError, ValueError):
                 logger.warning(f"Skipping malformed snapshot state for instrument {name}")
                 continue

@@ -85,6 +85,7 @@ class InstrumentState:
     # BEGIN resets the DAE's counts; -1 when not waiting for that reset.
     stale_counts: float = -1.0
     run_target: float = 0.0  # µA·h this run's finishing card is due at
+    auto_runs: int = 0  # how many runs an auto run_target came from; 0 = the fallback
     # Completed runs' totals (oldest first), for auto targets
     run_totals: Deque[float] = field(default_factory=lambda: deque(maxlen=AUTO_HISTORY))
     rb_number: str = ""  # the experiment's, for auto targets; "" until known
@@ -138,10 +139,14 @@ class InstrumentTracker:
             if target != self.state.run_target:
                 source = f"the last {runs} runs" if runs else f"the fallback, until {AUTO_MIN_RUNS} runs are seen"
                 logger.info(f"{inst.name} auto target {target:g} µA·h, from {source}")
-        self.state.run_target = target
+        self.state.run_target, self.state.auto_runs = target, runs
+        self._save_target()
+
+    def _save_target(self) -> None:
         if self.sink:
             self.sink.update_target(
-                inst.name, target, runs, list(self.state.run_totals), self.state.rb_number, self.state.run_rb
+                self.instrument.name, self.state.run_target, self.state.auto_runs,
+                list(self.state.run_totals), self.state.rb_number, self.state.run_rb,
             )
 
     def handle_rb_number(self, text: Any) -> None:
@@ -157,7 +162,7 @@ class InstrumentTracker:
             self.state.run_rb = rb  # the first seen; the run in progress is taken to be its
         self.state.run_totals.clear()  # also runs from before any RB number, e.g. while it was "0"
         self.state.rb_number = rb
-        self._set_target()
+        self._save_target()  # the run in progress keeps its target; the next is the new experiment's
 
     async def handle_run_name(self, b64_data: Any, time_now: datetime) -> None:
         if _is_blank(b64_data):
@@ -304,7 +309,7 @@ class InstrumentTracker:
                 time_now,
                 rng=self.flavour_rng,
                 channel=self._card_channel(),
-                auto=self.instrument.auto_counts,
+                auto=self.state.auto_runs > 0,
             )
             logger.info(f"Run finishing: {notification.to_plain_text()}")
             await self.experiment_channel.broadcast(notification)
@@ -325,7 +330,14 @@ class InstrumentTracker:
             self.state.run_totals.extend(saved.get("run_totals", ()))
             self.state.rb_number = str(saved.get("rb_number", ""))
             self.state.run_rb = str(saved.get("run_rb", ""))
-        self._set_target()
+        if self.state.run_rb != self.state.rb_number:
+            # A run from before an RB change: its history has gone, so it
+            # keeps the target it started with (or, if the config changed, notify_counts).
+            self.state.run_target = float(saved.get("target", self.instrument.notify_counts))
+            self.state.auto_runs = int(saved.get("auto_runs", 0))
+            self._save_target()
+        else:
+            self._set_target()
         if not saved.get("run_name") or not saved.get("run_started_at"):
             return
         self.state.run_name = strip_controls(str(saved["run_name"]))  # as handle_run_name stores it
