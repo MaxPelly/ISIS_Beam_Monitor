@@ -60,7 +60,8 @@ Each instrument gets its own section. Run notifications for every instrument go 
 [INSTRUMENT:PEARL]
 # Required: the run's target in total µA·h collected. "Run about to finish" is sent
 # [NOTIFICATIONS] finish_warning_minutes before it's expected to be reached (or on
-# reaching it, if the rate isn't known yet).
+# reaching it, if the rate isn't known yet). "auto, 130" targets each run at the
+# median of the experiment's recent runs instead, using 130 until there are enough.
 notify_counts = 130
 # Optional: TS1, TS2 or Muon — the beam reported on run cards and checked
 # before stall warnings (default = [PVS] instrument_target, itself TS1 by default).
@@ -77,6 +78,13 @@ title are still reported. Names may contain letters, digits, `_` and `-`, and ar
 upper-cased. Downstream flows that route on the payload's `channel` see "Experiment
 Updates" unless an instrument sets `channel = instrument`. At least one `[INSTRUMENT:*]`
 section is required.
+
+With `notify_counts = auto, <number>`, each run's target is set when it starts, from the
+median of the last 5 completed runs of the same experiment. Very short runs (under 1 µA·h
+or a quarter of the typical run, e.g. a mistaken setup) are left out, and `<number>` is
+used until 3 runs remain. The experiment is told apart by its RB number
+(`IN:<NAME>:DAE:_RBNUMBER`): when it changes, the history starts again. The finishing
+card shows an auto target as e.g. "60.5 / 60 µA·h (auto)", and the TUI as "≈60".
 
 ### Optional `[TUI]` section
 
