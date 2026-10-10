@@ -174,6 +174,10 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     (PEARL + "notify_counts = inf\n", "must be a positive number"),
     (PEARL, "notify_counts is required"),
     (PEARL + "notify_counts = lots\n", r"\[INSTRUMENT:PEARL\] notify_counts"),
+    (PEARL + "notify_counts = auto\n", "a number or 'auto, <number>'"),
+    (PEARL + "notify_counts = 130, 5\n", "a number or 'auto, <number>'"),
+    (PEARL + "notify_counts = auto, lots\n", r"\[INSTRUMENT:PEARL\] notify_counts"),
+    (PEARL + "notify_counts = auto, 0\n", "must be a positive number"),
     (PEARL + "notify_counts = 5\nbeam_target = Muons\n", "beam_target must be one of"),
     (PEARL + "notify_counts = 5\nchannel = teams\n",
      r"\[INSTRUMENT:PEARL\] channel must be one of experiment, instrument"),
@@ -317,6 +321,17 @@ def test_update_config_file_round_trips_and_keeps_other_settings(tmp_path):
     assert (tmp_path / "config.ini.bak").read_text() == EDITABLE_BASE
     assert path.stat().st_mode & 0o777 == 0o600
     assert [p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")] == []
+
+
+def test_auto_notify_counts_keeps_its_fallback_and_round_trips(tmp_path):
+    path = _write(tmp_path, "[INSTRUMENT:PEARL]\nnotify_counts = Auto , 130\n")
+    inst = load_config(path).instruments[0]
+    assert (inst.auto_counts, inst.notify_counts) == (True, 130.0)
+    path.chmod(0o600)
+    settings = editable_settings(load_config(path))
+    assert settings["instruments"][0]["notify_counts"] == "auto, 130"
+    update_config_file(path, settings)
+    assert load_config(path).instruments[0] == inst
 
 
 def test_update_config_file_removes_dropped_instruments(tmp_path):

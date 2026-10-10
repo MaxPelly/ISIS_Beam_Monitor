@@ -83,6 +83,9 @@ class InstrumentConfig:
     notify_counts: float  # total µA·h collected at which "run about to finish" is sent
     beam_target: str  # which beam target's state to report in run cards
     channel: str = "experiment"  # one of CHANNEL_MODES
+    # "notify_counts = auto, N": each run's target comes from the experiment's
+    # recent run totals, with notify_counts (N) used until there are enough.
+    auto_counts: bool = False
     # The INI section it was read from, for error messages
     section: str = field(default="", compare=False, repr=False)
 
@@ -200,13 +203,19 @@ def _read_instruments(
         raw_counts = parser.get(section, "notify_counts", fallback="").strip()
         if not raw_counts:
             raise ConfigError(f"[{section}] notify_counts is required")
+        mode, sep, fallback = raw_counts.partition(",")
+        auto_counts = mode.strip().lower() == "auto"
+        if auto_counts != bool(sep):
+            raise ConfigError(f"[{section}] notify_counts must be a number or 'auto, <number>'")
         try:
-            notify_counts = float(raw_counts)
+            notify_counts = float(fallback if auto_counts else raw_counts)
         except ValueError as exc:
             raise ConfigError(f"[{section}] notify_counts: {exc}") from exc
         beam_target = parser.get(section, "beam_target", fallback="").strip() or config.instrument_target
         channel = parser.get(section, "channel", fallback="").strip().lower() or "experiment"
-        instruments.append(InstrumentConfig(name, notify_counts, beam_target, channel=channel, section=section))
+        instruments.append(InstrumentConfig(
+            name, notify_counts, beam_target, channel=channel, auto_counts=auto_counts, section=section
+        ))
     return instruments
 
 
@@ -381,6 +390,12 @@ def _format_value(value: Any) -> str:
     return str(value)
 
 
+def _format_notify_counts(inst: InstrumentConfig) -> str:
+    """An instrument's notify_counts as written in the INI file."""
+    counts = _format_value(inst.notify_counts)
+    return f"auto, {counts}" if inst.auto_counts else counts
+
+
 def editable_settings(config: AppConfig) -> dict:
     """The settings the TUI may edit, as INI strings:
     {"notifications": {key: value}, "instruments": [{name, notify_counts, beam_target, channel}]}."""
@@ -391,7 +406,7 @@ def editable_settings(config: AppConfig) -> dict:
         "instruments": [
             {
                 "name": inst.name,
-                "notify_counts": _format_value(inst.notify_counts),
+                "notify_counts": _format_notify_counts(inst),
                 "beam_target": inst.beam_target,
                 "channel": inst.channel,
             }

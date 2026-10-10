@@ -29,7 +29,11 @@ experiment_teams_url =
 # to experiment_teams_url, with the instrument name in the card title.
 #   notify_counts  (required) the run's target, in total µA·h collected; the
 #                  "run about to finish" card is sent [NOTIFICATIONS]
-#                  finish_warning_minutes before it's expected to be reached
+#                  finish_warning_minutes before it's expected to be reached.
+#                  "auto, <number>" sets each run's target from the median of
+#                  the experiment's recent runs (ignoring very short ones),
+#                  using <number> until at least 3 runs have been seen; the
+#                  history restarts when IN:<NAME>:DAE:_RBNUMBER changes
 #   beam_target    (optional) TS1, TS2 or Muon: the beam reported on run cards and
 #                  checked before stall warnings (default: [PVS] instrument_target)
 #   channel        (optional) Teams payload channel for this instrument's cards:
@@ -43,7 +47,7 @@ experiment_teams_url =
 notify_counts = 130
 
 # [INSTRUMENT:WISH]
-# notify_counts = 200
+# notify_counts = auto, 200
 # beam_target = TS2
 # channel = instrument
 

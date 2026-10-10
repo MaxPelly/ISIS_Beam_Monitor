@@ -101,7 +101,9 @@ async def _edit_instrument(
     edited["name"] = (await _ask_default(read_line, "Name", inst.get("name", ""))).upper()
     if not edited["name"]:
         return None
-    edited["notify_counts"] = await _ask_default(read_line, "Notify at (µA·h)", inst.get("notify_counts", ""))
+    edited["notify_counts"] = await _ask_default(
+        read_line, "Notify at (µA·h, or 'auto, <fallback µA·h>')", inst.get("notify_counts", "")
+    )
     edited["beam_target"] = await _ask_choice(
         read_line, write, "Beam target", inst.get("beam_target", ""), beam_targets
     )
