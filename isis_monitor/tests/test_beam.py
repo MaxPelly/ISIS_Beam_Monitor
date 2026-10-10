@@ -1269,6 +1269,19 @@ async def test_rb_change_mid_run_keeps_that_runs_target_through_a_restart(mock_c
     assert dict(exp_channel.broadcast.call_args[0][0].facts)["Collected"] == "30.5 / 30 µA·h"  # not "(auto)"
 
 
+async def test_first_rb_number_mid_run_keeps_that_runs_target_through_a_restart(mock_config, mock_channels):
+    m = auto_monitor(mock_config, mock_channels, fallback=30)
+    tracker(m).sink = state = DaemonState(instruments=[tracker(m).instrument])
+    await _finish_runs(m, 100.0, 100.0, 100.0)
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 40.0})
+    await m._handle_update(rb("A"))
+    restored = DaemonState(instruments=[tracker(m).instrument])
+    restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
+    m2 = auto_monitor(mock_config, mock_channels, fallback=30)
+    m2.restore_instruments(restored.instruments)
+    assert (tracker(m2).state.run_target, tracker(m2).state.auto_runs) == (100.0, 3)
+
+
 async def test_runs_before_any_rb_number_are_not_in_its_history(mock_config, mock_channels):
     m = auto_monitor(mock_config, mock_channels)
     await m._handle_update(rb("0"))  # e.g. commissioning between experiments

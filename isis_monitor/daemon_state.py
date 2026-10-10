@@ -316,11 +316,11 @@ class DaemonState:
                     "rb_number": str(info.get("rb_number", "")),
                     "run_rb": str(info.get("run_rb", "")),
                 }
-                if same_target:
-                    restored.update(
-                        target=float(info.get("target", current["target"])),
-                        auto_runs=int(info.get("auto_runs", current["auto_runs"])),
-                    )
+                # None has the tracker work the target out again (see InstrumentTracker.restore).
+                restored.update(
+                    target=float(info["target"]) if same_target and "target" in info else None,
+                    auto_runs=int(info.get("auto_runs", 0)),
+                )
             except (TypeError, ValueError):
                 logger.warning(f"Skipping malformed snapshot state for instrument {name}")
                 continue

@@ -50,7 +50,7 @@ def _progress_bar(counts: float, target: float, estimated: bool = False) -> Text
 
 def _instrument_progress(info: dict) -> Text:
     return _progress_bar(
-        float(info.get("counts", -1.0)), float(info.get("target", 0.0)), bool(info.get("auto_runs", 0))
+        float(info.get("counts", -1.0)), float(info.get("target") or 0.0), bool(info.get("auto_runs", 0))
     )
 
 

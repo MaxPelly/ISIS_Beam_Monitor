@@ -330,14 +330,12 @@ class InstrumentTracker:
             self.state.run_totals.extend(saved.get("run_totals", ()))
             self.state.rb_number = str(saved.get("rb_number", ""))
             self.state.run_rb = str(saved.get("run_rb", ""))
-        if self.state.run_rb != self.state.rb_number:
-            # A run from before an RB change: its history has gone, so it
-            # keeps the target it started with (or, if the config changed, notify_counts).
-            self.state.run_target = float(saved.get("target", self.instrument.notify_counts))
+        if saved.get("target") is None:  # DaemonState drops it if notify_counts has changed
+            self._set_target()
+        else:  # the run keeps the target it started with, even if its history has since been cleared
+            self.state.run_target = float(saved["target"])
             self.state.auto_runs = int(saved.get("auto_runs", 0))
             self._save_target()
-        else:
-            self._set_target()
         if not saved.get("run_name") or not saved.get("run_started_at"):
             return
         self.state.run_name = strip_controls(str(saved["run_name"]))  # as handle_run_name stores it

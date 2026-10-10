@@ -243,7 +243,7 @@ def test_instrument_state_persists_through_snapshot():
     assert restored.instruments["WISH"] == {
         "run_name": "Run 7", "counts": 3.0, "total_runs": 1, "notify_counts": 75.0, "beam_target": "TS2",
         "run_started_at": None, "end_notified": False, "stale_counts": -1.0,
-        "run_totals": [], "rb_number": "", "run_rb": "", "target": 75.0, "auto_runs": 0, "auto": False,
+        "run_totals": [], "rb_number": "", "run_rb": "", "target": None, "auto_runs": 0, "auto": False,  # None: for the tracker to redo
     }
     assert restored.instruments["MERLIN"]["total_runs"] == 0
     assert "PEARL" not in restored.instruments
@@ -282,7 +282,7 @@ def test_auto_target_is_published_and_run_totals_survive_a_snapshot():
     # One for another notify_counts isn't kept.
     changed = DaemonState(instruments=[InstrumentConfig("WISH", 60.0, "TS2")])
     changed.restore_from_snapshot_json(json.dumps(state.snapshot()))
-    assert (changed.instruments["WISH"]["target"], changed.instruments["WISH"]["auto_runs"]) == (60.0, 0)
+    assert changed.instruments["WISH"]["target"] is None
 
 
 @pytest.mark.parametrize("run_totals", ["12", [1.0, "x"], [float("nan")], None])
