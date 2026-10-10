@@ -220,6 +220,10 @@ class BeamMonitor:
         self.pv_to_counts: Dict[str, InstrumentTracker] = {
             t.instrument.counts_pv: t for t in self.instruments.values()
         }
+        # Only auto targets need the experiment's RB number.
+        self.pv_to_rb_number: Dict[str, InstrumentTracker] = {
+            t.instrument.rb_number_pv: t for t in self.instruments.values() if t.instrument.auto_counts
+        }
 
     @staticmethod
     def _parse_current(value: Any) -> Optional[float]:
@@ -301,6 +305,9 @@ class BeamMonitor:
             case {"pv": pv, "value": raw_val} if pv in self.pv_to_counts:
                 await self.pv_to_counts[pv].handle_counts(raw_val, time_now)
 
+            case {"pv": pv, "text": text} if pv in self.pv_to_rb_number:
+                self.pv_to_rb_number[pv].handle_rb_number(text)
+
     def restore_instruments(self, saved: Dict[str, dict]) -> None:
         """Seed each tracker from DaemonState's restored per-instrument state."""
         for name, tracker in self.instruments.items():
@@ -376,10 +383,12 @@ class BeamMonitor:
 
     async def _run_loop(self) -> None:
         # Titles before counts, so a run that changed while disconnected is
-        # reported under its new title rather than started by its counts reset.
+        # reported under its new title rather than started by its counts reset;
+        # RB numbers before both, so a new experiment's first run isn't counted
+        # in the old one's run history.
         subscribe_msg = json.dumps({
             "type": "subscribe",
-            "pvs": [*self.pv_to_beam, *self.pv_to_run_name, *self.pv_to_counts],
+            "pvs": [*self.pv_to_beam, *self.pv_to_rb_number, *self.pv_to_run_name, *self.pv_to_counts],
         })
         logger.info(f"Beam Monitor started. Connecting to {self.data_url}...")
         interval = self.config.beam_reconnect_interval

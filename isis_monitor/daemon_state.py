@@ -78,6 +78,8 @@ class DaemonState:
                 "end_notified": False,
                 "stale_counts": -1.0,
                 "run_totals": [],  # completed runs' µA·h, for auto targets
+                "rb_number": "",  # and the experiment they're for
+                "run_rb": "",
                 "target": inst.notify_counts,
                 "auto_runs": 0,  # how many runs an auto target came from; 0 = the fallback
                 "notify_counts": inst.notify_counts,
@@ -194,10 +196,15 @@ class DaemonState:
         self.instruments[instrument]["counts"] = float(counts)
         self._publish("counts", {"instrument": instrument, "counts": counts})
 
-    def update_target(self, instrument: str, target: float, auto_runs: int, run_totals: List[float]) -> None:
+    def update_target(
+        self, instrument: str, target: float, auto_runs: int, run_totals: List[float], rb_number: str, run_rb: str,
+    ) -> None:
+        """The current run's target, and the run history it came from."""
         if instrument not in self.instruments:
             return
-        self.instruments[instrument].update(target=float(target), auto_runs=int(auto_runs), run_totals=run_totals)
+        self.instruments[instrument].update(
+            target=float(target), auto_runs=int(auto_runs), run_totals=run_totals, rb_number=rb_number, run_rb=run_rb,
+        )
         self._publish("target", {"instrument": instrument, "target": target, "auto_runs": auto_runs})
 
     def update_health(self, component: str, status: str) -> None:
@@ -304,6 +311,8 @@ class DaemonState:
                     and info.get("auto", False) == current["auto"],
                     "stale_counts": float(info.get("stale_counts", -1.0)),
                     "run_totals": _finite_floats(info.get("run_totals", [])),
+                    "rb_number": str(info.get("rb_number", "")),
+                    "run_rb": str(info.get("run_rb", "")),
                 }
             except (TypeError, ValueError):
                 logger.warning(f"Skipping malformed snapshot state for instrument {name}")

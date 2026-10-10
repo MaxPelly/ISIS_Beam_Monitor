@@ -87,6 +87,8 @@ class InstrumentState:
     run_target: float = 0.0  # µA·h this run's finishing card is due at
     # Completed runs' totals (oldest first), for auto targets
     run_totals: Deque[float] = field(default_factory=lambda: deque(maxlen=AUTO_HISTORY))
+    rb_number: str = ""  # the experiment's, for auto targets; "" until known
+    run_rb: str = ""  # rb_number when this run started; its total only counts for that experiment
 
     # Periodic collection-progress check (InstrumentTracker.check_collection_progress)
     collection_stalled_since: Optional[datetime] = None
@@ -138,7 +140,24 @@ class InstrumentTracker:
                 logger.info(f"{inst.name} auto target {target:g} µA·h, from {source}")
         self.state.run_target = target
         if self.sink:
-            self.sink.update_target(inst.name, target, runs, list(self.state.run_totals))
+            self.sink.update_target(
+                inst.name, target, runs, list(self.state.run_totals), self.state.rb_number, self.state.run_rb
+            )
+
+    def handle_rb_number(self, text: Any) -> None:
+        """`text` is IN:<NAME>:DAE:_RBNUMBER; a new experiment's runs start a
+        new run history. "0" (an instrument with no experiment) and blanks are
+        ignored, so a gap between experiments doesn't clear it."""
+        rb = strip_controls(str(text)).strip()
+        if rb in ("", "0") or rb == self.state.rb_number:
+            return
+        if self.state.rb_number:
+            logger.info(f"{self.instrument.name} RB number {self.state.rb_number} -> {rb}: run history cleared")
+            self.state.run_totals.clear()
+        else:
+            self.state.run_rb = rb  # the first seen; the run in progress is taken to be its
+        self.state.rb_number = rb
+        self._set_target()
 
     async def handle_run_name(self, b64_data: Any, time_now: datetime) -> None:
         if _is_blank(b64_data):
@@ -189,8 +208,13 @@ class InstrumentTracker:
         elif self.state.stale_counts < 0:  # kept through title edits before BEGIN
             self.state.stale_counts = self.state.current_counts
         self.state.counts_reset_at = None if from_title else time_now
-        if self.instrument.auto_counts and self.state.current_counts > 0:  # not an unread or retitled run
+        if (
+            self.instrument.auto_counts
+            and self.state.current_counts > 0  # not an unread or retitled run
+            and self.state.run_rb == self.state.rb_number
+        ):
             self.state.run_totals.append(self.state.current_counts)
+        self.state.run_rb = self.state.rb_number
         self.state.current_counts = 0
         self.state.end_notified = False  # saved below with the new run's start
         self.state.collected_samples.clear()
@@ -299,6 +323,8 @@ class InstrumentTracker:
         re-sends the same run title on connect, which then changes nothing."""
         if self.instrument.auto_counts:  # a fixed target's old totals would be stale by the time auto is on
             self.state.run_totals.extend(saved.get("run_totals", ()))
+            self.state.rb_number = str(saved.get("rb_number", ""))
+            self.state.run_rb = str(saved.get("run_rb", ""))
         self._set_target()
         if not saved.get("run_name") or not saved.get("run_started_at"):
             return

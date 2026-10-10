@@ -1207,7 +1207,7 @@ async def test_auto_target_comes_from_recent_runs_once_there_are_enough(mock_con
     await _finish_runs(m, 58.0)
     assert tracker(m).state.run_target == 60.0
     exp_channel.broadcast.reset_mock()  # the new-run cards
-    sink.update_target.assert_called_with("PEARL", 60.0, 3, [60.0, 5.0, 62.0, 58.0])
+    sink.update_target.assert_called_with("PEARL", 60.0, 3, [60.0, 5.0, 62.0, 58.0], "", "")
     await m._handle_update({"pv": PEARL_UAMPS, "value": 59.0})
     exp_channel.broadcast.assert_not_called()
     await m._handle_update({"pv": PEARL_UAMPS, "value": 60.5})
@@ -1227,9 +1227,44 @@ async def test_fixed_target_ignores_run_totals(mock_config, mock_channels):
 async def test_restored_run_totals_set_the_auto_target(mock_config, mock_channels):
     sink = MagicMock()
     m = auto_monitor(mock_config, mock_channels, sink=sink)
-    m.restore_instruments({"PEARL": {"run_totals": [50.0, 52.0, 48.0]}})
+    m.restore_instruments({"PEARL": {"run_totals": [50.0, 52.0, 48.0], "rb_number": "1", "run_rb": "1"}})
     assert tracker(m).state.run_target == 50.0
-    sink.update_target.assert_called_with("PEARL", 50.0, 3, [50.0, 52.0, 48.0])
+    sink.update_target.assert_called_with("PEARL", 50.0, 3, [50.0, 52.0, 48.0], "1", "1")
+
+
+PEARL_RB = "IN:PEARL:DAE:_RBNUMBER"
+
+
+def rb(number):
+    return {"pv": PEARL_RB, "text": number}
+
+
+async def test_rb_number_is_only_subscribed_for_auto_targets(mock_config, mock_channels):
+    assert make_monitor(mock_config, mock_channels).pv_to_rb_number == {}
+    m = auto_monitor(mock_config, mock_channels)
+    assert list(m.pv_to_rb_number) == [PEARL_RB]
+
+
+async def test_new_rb_number_starts_a_new_run_history(mock_config, mock_channels):
+    m = auto_monitor(mock_config, mock_channels)
+    await m._handle_update({"pv": PEARL_RB})  # PVWS's first message can have no value
+    await m._handle_update(rb("2610028"))
+    await _finish_runs(m, 60.0, 61.0, 62.0)
+    assert tracker(m).state.run_target == 61.0
+
+    # The first seen and a repeat don't clear it, and nor does "0" (no experiment).
+    for update in (rb("2610028"), rb("0"), rb("")):
+        await m._handle_update(update)
+    assert tracker(m).state.run_target == 61.0
+
+    # The last run of the old experiment ended; the new one's RB comes first.
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 63.0})
+    await m._handle_update(rb("2620381"))
+    assert tracker(m).state.run_target == 100.0 and not tracker(m).state.run_totals
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 0.0})  # its first run begins
+    assert not tracker(m).state.run_totals  # the 63 was the old experiment's
+    await _finish_runs(m, 20.0, 21.0, 22.0)
+    assert tracker(m).state.run_target == 21.0
 
 
 async def test_new_run_is_saved_before_the_milestone_card(mock_config, mock_channels):

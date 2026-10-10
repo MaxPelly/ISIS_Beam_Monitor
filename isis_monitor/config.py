@@ -97,6 +97,10 @@ class InstrumentConfig:
     def run_name_pv(self) -> str:
         return f"IN:{self.name}:DAE:WDTITLE"
 
+    @property
+    def rb_number_pv(self) -> str:  # the experiment's RB number, as text
+        return f"IN:{self.name}:DAE:_RBNUMBER"
+
 
 @dataclass
 class AppConfig:
@@ -267,7 +271,7 @@ def _validate_instruments(config: AppConfig) -> None:
         if not (math.isfinite(inst.notify_counts) and inst.notify_counts > 0):
             raise ConfigError(f"[{section}] notify_counts must be a positive number")
         # Each PV update is routed to exactly one owner, so PVs can't be shared.
-        for pv in (inst.counts_pv, inst.run_name_pv):
+        for pv in (inst.counts_pv, inst.run_name_pv, *([inst.rb_number_pv] if inst.auto_counts else [])):
             if pv in pv_owners:
                 raise ConfigError(f"[{section}] PV {pv} is already used by {pv_owners[pv]}")
             pv_owners[pv] = f"instrument {inst.name}"
