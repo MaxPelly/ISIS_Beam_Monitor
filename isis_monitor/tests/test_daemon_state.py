@@ -1,5 +1,6 @@
 import json
 import logging
+import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
@@ -156,6 +157,7 @@ def test_run_name_and_counts_events():
     assert snap["instruments"]["WISH"] == {
         "run_name": "Run 42", "counts": 12.5, "total_runs": 0, "notify_counts": 50.0, "beam_target": "TS2",
         "run_started_at": None, "end_notified": False, "stale_counts": -1.0,
+        "run_totals": [], "target": 50.0, "auto_runs": 0, "auto": False,
     }
     assert snap["instruments"]["PEARL"]["run_name"] == ""
 
@@ -241,6 +243,7 @@ def test_instrument_state_persists_through_snapshot():
     assert restored.instruments["WISH"] == {
         "run_name": "Run 7", "counts": 3.0, "total_runs": 1, "notify_counts": 75.0, "beam_target": "TS2",
         "run_started_at": None, "end_notified": False, "stale_counts": -1.0,
+        "run_totals": [], "target": 75.0, "auto_runs": 0, "auto": False,
     }
     assert restored.instruments["MERLIN"]["total_runs"] == 0
     assert "PEARL" not in restored.instruments
@@ -261,6 +264,37 @@ def test_malformed_instrument_entries_in_snapshot_are_skipped():
     assert state.instruments["WISH"]["run_name"] == ""
     assert state.instruments["WISH"]["total_runs"] == 4
 
+
+
+def test_auto_target_is_published_and_run_totals_survive_a_snapshot():
+    state = DaemonState(instruments=INSTRUMENTS)
+    q = state.subscribe()
+    state.update_target("WISH", 98.5, 3, [97.0, 98.5, 99.0])
+    state.update_target("MERLIN", 1.0, 0, [])  # unknown: ignored
+    assert [(e.event, e.payload) for e in _drain(q)] == [
+        ("target", {"instrument": "WISH", "target": 98.5, "auto_runs": 3}),
+    ]
+    restored = DaemonState(instruments=INSTRUMENTS)
+    restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
+    assert restored.instruments["WISH"]["run_totals"] == [97.0, 98.5, 99.0]
+    # The target itself is the tracker's to work out again from them.
+    assert restored.instruments["WISH"]["target"] == restored.instruments["WISH"]["notify_counts"]
+
+
+@pytest.mark.parametrize("run_totals", ["12", [1.0, "x"], [float("nan")], None])
+def test_malformed_run_totals_in_snapshot_skip_that_instrument(run_totals):
+    state = DaemonState(instruments=INSTRUMENTS)
+    state.restore_from_snapshot_json(json.dumps({"instruments": {
+        "WISH": {"total_runs": 4, "run_totals": run_totals},
+    }}))
+    assert state.instruments["WISH"]["total_runs"] == 0
+
+
+def test_finishing_card_is_due_again_after_switching_to_auto():
+    snap = json.dumps({"instruments": {"WISH": {"end_notified": True, "notify_counts": 50.0, "auto": False}}})
+    state = DaemonState(instruments=[InstrumentConfig("WISH", 50.0, "TS2", auto_counts=True)])
+    state.restore_from_snapshot_json(snap)
+    assert state.instruments["WISH"]["end_notified"] is False
 
 
 def test_run_progress_is_saved_but_not_published_and_survives_a_snapshot():

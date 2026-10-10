@@ -1181,6 +1181,56 @@ async def test_finishing_card_after_restart_depends_on_the_threshold_it_was_sent
     assert exp_channel.broadcast.called is renotified
 
 
+def auto_monitor(mock_config, mock_channels, sink=None):
+    """A monitor whose PEARL has notify_counts = auto, 100, mid-run."""
+    instruments = [replace(i, auto_counts=True) for i in mock_config.instruments]
+    m = make_monitor(replace(mock_config, instruments=instruments), mock_channels, counts_target=100, sink=sink)
+    tracker(m).state.run_name = "Run 0"
+    tracker(m).state.run_started_at = datetime.now(timezone.utc)
+    return m
+
+
+async def _finish_runs(m, *totals):
+    """Collect each total in turn, each new run started by the DAE's counts reset."""
+    for total in totals:
+        await m._handle_update({"pv": PEARL_UAMPS, "value": total})
+        await m._handle_update({"pv": PEARL_UAMPS, "value": 0.0})
+
+
+async def test_auto_target_comes_from_recent_runs_once_there_are_enough(mock_config, mock_channels):
+    _, exp_channel = mock_channels
+    sink = MagicMock()
+    m = auto_monitor(replace(mock_config, finish_warning_minutes=0), mock_channels, sink=sink)
+    await _finish_runs(m, 60.0, 5.0, 62.0)  # the short run (a mistaken setup) doesn't count
+    assert tracker(m).state.run_target == 100.0  # the fallback, so far
+
+    await _finish_runs(m, 58.0)
+    assert tracker(m).state.run_target == 60.0
+    exp_channel.broadcast.reset_mock()  # the new-run cards
+    sink.update_target.assert_called_with("PEARL", 60.0, 3, [60.0, 5.0, 62.0, 58.0])
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 59.0})
+    exp_channel.broadcast.assert_not_called()
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 60.5})
+    card = exp_channel.broadcast.call_args[0][0]
+    assert dict(card.facts)["Collected"] == "60.5 / 60 µA·h (auto)"
+
+
+async def test_fixed_target_ignores_run_totals(mock_config, mock_channels):
+    m = make_monitor(mock_config, mock_channels, counts_target=100)
+    tracker(m).state.run_name = "Run 0"
+    tracker(m).state.run_started_at = datetime.now(timezone.utc)
+    await _finish_runs(m, 60.0, 61.0, 62.0)
+    assert tracker(m).state.run_target == 100.0 and not tracker(m).state.run_totals
+
+
+async def test_restored_run_totals_set_the_auto_target(mock_config, mock_channels):
+    sink = MagicMock()
+    m = auto_monitor(mock_config, mock_channels, sink=sink)
+    m.restore_instruments({"PEARL": {"run_totals": [50.0, 52.0, 48.0]}})
+    assert tracker(m).state.run_target == 50.0
+    sink.update_target.assert_called_with("PEARL", 50.0, 3, [50.0, 52.0, 48.0])
+
+
 async def test_new_run_is_saved_before_the_milestone_card(mock_config, mock_channels):
     """Every 25th completed run (with fun_mode on) gets a milestone card, sent
     after the new run has been saved."""

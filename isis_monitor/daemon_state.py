@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -23,6 +24,16 @@ def _aware_iso(text: str) -> str:
     daemon always writes UTC); comparing naive and aware times would raise."""
     ts = datetime.fromisoformat(text)
     return (ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)).isoformat()
+
+
+def _finite_floats(value: object) -> List[float]:
+    """A saved list of numbers; raises ValueError if it's anything else."""
+    if not isinstance(value, list):
+        raise ValueError(f"expected a list, got {value!r}")
+    numbers = [float(v) for v in value]
+    if not all(math.isfinite(v) for v in numbers):
+        raise ValueError("non-finite number")
+    return numbers
 
 
 @dataclass
@@ -53,8 +64,9 @@ class DaemonState:
         }
         self.mcr_news = "Waiting for initial MCR news..."
         self.logs: Deque[str] = deque(maxlen=logs_maxlen)
-        # notify_counts and beam_target come from the config, for clients to
-        # display; the saved notify_counts is also checked on restore.
+        # notify_counts, auto and beam_target come from the config, for
+        # clients to display; the saved notify_counts and auto are also
+        # checked on restore. target is the current run's (see InstrumentTracker).
         self.instruments: Dict[str, Dict[str, object]] = {
             inst.name: {
                 "run_name": "",
@@ -65,7 +77,11 @@ class DaemonState:
                 "run_started_at": None,  # ISO timestamp
                 "end_notified": False,
                 "stale_counts": -1.0,
+                "run_totals": [],  # completed runs' µA·h, for auto targets
+                "target": inst.notify_counts,
+                "auto_runs": 0,  # how many runs an auto target came from; 0 = the fallback
                 "notify_counts": inst.notify_counts,
+                "auto": inst.auto_counts,
                 "beam_target": inst.beam_target,
             }
             for inst in instruments
@@ -178,6 +194,12 @@ class DaemonState:
         self.instruments[instrument]["counts"] = float(counts)
         self._publish("counts", {"instrument": instrument, "counts": counts})
 
+    def update_target(self, instrument: str, target: float, auto_runs: int, run_totals: List[float]) -> None:
+        if instrument not in self.instruments:
+            return
+        self.instruments[instrument].update(target=float(target), auto_runs=int(auto_runs), run_totals=run_totals)
+        self._publish("target", {"instrument": instrument, "target": target, "auto_runs": auto_runs})
+
     def update_health(self, component: str, status: str) -> None:
         # Monitors re-report the same status on every successful poll; only
         # actual transitions are worth an event to every subscriber.
@@ -278,8 +300,10 @@ class DaemonState:
                     # by the config save behind this restart) doesn't cover
                     # the new one, which may still be ahead.
                     "end_notified": bool(info.get("end_notified", False))
-                    and float(info.get("notify_counts", current["notify_counts"])) == current["notify_counts"],
+                    and float(info.get("notify_counts", current["notify_counts"])) == current["notify_counts"]
+                    and info.get("auto", False) == current["auto"],
                     "stale_counts": float(info.get("stale_counts", -1.0)),
+                    "run_totals": _finite_floats(info.get("run_totals", [])),
                 }
             except (TypeError, ValueError):
                 logger.warning(f"Skipping malformed snapshot state for instrument {name}")

@@ -63,7 +63,7 @@ def auto_target(totals: Sequence[float], fallback: float) -> Tuple[float, int]:
     kept = [t for t in totals if t >= floor][-AUTO_RUNS:]
     if len(kept) < AUTO_MIN_RUNS:
         return fallback, 0
-    return statistics.median(kept), len(kept)
+    return round(statistics.median(kept), 1), len(kept)
 
 
 def _is_blank(value: Any) -> bool:
@@ -84,6 +84,9 @@ class InstrumentState:
     # The previous run's total, after a title change started a run, until
     # BEGIN resets the DAE's counts; -1 when not waiting for that reset.
     stale_counts: float = -1.0
+    run_target: float = 0.0  # µA·h this run's finishing card is due at
+    # Completed runs' totals (oldest first), for auto targets
+    run_totals: Deque[float] = field(default_factory=lambda: deque(maxlen=AUTO_HISTORY))
 
     # Periodic collection-progress check (InstrumentTracker.check_collection_progress)
     collection_stalled_since: Optional[datetime] = None
@@ -113,7 +116,7 @@ class InstrumentTracker:
         self.finish_warning_minutes = finish_warning_minutes
         self.flavour_rng = flavour_rng
         self.sink = sink
-        self.state = InstrumentState()
+        self.state = InstrumentState(run_target=instrument.notify_counts)
 
     def _card_channel(self) -> str:
         """Teams channel for this instrument's cards; blank means the
@@ -122,6 +125,20 @@ class InstrumentTracker:
 
     def _beam_state(self) -> str:
         return self.beam_power(self.instrument.beam_target)
+
+    def _set_target(self) -> None:
+        """Fix the current run's target: notify_counts, or with auto_counts,
+        one from the recent run totals."""
+        inst = self.instrument
+        target, runs = inst.notify_counts, 0
+        if inst.auto_counts:
+            target, runs = auto_target(self.state.run_totals, inst.notify_counts)
+            if target != self.state.run_target:
+                source = f"the last {runs} runs" if runs else f"the fallback, until {AUTO_MIN_RUNS} runs are seen"
+                logger.info(f"{inst.name} auto target {target:g} µA·h, from {source}")
+        self.state.run_target = target
+        if self.sink:
+            self.sink.update_target(inst.name, target, runs, list(self.state.run_totals))
 
     async def handle_run_name(self, b64_data: Any, time_now: datetime) -> None:
         if _is_blank(b64_data):
@@ -172,6 +189,8 @@ class InstrumentTracker:
         elif self.state.stale_counts < 0:  # kept through title edits before BEGIN
             self.state.stale_counts = self.state.current_counts
         self.state.counts_reset_at = None if from_title else time_now
+        if self.instrument.auto_counts and self.state.current_counts > 0:  # not an unread or retitled run
+            self.state.run_totals.append(self.state.current_counts)
         self.state.current_counts = 0
         self.state.end_notified = False  # saved below with the new run's start
         self.state.collected_samples.clear()
@@ -183,6 +202,7 @@ class InstrumentTracker:
         # completion count with the old run (which a restart would re-report).
         self.state.run_name = name
         self.state.run_started_at = time_now
+        self._set_target()
         if self.sink:
             self.sink.update_run_name(self.instrument.name, name)
             self.sink.update_counts(self.instrument.name, 0)
@@ -232,7 +252,7 @@ class InstrumentTracker:
         if self.sink:
             self.sink.update_counts(self.instrument.name, total_collected)
 
-        counts_target = self.instrument.notify_counts
+        counts_target = self.state.run_target
         if self.state.end_notified:
             return
 
@@ -260,6 +280,7 @@ class InstrumentTracker:
                 time_now,
                 rng=self.flavour_rng,
                 channel=self._card_channel(),
+                auto=self.instrument.auto_counts,
             )
             logger.info(f"Run finishing: {notification.to_plain_text()}")
             await self.experiment_channel.broadcast(notification)
@@ -276,6 +297,8 @@ class InstrumentTracker:
     def restore(self, saved: dict) -> None:
         """Seed state from a DaemonState snapshot entry after a restart. PVWS
         re-sends the same run title on connect, which then changes nothing."""
+        self.state.run_totals.extend(saved.get("run_totals", ()))
+        self._set_target()
         if not saved.get("run_name") or not saved.get("run_started_at"):
             return
         self.state.run_name = strip_controls(str(saved["run_name"]))  # as handle_run_name stores it
@@ -309,7 +332,7 @@ class InstrumentTracker:
 
         Only meaningful while a run is active — between runs, the collected
         count is naturally static, which would otherwise look identical to a
-        stall. A run that has reached notify_counts has usually ended (the
+        stall. A run that has reached its target has usually ended (the
         title, and so run_name, stays until the next run), so it isn't checked;
         one merely forecast to finish soon still is.
 
@@ -319,7 +342,7 @@ class InstrumentTracker:
         look stalled every time a batch hadn't landed yet in that particular
         minute.
         """
-        if not self.state.run_name or self.state.current_counts >= self.instrument.notify_counts:
+        if not self.state.run_name or self.state.current_counts >= self.state.run_target:
             return
 
         baseline = self._collected_baseline_before(time_now - STALL_CHECK_WINDOW)

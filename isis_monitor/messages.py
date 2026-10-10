@@ -216,8 +216,9 @@ def run_finishing(
     time_now: datetime,
     rng: Optional[random.Random] = None,
     channel: str = "",
+    auto: bool = False,  # counts_target came from recent runs (notify_counts = auto)
 ) -> Notification:
-    facts = [("Collected", f"{counts_collected:.1f} / {counts_target:g} µA·h")]
+    facts = [("Collected", f"{counts_collected:.1f} / {counts_target:g} µA·h{' (auto)' if auto else ''}")]
     # µA·h collected per hour is simply the average beam current, in µA.
     facts.append(("Rate", f"{rate_per_second * 3600:.1f} µA"))
     if counts_collected >= counts_target:
