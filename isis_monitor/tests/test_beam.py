@@ -1441,10 +1441,15 @@ async def test_experiment_progress_survives_a_restart(mock_config, mock_channels
     await _finish_runs(m, 40.0, 50.0)  # the 40 run began before B
     restored = DaemonState(instruments=[tracker(m).instrument])
     restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
-    m2 = make_monitor(mock_config, mock_channels)
-    m2.restore_instruments(restored.instruments)
-    await tracker(m2).handle_rb_number("C", now + timedelta(hours=1))
-    assert dict(_experiment_cards(exp_channel)[-1].facts)["Runs"] == "1"
+    for resent in ("B", "C"):  # PVWS re-sends B on connect; or, it changed while the daemon was down
+        m2 = make_monitor(mock_config, mock_channels)
+        m2.restore_instruments(restored.instruments)
+        await tracker(m2).handle_rb_number(resent, now + timedelta(hours=1))
+        await tracker(m2).handle_rb_number("C", now + timedelta(hours=1))
+        facts = dict(_experiment_cards(exp_channel)[-1].facts)
+        assert facts["Runs"] == ("1" if resent == "B" else "at least 1")
+    # The new experiment began unwatched too.
+    assert tracker(m2).state.exp_partial is True
 
 
 async def test_runs_before_any_rb_number_are_not_in_its_history(mock_config, mock_channels):

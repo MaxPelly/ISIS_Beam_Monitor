@@ -105,6 +105,9 @@ class InstrumentState:
     exp_partial: bool = True  # whether it had started before then (the daemon saw no change to it)
     exp_runs: int = 0
     exp_uah: float = 0.0
+    # Until the first RB number after (re)subscribing: a change then happened
+    # unwatched, so both experiments' figures are only "at least"
+    rb_resync: bool = True
 
     run_state: str = ""  # IN:<NAME>:DAE:RUNSTATE_STR; "" until known
     # IN:<NAME>:DAE:RUNNUMBER, for cards sent mid-run (it changes at BEGIN,
@@ -189,7 +192,10 @@ class InstrumentTracker:
         between experiments doesn't end one."""
         rb = strip_controls(str(text)).strip()
         state = self.state
-        if rb in ("", "0") or rb == state.rb_number:
+        if rb in ("", "0"):
+            return
+        unwatched, state.rb_resync = state.rb_resync, False
+        if rb == state.rb_number:
             return
         old_rb, notification, new_first_run = state.rb_number, None, False
         if old_rb:
@@ -206,9 +212,10 @@ class InstrumentTracker:
             if runs and state.exp_since is not None:
                 notification = experiment_finished(
                     self.instrument.name, old_rb, runs, state.exp_uah + last,
-                    time_now - state.exp_since, state.exp_partial, time_now, channel=self._card_channel(),
+                    time_now - state.exp_since, state.exp_partial or unwatched, time_now,
+                    channel=self._card_channel(),
                 )
-            state.exp_partial = False
+            state.exp_partial = unwatched
         else:
             state.run_rb = rb  # the first seen; the run in progress is taken to be its
         state.run_totals.clear()  # also runs from before any RB number, e.g. while it was "0"
@@ -414,6 +421,10 @@ class InstrumentTracker:
         # DaemonState has already cleared this if notify_counts has changed.
         self.state.end_notified = bool(saved.get("end_notified", False))
         self.state.stale_counts = float(saved.get("stale_counts", -1.0))
+
+    def resubscribed(self) -> None:
+        """PVWS is about to re-send every value, which may have changed unseen."""
+        self.state.rb_resync = True
 
     def reset_stall_clock(self) -> None:
         """While counts can't be judged (e.g. PVWS is down, or the run paused).

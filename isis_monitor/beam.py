@@ -430,6 +430,8 @@ class BeamMonitor:
                         logger.info("WebSocket connected.")
                     backoff, last_kind, failed_attempts, down_since = 0.0, "", 0, None
                     self._set_health("connected")
+                    for tracker in self.instruments.values():
+                        tracker.resubscribed()
                     await ws.send(subscribe_msg)
                     async for raw in ws:
                         await self._handle_message(raw)
