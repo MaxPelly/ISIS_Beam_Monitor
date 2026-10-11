@@ -8,6 +8,10 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-11
+
+Includes push site v1.0.2, whose feed has a tab for each kind of notification.
+
 - `notify_counts = auto, <number>` sets each run's target from the median of the experiment's recent runs, ignoring very short ones; `<number>` is used until there are 3 runs that aren't very short, and the history restarts when the instrument's RB number changes. The TUI shows each run's target, marked ≈ when it's an auto one.
 - Stalls are only checked while the instrument's DAE is RUNNING or VETOING (`IN:<NAME>:DAE:RUNSTATE_STR`), so a paused run, a run-control wait or a run ended short of its target is no longer reported as stalled.
 - A "data collection resumed" card follows a stall warning once µA·h are collected again.
