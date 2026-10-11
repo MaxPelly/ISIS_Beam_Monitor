@@ -255,6 +255,19 @@ def collection_stalled(
     )
 
 
+def collection_resumed(instrument: str, stalled_for: timedelta, time_now: datetime, channel: str = "") -> Notification:
+    """After a collection_stalled warning, once the µA·h collected rises again."""
+    return Notification(
+        title=f"{instrument}: Data collection resumed",
+        text=f"µA·h are being collected again, after {fmt_duration(stalled_for)} without.",
+        severity=Severity.GOOD,
+        emoji="✅",
+        timestamp=time_now,
+        channel=channel,
+        topic=instrument,
+    )
+
+
 # Checked in this order — GOOD first, since a resolution message routinely
 # names the fault it just cleared in the same sentence (e.g. "The faulty
 # power supply ... has been repaired").

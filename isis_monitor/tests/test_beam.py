@@ -672,6 +672,46 @@ async def test_check_collection_progress_movement_resets_stall_clock(mock_config
     exp_channel.broadcast.assert_not_called()
 
 
+@pytest.mark.parametrize("paused", [False, True])
+async def test_collection_resumed_card_follows_a_stall_warning(mock_config, mock_channels, paused):
+    _, exp_channel = mock_channels
+    m = stall_monitor(mock_config, mock_channels)
+    now = datetime.now(timezone.utc)
+    _seed_collected_baseline(m, now, 100.0)
+    tracker(m).state.current_counts = 100.0
+    await m._check_collection_progress(now)
+    await m._check_collection_progress(now + timedelta(seconds=1))
+    assert exp_channel.broadcast.call_args[0][0].title == "PEARL: Data collection stalled"
+
+    if paused:  # paused to fix it, then resumed
+        tracker(m).handle_run_state("PAUSED")
+        await m._check_collection_progress(now + timedelta(minutes=10))
+        tracker(m).handle_run_state("RUNNING")
+    tracker(m).state.current_counts = 101.0
+    await m._check_collection_progress(now + timedelta(minutes=20))
+    card = exp_channel.broadcast.call_args[0][0]
+    assert card.title == "PEARL: Data collection resumed" and "20m" in card.text
+    await m._check_collection_progress(now + timedelta(minutes=21))
+    assert exp_channel.broadcast.call_count == 2  # once
+
+
+async def test_new_run_after_a_stall_warning_sends_no_resumed_card(mock_config, mock_channels):
+    _, exp_channel = mock_channels
+    m = stall_monitor(mock_config, mock_channels)
+    tracker(m).state.run_started_at = now = datetime.now(timezone.utc)
+    _seed_collected_baseline(m, now, 100.0)
+    tracker(m).state.current_counts = 100.0
+    await m._check_collection_progress(now)
+    await m._check_collection_progress(now + timedelta(seconds=1))
+    await m._handle_update(title("Run 2"))
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 5.0})
+    _seed_collected_baseline(m, now + timedelta(minutes=10), 0.0)
+    await m._check_collection_progress(now + timedelta(minutes=10))
+    assert [c[0][0].title for c in exp_channel.broadcast.call_args_list] == [
+        "PEARL: Data collection stalled", "PEARL: New run started",
+    ]
+
+
 async def test_check_collection_progress_no_active_run_never_warns(mock_config, mock_channels):
     """Between runs, the collected count is naturally static — that must not
     look like a stall just because no run is currently in progress."""
