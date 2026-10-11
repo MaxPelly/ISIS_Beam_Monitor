@@ -367,7 +367,10 @@ class InstrumentTracker:
         self.state.stale_counts = float(saved.get("stale_counts", -1.0))
 
     def reset_stall_clock(self) -> None:
-        self.state.collection_stalled_since = None
+        """While counts can't be judged (e.g. PVWS is down, or the run paused).
+        A stall already warned of keeps its start, for the resumed card."""
+        if not self.state.stall_warned:
+            self.state.collection_stalled_since = None
 
     def _prune_collected_samples(self, now: datetime) -> None:
         cutoff = now - COUNTS_SAMPLE_WINDOW
@@ -405,10 +408,8 @@ class InstrumentTracker:
         if not self.state.run_name or self.state.current_counts >= self.state.run_target:
             return
         if self.state.run_state and self.state.run_state not in COUNTING_RUN_STATES:
-            # e.g. a run ended short of its target, or paused: flat counts are
-            # expected. A stall already warned of keeps its start, for the resumed card.
-            if not self.state.stall_warned:
-                self.state.collection_stalled_since = None
+            # e.g. a run ended short of its target, or paused: flat counts are expected.
+            self.reset_stall_clock()
             return
 
         baseline = self._collected_baseline_before(time_now - STALL_CHECK_WINDOW)
@@ -434,7 +435,7 @@ class InstrumentTracker:
                 logger.info(f"Stall Warning: {notification.to_plain_text()}")
                 await self.experiment_channel.broadcast(notification)
         else:
-            if self.state.stall_warned and self.state.collection_stalled_since is not None:
+            if self.state.stall_warned:
                 notification = collection_resumed(
                     self.instrument.name, time_now - self.state.collection_stalled_since, time_now,
                     channel=self._card_channel(),

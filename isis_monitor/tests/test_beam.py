@@ -672,7 +672,7 @@ async def test_check_collection_progress_movement_resets_stall_clock(mock_config
     exp_channel.broadcast.assert_not_called()
 
 
-@pytest.mark.parametrize("paused", [False, True])
+@pytest.mark.parametrize("paused", [False, "paused", "disconnected"])
 async def test_collection_resumed_card_follows_a_stall_warning(mock_config, mock_channels, paused):
     _, exp_channel = mock_channels
     m = stall_monitor(mock_config, mock_channels)
@@ -683,10 +683,14 @@ async def test_collection_resumed_card_follows_a_stall_warning(mock_config, mock
     await m._check_collection_progress(now + timedelta(seconds=1))
     assert exp_channel.broadcast.call_args[0][0].title == "PEARL: Data collection stalled"
 
-    if paused:  # paused to fix it, then resumed
+    if paused == "paused":  # paused to fix it, then resumed
         tracker(m).handle_run_state("PAUSED")
         await m._check_collection_progress(now + timedelta(minutes=10))
         tracker(m).handle_run_state("RUNNING")
+    elif paused == "disconnected":  # a PVWS drop doesn't lose the stall's start
+        m._current_ws = None
+        await m._check_collection_progress(now + timedelta(minutes=10))
+        m._current_ws = MagicMock()
     tracker(m).state.current_counts = 101.0
     await m._check_collection_progress(now + timedelta(minutes=20))
     card = exp_channel.broadcast.call_args[0][0]
