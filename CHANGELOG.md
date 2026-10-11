@@ -12,6 +12,7 @@ own versions and changelog; each release here notes the version its
 - Stalls are only checked while the instrument's DAE is RUNNING or VETOING (`IN:<NAME>:DAE:RUNSTATE_STR`), so a paused run, a run-control wait or a run ended short of its target is no longer reported as stalled.
 - A "data collection resumed" card follows a stall warning once µA·h are collected again.
 - Finishing and stall cards name the run number (`IN:<NAME>:DAE:RUNNUMBER`), and the new-run card shows the new run's target.
+- The daily summary lists each instrument on that target with its runs and µA·h collected over the last 24h.
 - An "experiment finished" card summarises each experiment (runs, µA·h collected, average run, duration) when the instrument's RB number (`IN:<NAME>:DAE:_RBNUMBER`) changes or goes to "0" (no experiment).
 
 ## [1.0.1] - 2026-10-09

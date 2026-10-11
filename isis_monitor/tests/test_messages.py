@@ -274,7 +274,8 @@ def test_collection_stalled_builder():
 
 
 def test_daily_summary_builder():
-    n = daily_summary("TS1", 95.0, 2, timedelta(hours=5, minutes=30), "▁▂▃▄▅", 7, DT)
+    runs = {"PEARL": (6, 512.34), "WISH": (1, 60.0), "SXD": (0, 0.0)}
+    n = daily_summary("TS1", 95.0, 2, timedelta(hours=5, minutes=30), "▁▂▃▄▅", runs, DT)
     assert n.title == "TS1 daily summary"
     assert n.severity == Severity.GOOD  # >= 90% uptime
     assert n.emoji == "📊"
@@ -285,15 +286,18 @@ def test_daily_summary_builder():
         ("Longest continuous on", "5h 30m"),
         ("Sparkline", "▁▂▃▄▅"),
         ("Runs in last 24h", "7"),
+        ("PEARL", "6 runs, 512.3 µA·h"),
+        ("WISH", "1 run, 60.0 µA·h"),
+        ("SXD", "no runs"),
     ]
     assert n.channel == "TS1"  # display_name doubles as the channel label here
     assert n.topic == "Summary"
-    n = daily_summary("TS1", 50.0, 5, timedelta(hours=1), "▁▂", 1, DT)
+    n = daily_summary("TS1", 50.0, 5, timedelta(hours=1), "▁▂", {}, DT)
     assert n.severity == Severity.INFO  # below 90% uptime
 
 
 def test_daily_summary_shows_data_coverage_only_when_samples_are_missing():
-    args = ("TS1", 95.0, 0, timedelta(hours=10), "▇", 3, DT)
+    args = ("TS1", 95.0, 0, timedelta(hours=10), "▇", {}, DT)
     assert "Data coverage" not in dict(daily_summary(*args, coverage_pct=99.5).facts)
     facts = daily_summary(*args, coverage_pct=62.4).facts
     assert facts[:2] == [("Uptime", "95%"), ("Data coverage", "62%")]
@@ -301,7 +305,7 @@ def test_daily_summary_shows_data_coverage_only_when_samples_are_missing():
 
 def test_daily_summary_builder_new_record_note_and_fact_of_the_day():
     n = daily_summary(
-        "TS1", 95.0, 0, timedelta(hours=10), "▇", 3, DT,
+        "TS1", 95.0, 0, timedelta(hours=10), "▇", {}, DT,
         is_new_record=True, fact_of_the_day="Neutrons are neutral.",
     )
     assert "New record" in n.text
@@ -328,7 +332,7 @@ def test_no_builder_bakes_its_own_emoji_into_the_title():
         run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", DT),
         collection_stalled("PEARL", "TS1", timedelta(minutes=17), DT),
         mcr_news("Machine update.", DT),
-        daily_summary("TS1", 95.0, 0, timedelta(hours=10), "▇", 3, DT, is_new_record=True),
+        daily_summary("TS1", 95.0, 0, timedelta(hours=10), "▇", {}, DT, is_new_record=True),
         run_milestone("PEARL", 25, DT),
     ]
     for n in notifications:

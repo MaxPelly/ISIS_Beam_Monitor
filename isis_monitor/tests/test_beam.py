@@ -1538,9 +1538,10 @@ async def test_new_run_is_saved_before_its_cards(mock_config, mock_channels):
     m = make_monitor(fun_config, mock_channels, sink=sink)
     tracker(m).state.run_name = "Run 24"
     tracker(m).state.run_started_at = datetime.now(timezone.utc)
+    tracker(m).state.current_counts = 42.0
     await m._handle_update(title("Run 25"))
     assert order == ["saved", "PEARL: New run started", "PEARL: 25 runs completed"]
-    sink.record_run_completed.assert_called_once_with("PEARL", ANY)
+    sink.record_run_completed.assert_called_once_with("PEARL", ANY, 42.0)  # with Run 24's µA·h
 
 
 

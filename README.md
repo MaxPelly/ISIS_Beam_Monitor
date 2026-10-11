@@ -9,7 +9,7 @@ This is a Python application that monitors the status of the ISIS beam, experime
 - **Beam Updates**: Monitors the ISIS beam status and sends debounced state-change cards (with severity colour, emoji, current/previous readings and time-in-state) based on configurable thresholds. Correlated multi-target trips are called out in the same card.
 - **Experiment Updates**: Tracks run starts/finishes on any number of instruments, each with its own notify threshold, using each instrument's total µA·h collected (`IN:<NAME>:DAE:TOTALUAMPS`): previous-run stats and the new run's target, collection rate and ETA, a warning if data collection stalls while that instrument's beam is on and its DAE is running (and a card when it resumes), and a summary of each experiment (runs, µA·h, duration) when the instrument's RB number changes or goes to "0" (no experiment).
 - **MCR News**: Fetches the latest Main Control Room (MCR) news and classifies each update's severity (good/attention/warning) by keyword, with an optional "Open MCR news" link.
-- **Daily Summary**: Sends a per-target uptime/trip/sparkline summary card once a day at a configurable time.
+- **Daily Summary**: Sends a per-target uptime/trip/sparkline summary card once a day at a configurable time, with the runs and µA·h of each instrument on that target over the last 24h.
 - **`fun_mode`**: Optional personality lines, longest-uptime records, run-count milestones and a daily fact, on top of the always-on severity/emoji information.
 - **Microsoft Teams Integration**: Sends rich Adaptive Cards directly to configured Teams webhook URLs.
 - **Signed Webhook (optional)**: Can also POST every notification as HMAC-signed JSON, e.g. to the optional `push_site` for mobile push notifications (see `[PUSH]` below).

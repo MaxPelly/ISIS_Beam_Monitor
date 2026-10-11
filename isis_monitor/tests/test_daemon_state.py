@@ -169,7 +169,7 @@ def test_updates_for_unknown_instrument_are_ignored():
     q = state.subscribe()
     state.update_run_name("MERLIN", "Run 1")
     state.update_counts("MERLIN", 1.0)
-    assert state.record_run_completed("MERLIN", datetime.now(timezone.utc)) == 0
+    assert state.record_run_completed("MERLIN", datetime.now(timezone.utc), 10.0) == 0
     assert _drain(q) == []
     assert set(state.snapshot()["instruments"]) == {"PEARL", "WISH"}
 
@@ -208,28 +208,28 @@ def test_restore_from_snapshot():
 def test_record_run_completed_returns_per_instrument_total():
     state = DaemonState(instruments=INSTRUMENTS)
     now = datetime.now(timezone.utc)
-    assert state.record_run_completed("PEARL", now) == 1
-    assert state.record_run_completed("PEARL", now) == 2
-    assert state.record_run_completed("WISH", now) == 1
+    assert state.record_run_completed("PEARL", now, 10.0) == 1
+    assert state.record_run_completed("PEARL", now, 10.0) == 2
+    assert state.record_run_completed("WISH", now, 10.0) == 1
     assert state.instruments["PEARL"]["total_runs"] == 2
 
 
-def test_count_runs_completed_since_filters_by_window_and_instrument():
+def test_runs_completed_since_filters_by_window_and_instrument():
     state = DaemonState(instruments=INSTRUMENTS)
     now = datetime.now(timezone.utc)
-    state.record_run_completed("PEARL", now - timedelta(hours=30))  # outside 24h window
-    state.record_run_completed("PEARL", now - timedelta(hours=1))
-    state.record_run_completed("WISH", now)
+    state.record_run_completed("PEARL", now - timedelta(hours=30), 10.0)  # outside 24h window
+    state.record_run_completed("PEARL", now - timedelta(hours=1), 20.0)
+    state.record_run_completed("PEARL", now, 5.5)
+    state.record_run_completed("WISH", now, 10.0)
 
     since = now - timedelta(hours=24)
-    assert state.count_runs_completed_since(since) == 2
-    assert state.count_runs_completed_since(since, ["PEARL"]) == 1
-    assert state.count_runs_completed_since(since, []) == 0
+    assert state.runs_completed_since(since, ["PEARL", "MERLIN"]) == {"PEARL": (2, 25.5), "MERLIN": (0, 0.0)}
+    assert state.runs_completed_since(since, []) == {}
 
 
 def test_instrument_state_persists_through_snapshot():
     state = DaemonState(instruments=INSTRUMENTS)
-    state.record_run_completed("WISH", datetime.now(timezone.utc))
+    state.record_run_completed("WISH", datetime.now(timezone.utc), 10.0)
     state.update_run_name("WISH", "Run 7")
     state.update_counts("WISH", 3.0)
 
@@ -344,17 +344,16 @@ def test_run_start_without_a_timezone_is_restored_as_utc():
 def test_recent_run_completions_survive_a_snapshot():
     now = datetime.now(timezone.utc)
     state = DaemonState(instruments=INSTRUMENTS)
-    state.record_run_completed("PEARL", now - timedelta(hours=25))  # too old to keep
-    state.record_run_completed("PEARL", now - timedelta(hours=2))
-    state.record_run_completed("WISH", now - timedelta(hours=1))
+    state.record_run_completed("PEARL", now - timedelta(hours=25), 10.0)  # too old to keep
+    state.record_run_completed("PEARL", now - timedelta(hours=2), 10.0)
+    state.record_run_completed("WISH", now - timedelta(hours=1), 10.0)
 
     snap = state.snapshot()
     assert len(snap["run_completions"]) == 2
     # WISH has since been removed from the config.
     restored = DaemonState(instruments=INSTRUMENTS[:1])
     restored.restore_from_snapshot_json(json.dumps(snap))
-    assert restored.count_runs_completed_since(now - timedelta(hours=24)) == 1
-    assert list(restored.run_completions) == [(now - timedelta(hours=2), "PEARL")]
+    assert list(restored.run_completions) == [(now - timedelta(hours=2), "PEARL", 10.0)]
 
 
 def test_old_and_malformed_run_completions_are_not_restored(caplog):
@@ -365,14 +364,16 @@ def test_old_and_malformed_run_completions_are_not_restored(caplog):
 
     with caplog.at_level(logging.WARNING):
         state.restore_from_snapshot_json(json.dumps({"run_completions": [
-            [(now - timedelta(hours=30)).isoformat(), "PEARL"],
-            ["not a time", "PEARL"],
-            [now.isoformat(), ["unhashable"]],
+            [(now - timedelta(hours=30)).isoformat(), "PEARL", 1.0],
+            ["not a time", "PEARL", 1.0],
+            [now.isoformat(), ["unhashable"], 1.0],
+            [now.isoformat(), "PEARL", "NaN"],
+            [now.isoformat(), "PEARL"],  # no µA·h
             "junk",
-            [(now - timedelta(minutes=5)).replace(tzinfo=None).isoformat(), "WISH"],  # naive means UTC
+            [(now - timedelta(minutes=5)).replace(tzinfo=None).isoformat(), "WISH", 1.0],  # naive means UTC
         ]}))
-    assert [name for _, name in state.run_completions] == ["WISH"]
-    assert "Skipped 3 malformed run completion(s)" in caplog.text
+    assert [name for _, name, _ in state.run_completions] == ["WISH"]
+    assert "Skipped 5 malformed run completion(s)" in caplog.text
     state.restore_from_snapshot_json(json.dumps({"run_completions": {"not": "a list"}}))
     assert len(state.run_completions) == 1
 

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 SUBSCRIBER_QUEUE_SIZE = 500
 # How far back run completions are kept in the snapshot: the daily summary
-# counts runs over the last 24h, so older ones don't survive a restart.
+# covers runs over the last 24h, so older ones don't survive a restart.
 RUN_COMPLETIONS_WINDOW = timedelta(hours=24)
 
 
@@ -93,7 +93,7 @@ class DaemonState:
             }
             for inst in instruments
         }
-        self.run_completions: Deque[Tuple[datetime, str]] = deque(maxlen=2000)  # (time, instrument)
+        self.run_completions: Deque[Tuple[datetime, str, float]] = deque(maxlen=2000)  # (time, instrument, µA·h)
         self.health: Dict[str, str] = {
             "daemon": "starting",
             "beam": "unknown",
@@ -232,22 +232,23 @@ class DaemonState:
             for beam, beam_state in self.beam_states.items():
                 self.update_beam_state(beam, float(beam_state["current"]), "unknown")
 
-    def record_run_completed(self, instrument: str, ts: datetime) -> int:
-        """Record a completed run and return the instrument's new all-time
-        total, or 0 for an unknown instrument."""
+    def record_run_completed(self, instrument: str, ts: datetime, uah: float) -> int:
+        """Record a completed run and the µA·h it collected, and return the
+        instrument's new all-time total, or 0 for an unknown instrument."""
         if instrument not in self.instruments:
             return 0
-        self.run_completions.append((ts, instrument))
+        self.run_completions.append((ts, instrument, uah))
         self.instruments[instrument]["total_runs"] += 1
         return self.instruments[instrument]["total_runs"]
 
-    def count_runs_completed_since(self, since: datetime, instruments: Optional[Iterable[str]] = None) -> int:
-        """Runs completed at or after `since`, optionally only on `instruments`."""
-        wanted = None if instruments is None else set(instruments)
-        return sum(
-            1 for ts, name in self.run_completions
-            if ts >= since and (wanted is None or name in wanted)
-        )
+    def runs_completed_since(self, since: datetime, instruments: Iterable[str]) -> Dict[str, Tuple[int, float]]:
+        """Each of `instruments`' runs completed at or after `since`, and their µA·h."""
+        totals = {name: (0, 0.0) for name in instruments}
+        for ts, name, uah in self.run_completions:
+            if ts >= since and name in totals:
+                runs, total = totals[name]
+                totals[name] = (runs + 1, total + uah)
+        return totals
 
     def snapshot(self) -> dict:
         cutoff = datetime.now(timezone.utc) - RUN_COMPLETIONS_WINDOW
@@ -256,7 +257,7 @@ class DaemonState:
             "mcr_news": self.mcr_news,
             "instruments": {name: dict(info) for name, info in self.instruments.items()},
             "run_completions": [
-                [ts.isoformat(), name] for ts, name in self.run_completions if ts >= cutoff
+                [ts.isoformat(), name, uah] for ts, name, uah in self.run_completions if ts >= cutoff
             ],
         }
 
@@ -350,13 +351,14 @@ class DaemonState:
         skipped = 0
         for entry in saved:
             try:
-                text, name = entry
+                text, name, uah = entry
                 ts = datetime.fromisoformat(_aware_iso(text))
+                (uah,) = _finite_floats([uah])
                 wanted = name in self.instruments and ts >= cutoff
             except (TypeError, ValueError):  # includes an unhashable name
                 skipped += 1
                 continue
             if wanted:
-                self.run_completions.append((ts, name))
+                self.run_completions.append((ts, name, uah))
         if skipped:
             logger.warning(f"Skipped {skipped} malformed run completion(s) in snapshot")

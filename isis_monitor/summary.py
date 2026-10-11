@@ -194,7 +194,7 @@ async def daily_summary_loop(
                     target_summary.trips,
                     target_summary.longest_on_streak,
                     target_summary.sparkline,
-                    state.count_runs_completed_since(since, instruments_by_channel.get(beam, [])),
+                    state.runs_completed_since(since, instruments_by_channel.get(beam, [])),
                     now_utc,
                     is_new_record=is_new_record,
                     fact_of_the_day=todays_fact,

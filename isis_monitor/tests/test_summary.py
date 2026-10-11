@@ -204,13 +204,15 @@ async def test_daily_summary_counts_runs_only_on_instruments_using_that_target(s
         InstrumentConfig("EMU", 10.0, "Muon"),
     ])
     now = datetime.now(timezone.utc)
-    state.record_run_completed("PEARL", now)
-    state.record_run_completed("PEARL", now)
-    state.record_run_completed("EMU", now)
-    state.record_run_completed("EMU", now - timedelta(hours=30))  # outside the window
+    state.record_run_completed("PEARL", now, 60.0)
+    state.record_run_completed("PEARL", now, 70.0)
+    state.record_run_completed("EMU", now, 5.0)
+    state.record_run_completed("EMU", now - timedelta(hours=30), 5.0)  # outside the window
     channel = await run_summary(store, state)
-    runs = {c.args[0].channel: dict(c.args[0].facts)["Runs in last 24h"] for c in channel.broadcast.call_args_list}
-    assert runs == {"TS1": "2", "TS2": "0", "Muons": "1"}
+    cards = {c.args[0].channel: dict(c.args[0].facts) for c in channel.broadcast.call_args_list}
+    assert {beam: facts["Runs in last 24h"] for beam, facts in cards.items()} == {"TS1": "2", "TS2": "0", "Muons": "1"}
+    assert (cards["TS1"]["PEARL"], cards["Muons"]["EMU"]) == ("2 runs, 130.0 µA·h", "1 run, 5.0 µA·h")
+    assert "EMU" not in cards["TS1"]
 
 
 async def test_daily_summary_loop_survives_database_errors(store, caplog):

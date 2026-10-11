@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from isis_monitor import flavour
@@ -324,7 +324,7 @@ def daily_summary(
     trips: int,
     longest_on_streak: timedelta,
     sparkline: str,
-    runs_last_24h: int,
+    instrument_runs: Dict[str, Tuple[int, float]],
     time_now: datetime,
     is_new_record: bool = False,
     fact_of_the_day: str = "",
@@ -343,7 +343,11 @@ def daily_summary(
         ("Trips", str(trips)),
         ("Longest continuous on", fmt_duration(longest_on_streak)),
         ("Sparkline", sparkline),
-        ("Runs in last 24h", str(runs_last_24h)),
+        ("Runs in last 24h", str(sum(runs for runs, _ in instrument_runs.values()))),
+    ]
+    facts += [
+        (name, f"{runs} run{'s' * (runs != 1)}, {uah:.1f} µA·h" if runs else "no runs")
+        for name, (runs, uah) in instrument_runs.items()
     ]
 
     return Notification(

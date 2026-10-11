@@ -283,7 +283,9 @@ class InstrumentTracker:
         self.state.collection_stalled_since = None
         self.state.stall_warned = False
 
-        total_runs = self.sink.record_run_completed(self.instrument.name, time_now) if self.sink else 0
+        total_runs = (
+            self.sink.record_run_completed(self.instrument.name, time_now, max(prev_counts, 0.0)) if self.sink else 0
+        )
         # Saved before any await, so a snapshot can't pair the new
         # completion count with the old run (which a restart would re-report).
         self.state.run_name = name
