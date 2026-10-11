@@ -39,8 +39,9 @@ experiment_teams_url =
 #   channel        (optional) Teams payload channel for this instrument's cards:
 #                  experiment (default) = "Experiment Updates", or instrument =
 #                  the instrument's name
-# Progress is read from IN:<NAME>:DAE:TOTALUAMPS and the run name from
-# IN:<NAME>:DAE:WDTITLE, both derived from the name.
+# Progress is read from IN:<NAME>:DAE:TOTALUAMPS, the run name from
+# IN:<NAME>:DAE:WDTITLE, and the run state, run number and RB number from
+# IN:<NAME>:DAE:RUNSTATE_STR, RUNNUMBER and _RBNUMBER, all derived from the name.
 # Instruments and [NOTIFICATIONS] can also be edited from the TUI (press c); saving
 # there rewrites this file without its comments (the old file is kept as .bak).
 [INSTRUMENT:PEARL]

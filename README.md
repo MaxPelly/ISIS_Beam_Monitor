@@ -7,7 +7,7 @@ This is a Python application that monitors the status of the ISIS beam, experime
 ## Features
 
 - **Beam Updates**: Monitors the ISIS beam status and sends debounced state-change cards (with severity colour, emoji, current/previous readings and time-in-state) based on configurable thresholds. Correlated multi-target trips are called out in the same card.
-- **Experiment Updates**: Tracks run starts/finishes on any number of instruments, each with its own notify threshold, using each instrument's total µA·h collected (`IN:<NAME>:DAE:TOTALUAMPS`): previous-run stats, collection rate and ETA, and a warning if data collection stalls while that instrument's beam is on.
+- **Experiment Updates**: Tracks run starts/finishes on any number of instruments, each with its own notify threshold, using each instrument's total µA·h collected (`IN:<NAME>:DAE:TOTALUAMPS`): previous-run stats and the new run's target, collection rate and ETA, a warning if data collection stalls while that instrument's beam is on and its DAE is running (and a card when it resumes), and a summary of each experiment (runs, µA·h, duration) when the instrument's RB number changes.
 - **MCR News**: Fetches the latest Main Control Room (MCR) news and classifies each update's severity (good/attention/warning) by keyword, with an optional "Open MCR news" link.
 - **Daily Summary**: Sends a per-target uptime/trip/sparkline summary card once a day at a configurable time.
 - **`fun_mode`**: Optional personality lines, longest-uptime records, run-count milestones and a daily fact, on top of the always-on severity/emoji information.
@@ -71,10 +71,13 @@ notify_counts = 130
 # channel = experiment
 ```
 
-Both PVs are derived from the name: progress (total µA·h collected this run) from
-`IN:<NAME>:DAE:TOTALUAMPS`, and the run name from `IN:<NAME>:DAE:WDTITLE`. A new run is
-spotted by its title changing or its total collected resetting, so runs with a hidden
-title are still reported. Names may contain letters, digits, `_` and `-`, and are
+The PVs are derived from the name: progress (total µA·h collected this run) from
+`IN:<NAME>:DAE:TOTALUAMPS`, the run name from `IN:<NAME>:DAE:WDTITLE`, the run state
+from `IN:<NAME>:DAE:RUNSTATE_STR`, the run number from `IN:<NAME>:DAE:RUNNUMBER` and
+the experiment's RB number from `IN:<NAME>:DAE:_RBNUMBER`. A new run is spotted by its
+title changing or its total collected resetting, so runs with a hidden title are still
+reported. Stalls are only checked while the DAE is RUNNING or VETOING, so a paused run,
+a run-control wait or a run ended short of its target isn't reported as one. Names may contain letters, digits, `_` and `-`, and are
 upper-cased. Downstream flows that route on the payload's `channel` see "Experiment
 Updates" unless an instrument sets `channel = instrument`. At least one `[INSTRUMENT:*]`
 section is required.
