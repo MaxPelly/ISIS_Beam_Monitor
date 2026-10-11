@@ -1428,10 +1428,14 @@ async def test_new_experiments_first_run_gets_the_fallback_target(mock_config, m
     assert (tracker(m).state.run_target, tracker(m).state.auto_runs) == (30.0, 0)
 
 
-@pytest.mark.parametrize("resent, partial", [("0", True), ("A", False)])
-async def test_rb_zero_resent_on_connect(mock_config, mock_channels, resent, partial):
+@pytest.mark.parametrize("before, resent, partial", [
+    ("A", "0", True),  # A ended while unwatched
+    ("0", "0", False),  # A's end was seen; the instrument was idle all along
+    ("A", "A", False),
+])
+async def test_rb_zero_resent_on_connect(mock_config, mock_channels, before, resent, partial):
     """Between experiments the RB number is often "0": re-sent on connect it
-    means A ended unwatched, but the next experiment's start is still seen."""
+    can mean A ended unwatched, but the next experiment's start is still seen."""
     _, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
     await m._handle_update(rb("Z"))
@@ -1439,6 +1443,7 @@ async def test_rb_zero_resent_on_connect(mock_config, mock_channels, resent, par
     await m._handle_update(title("A1"))
     await m._handle_update({"pv": PEARL_UAMPS, "value": 50.0})
     _age_run(m)
+    await m._handle_update(rb(before))
     tracker(m).resubscribed()
     await m._handle_update(rb(resent))
     await m._handle_update(rb("B"))

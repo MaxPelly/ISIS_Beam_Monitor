@@ -99,6 +99,7 @@ class InstrumentState:
     # Completed runs' totals (oldest first), for auto targets
     run_totals: Deque[float] = field(default_factory=lambda: deque(maxlen=AUTO_HISTORY))
     rb_number: str = ""  # the experiment's; "" until known
+    rb_seen: str = ""  # the last RB value, "0" (no experiment) included
     run_rb: str = ""  # rb_number when this run started; its total only counts for that experiment
     # The experiment's completed runs so far, for its summary card
     exp_since: Optional[datetime] = None  # when its RB number was first seen
@@ -175,7 +176,8 @@ class InstrumentTracker:
         if self.sink:
             s = self.state
             self.sink.update_experiment(
-                self.instrument.name, s.rb_number, s.run_rb, s.exp_since, s.exp_partial, s.exp_runs, s.exp_uah
+                self.instrument.name, s.rb_number, s.rb_seen, s.run_rb, s.exp_since, s.exp_partial, s.exp_runs,
+                s.exp_uah,
             )
 
     def handle_run_state(self, text: Any) -> None:
@@ -188,19 +190,22 @@ class InstrumentTracker:
     async def handle_rb_number(self, text: Any, time_now: datetime) -> None:
         """`text` is IN:<NAME>:DAE:_RBNUMBER; a new experiment gets a summary
         card for the last one, and starts a new run history. "0" (an
-        instrument with no experiment) and blanks are ignored, so a gap
-        between experiments doesn't end one."""
+        instrument with no experiment) doesn't end one, so the card waits for
+        the next RB number."""
         rb = strip_controls(str(text)).strip()
         state = self.state
         if not rb:
             return
         unwatched, state.rb_resync = state.rb_resync, False
+        seen, state.rb_seen = state.rb_seen, rb
         if rb == "0":
-            if unwatched and state.rb_number:  # the experiment ended while the daemon wasn't watching
+            if unwatched and state.rb_number and seen != "0":  # it ended while the daemon wasn't watching
                 state.exp_partial = True
-                self._save_experiment()
+            self._save_experiment()
             return
         if rb == state.rb_number:
+            if seen != rb:  # back from "0" to the same experiment
+                self._save_experiment()
             return
         old_rb, notification, new_first_run = state.rb_number, None, False
         if old_rb:
@@ -406,6 +411,7 @@ class InstrumentTracker:
         if self.instrument.auto_counts:  # a fixed target's old totals would be stale by the time auto is on
             self.state.run_totals.extend(saved.get("run_totals", ()))
         self.state.rb_number = str(saved.get("rb_number", ""))
+        self.state.rb_seen = str(saved.get("rb_seen", ""))
         self.state.run_rb = str(saved.get("run_rb", ""))
         since = saved.get("exp_since")
         self.state.exp_since = datetime.fromisoformat(since) if since else None

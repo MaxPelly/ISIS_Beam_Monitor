@@ -80,6 +80,7 @@ class DaemonState:
                 "run_totals": [],  # completed runs' µA·h, for auto targets
                 # The current experiment, for InstrumentTracker's summary card
                 "rb_number": "",
+                "rb_seen": "",
                 "run_rb": "",
                 "exp_since": None,  # ISO timestamp
                 "exp_partial": True,
@@ -209,13 +210,13 @@ class DaemonState:
         self._publish("target", {"instrument": instrument, "target": target, "auto_runs": auto_runs})
 
     def update_experiment(
-        self, instrument: str, rb_number: str, run_rb: str, since: Optional[datetime], partial: bool,
-        runs: int, uah: float,
+        self, instrument: str, rb_number: str, rb_seen: str, run_rb: str, since: Optional[datetime],
+        partial: bool, runs: int, uah: float,
     ) -> None:
         """Saved, not published: only restored into the tracker."""
         if instrument in self.instruments:
             self.instruments[instrument].update(
-                rb_number=rb_number, run_rb=run_rb, exp_since=since.isoformat() if since else None,
+                rb_number=rb_number, rb_seen=rb_seen, run_rb=run_rb, exp_since=since.isoformat() if since else None,
                 exp_partial=bool(partial), exp_runs=int(runs), exp_uah=float(uah),
             )
 
@@ -326,6 +327,7 @@ class DaemonState:
                     "stale_counts": float(info.get("stale_counts", -1.0)),
                     "run_totals": _finite_floats(info.get("run_totals", [])),
                     "rb_number": str(info.get("rb_number", "")),
+                    "rb_seen": str(info.get("rb_seen", "")),
                     "run_rb": str(info.get("run_rb", "")),
                     "exp_since": _aware_iso(exp_since) if exp_since else None,
                     "exp_partial": bool(info.get("exp_partial", True)),
