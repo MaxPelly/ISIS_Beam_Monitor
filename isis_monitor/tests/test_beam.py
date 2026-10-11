@@ -1264,6 +1264,7 @@ async def test_auto_target_comes_from_recent_runs_once_there_are_enough(mock_con
 
     await _finish_runs(m, 58.0)
     assert tracker(m).state.run_target == 60.0
+    assert dict(exp_channel.broadcast.call_args[0][0].facts)["Target"] == "60 µA·h (auto, from 3 runs)"
     exp_channel.broadcast.reset_mock()  # the new-run cards
     sink.update_target.assert_called_with("PEARL", 60.0, 3, [60.0, 5.0, 62.0, 58.0], "", "")
     await m._handle_update({"pv": PEARL_UAMPS, "value": 59.0})
@@ -1385,9 +1386,9 @@ async def test_new_rb_number_starts_a_new_run_history(mock_config, mock_channels
     assert tracker(m).state.run_target == 21.0
 
 
-async def test_new_run_is_saved_before_the_milestone_card(mock_config, mock_channels):
-    """Every 25th completed run (with fun_mode on) gets a milestone card, sent
-    after the new run has been saved."""
+async def test_new_run_is_saved_before_its_cards(mock_config, mock_channels):
+    """The new-run card (which shows the new run's target) and, every 25th
+    completed run with fun_mode on, a milestone card are sent once it's saved."""
     fun_config = replace(mock_config, fun_mode=True)
     _, exp_channel = mock_channels
     sink = MagicMock()
@@ -1399,7 +1400,7 @@ async def test_new_run_is_saved_before_the_milestone_card(mock_config, mock_chan
     tracker(m).state.run_name = "Run 24"
     tracker(m).state.run_started_at = datetime.now(timezone.utc)
     await m._handle_update(title("Run 25"))
-    assert order == ["PEARL: New run started", "saved", "PEARL: 25 runs completed"]
+    assert order == ["saved", "PEARL: New run started", "PEARL: 25 runs completed"]
     sink.record_run_completed.assert_called_once_with("PEARL", ANY)
 
 

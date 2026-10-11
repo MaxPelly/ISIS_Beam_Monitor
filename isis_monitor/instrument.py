@@ -212,18 +212,9 @@ class InstrumentTracker:
 
     async def _start_run(self, name: str, time_now: datetime, from_title: bool) -> None:
         """Send the new-run card for `name`, reporting on the run just ended."""
-        notification = run_started(
-            self.instrument.name,
-            name,
-            self.state.run_name,
-            time_now - self.state.run_started_at,
-            self.state.current_counts,
-            time_now,
-            rng=self.flavour_rng,
-            channel=self._card_channel(),
+        prev_name, prev_duration, prev_counts = (
+            self.state.run_name, time_now - self.state.run_started_at, self.state.current_counts
         )
-        logger.info(f"New Run: {notification.to_plain_text()}")
-        await self.experiment_channel.broadcast(notification)
         if not from_title:
             self.state.stale_counts = -1.0
         elif self.state.stale_counts < 0:  # kept through title edits before BEGIN
@@ -243,7 +234,7 @@ class InstrumentTracker:
         self.state.stall_warned = False
 
         total_runs = self.sink.record_run_completed(self.instrument.name, time_now) if self.sink else 0
-        # Saved before any further await, so a snapshot can't pair the new
+        # Saved before any await, so a snapshot can't pair the new
         # completion count with the old run (which a restart would re-report).
         self.state.run_name = name
         self.state.run_started_at = time_now
@@ -252,6 +243,19 @@ class InstrumentTracker:
             self.sink.update_run_name(self.instrument.name, name)
             self.sink.update_counts(self.instrument.name, 0)
         self._save_progress()
+
+        if not self.instrument.auto_counts:
+            target_note = ""
+        elif self.state.auto_runs:
+            target_note = f"auto, from {self.state.auto_runs} runs"
+        else:
+            target_note = f"auto's fallback, until {AUTO_MIN_RUNS} runs"
+        notification = run_started(
+            self.instrument.name, name, prev_name, prev_duration, prev_counts, time_now,
+            self.state.run_target, target_note, rng=self.flavour_rng, channel=self._card_channel(),
+        )
+        logger.info(f"New Run: {notification.to_plain_text()}")
+        await self.experiment_channel.broadcast(notification)
 
         if self.flavour_rng and total_runs and total_runs % RUN_MILESTONE_INTERVAL == 0:
             milestone = run_milestone(

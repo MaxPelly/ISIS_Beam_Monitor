@@ -180,7 +180,7 @@ def test_startup_status_builder():
 
 
 def test_run_started_builder():
-    n = run_started("PEARL", "Run 12346", "Run 12345", timedelta(hours=2), 1000.0, DT)
+    n = run_started("PEARL", "Run 12346", "Run 12345", timedelta(hours=2), 1000.0, DT, 128.0, "auto, from 5 runs")
     assert n.title == "PEARL: New run started"
     assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
     assert n.text == "Run 12346"
@@ -191,10 +191,12 @@ def test_run_started_builder():
         ("Previous run", "Run 12345"),
         ("Duration", "2h 0m"),
         ("Final total collected", "1000.0 µA·h"),
+        ("Target", "128 µA·h (auto, from 5 runs)"),
     ]
     # Negative counts mean no reading ever arrived for the previous run.
-    n = run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), -1.0, DT)
+    n = run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), -1.0, DT, 130.0)
     assert ("Final total collected", "unknown") in n.facts
+    assert ("Target", "130 µA·h") in n.facts
 
 
 def test_run_finishing_builder():
@@ -253,7 +255,7 @@ def test_builders_pick_flavour_when_rng_given():
     rng = random.Random(1)
     for n in (
         startup_status("TS1", "high", 150.0, DT, rng=rng),
-        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, DT, rng=rng),
+        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, DT, 130.0, rng=rng),
         run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", DT, rng=rng),
         mcr_news("News", DT, rng=rng),
         run_milestone("PEARL", 25, DT, rng=rng),
@@ -322,7 +324,7 @@ def test_no_builder_bakes_its_own_emoji_into_the_title():
     notifications = [
         beam_change("TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), DT),
         startup_status("TS1", "high", 150.0, DT),
-        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, DT),
+        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, DT, 130.0),
         run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", DT),
         collection_stalled("PEARL", "TS1", timedelta(minutes=17), DT),
         mcr_news("Machine update.", DT),
@@ -339,7 +341,7 @@ def test_builders_set_topic():
     assert mcr_news("Machine update.", DT).topic == "MCR"
     # Run cards carry the instrument as their topic whatever their channel.
     for n in (
-        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, DT),
+        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, DT, 130.0),
         run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", DT),
         collection_stalled("PEARL", "TS1", timedelta(minutes=17), DT),
         run_milestone("PEARL", 25, DT, channel="PEARL"),

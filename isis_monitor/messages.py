@@ -181,10 +181,13 @@ def run_started(
     prev_duration: timedelta,
     prev_counts: float,
     time_now: datetime,
+    target: float,
+    target_note: str = "",  # e.g. "auto, from 5 runs"
     rng: Optional[random.Random] = None,
     channel: str = "",
 ) -> Notification:
-    """Build a card for a new run starting — reports on the run that just ended.
+    """Build a card for a new run starting — its target, and a report on the
+    run that just ended.
 
     The run builders' `channel` is blank by default, which broadcast() fills
     with the experiment channel's name ("Experiment Updates").
@@ -198,6 +201,7 @@ def run_started(
             ("Duration", fmt_duration(prev_duration)),
             # Negative means no reading ever arrived for that run.
             ("Final total collected", f"{prev_counts:.1f} µA·h" if prev_counts >= 0 else "unknown"),
+            ("Target", f"{target:g} µA·h" + (f" ({target_note})" if target_note else "")),
         ],
         flavour=flavour.pick("new_run", rng) if rng else "",
         timestamp=time_now,
