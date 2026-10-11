@@ -23,6 +23,10 @@ STALL_CHECK_WINDOW = timedelta(minutes=5)
 ETA_MIN_HISTORY = timedelta(minutes=3)
 ETA_CHECK_INTERVAL = timedelta(seconds=30)  # at most one rate fit per this, per instrument
 RUN_MILESTONE_INTERVAL = 25
+# DAE run states in which counts should rise, so flat counts are a stall.
+# Others (SETUP, PAUSED, WAITING on run control, and the brief ones between)
+# aren't checked; an automated run plan can pass through them in seconds.
+COUNTING_RUN_STATES = ("RUNNING", "VETOING")
 # A title change this soon after a counts reset started a run (e.g. one titled
 # after its BEGIN) names that run rather than starting another; the card has
 # already gone out under the old title.
@@ -91,6 +95,8 @@ class InstrumentState:
     rb_number: str = ""  # the experiment's, for auto targets; "" until known
     run_rb: str = ""  # rb_number when this run started; its total only counts for that experiment
 
+    run_state: str = ""  # IN:<NAME>:DAE:RUNSTATE_STR; "" until known
+
     # Periodic collection-progress check (InstrumentTracker.check_collection_progress)
     collection_stalled_since: Optional[datetime] = None
     stall_warned: bool = False
@@ -148,6 +154,9 @@ class InstrumentTracker:
                 self.instrument.name, self.state.run_target, self.state.auto_runs,
                 list(self.state.run_totals), self.state.rb_number, self.state.run_rb,
             )
+
+    def handle_run_state(self, text: Any) -> None:
+        self.state.run_state = strip_controls(str(text)).strip().upper()
 
     def handle_rb_number(self, text: Any) -> None:
         """`text` is IN:<NAME>:DAE:_RBNUMBER; a new experiment's runs start a
@@ -371,7 +380,9 @@ class InstrumentTracker:
         count is naturally static, which would otherwise look identical to a
         stall. A run that has reached its target has usually ended (the
         title, and so run_name, stays until the next run), so it isn't checked;
-        one merely forecast to finish soon still is.
+        one merely forecast to finish soon still is. Once the DAE's run state
+        is known, only COUNTING_RUN_STATES are checked, which also covers runs
+        ended short of their target.
 
         Movement is judged over STALL_CHECK_WINDOW rather than since the last
         tick: the counts PV can plausibly update in batches, so comparing
@@ -380,6 +391,10 @@ class InstrumentTracker:
         minute.
         """
         if not self.state.run_name or self.state.current_counts >= self.state.run_target:
+            return
+        if self.state.run_state and self.state.run_state not in COUNTING_RUN_STATES:
+            # e.g. a run ended short of its target, or paused: flat counts are expected.
+            self.state.collection_stalled_since = None
             return
 
         baseline = self._collected_baseline_before(time_now - STALL_CHECK_WINDOW)

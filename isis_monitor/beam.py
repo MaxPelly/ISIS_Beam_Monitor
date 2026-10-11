@@ -220,6 +220,9 @@ class BeamMonitor:
         self.pv_to_counts: Dict[str, InstrumentTracker] = {
             t.instrument.counts_pv: t for t in self.instruments.values()
         }
+        self.pv_to_run_state: Dict[str, InstrumentTracker] = {
+            t.instrument.run_state_pv: t for t in self.instruments.values()
+        }
         # Only auto targets need the experiment's RB number.
         self.pv_to_rb_number: Dict[str, InstrumentTracker] = {
             t.instrument.rb_number_pv: t for t in self.instruments.values() if t.instrument.auto_counts
@@ -305,6 +308,9 @@ class BeamMonitor:
             case {"pv": pv, "value": raw_val} if pv in self.pv_to_counts:
                 await self.pv_to_counts[pv].handle_counts(raw_val, time_now)
 
+            case {"pv": pv, "text": text} if pv in self.pv_to_run_state:
+                self.pv_to_run_state[pv].handle_run_state(text)
+
             case {"pv": pv, "text": text} if pv in self.pv_to_rb_number:
                 self.pv_to_rb_number[pv].handle_rb_number(text)
 
@@ -388,7 +394,10 @@ class BeamMonitor:
         # for its history (the server may still send them later).
         subscribe_msg = json.dumps({
             "type": "subscribe",
-            "pvs": [*self.pv_to_beam, *self.pv_to_rb_number, *self.pv_to_run_name, *self.pv_to_counts],
+            "pvs": [
+                *self.pv_to_beam, *self.pv_to_rb_number, *self.pv_to_run_name, *self.pv_to_counts,
+                *self.pv_to_run_state,
+            ],
         })
         logger.info(f"Beam Monitor started. Connecting to {self.data_url}...")
         interval = self.config.beam_reconnect_interval

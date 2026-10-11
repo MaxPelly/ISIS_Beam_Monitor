@@ -637,6 +637,24 @@ async def test_stall_checks_stop_once_the_run_reaches_its_target(mock_config, mo
     assert exp_channel.broadcast.called is warned
 
 
+@pytest.mark.parametrize("run_state, warned", [
+    ("RUNNING", True), ("VETOING", True), ("", True),  # "": not known yet, as before the PV
+    ("SETUP", False),  # e.g. a run ended short of its target
+    ("PAUSED", False), ("WAITING", False), ("ENDING", False),
+])
+async def test_stall_checks_only_while_the_dae_is_counting(mock_config, mock_channels, run_state, warned):
+    _, exp_channel = mock_channels
+    m = stall_monitor(mock_config, mock_channels)
+    await m._handle_update({"pv": "IN:PEARL:DAE:RUNSTATE_STR", "text": run_state})
+    now = datetime.now(timezone.utc)
+    _seed_collected_baseline(m, now, 100.0)
+    tracker(m).state.current_counts = 100.0
+
+    await m._check_collection_progress(now)
+    await m._check_collection_progress(now + timedelta(seconds=1))
+    assert exp_channel.broadcast.called is warned
+
+
 async def test_check_collection_progress_movement_resets_stall_clock(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = stall_monitor(mock_config, mock_channels)
@@ -689,7 +707,7 @@ async def test_run_loop_subscribes_and_dispatches_updates(mock_config, mock_chan
 
     assert set(server.subscriptions[0]["pvs"]) == {
         mock_config.ts1_beam_current_pv, mock_config.ts2_beam_current_pv,
-        mock_config.muon_beam_current_pv, PEARL_UAMPS, PEARL_TITLE,
+        mock_config.muon_beam_current_pv, PEARL_UAMPS, PEARL_TITLE, "IN:PEARL:DAE:RUNSTATE_STR",
     }
     sink.update_beam_state.assert_called_with("TS1", 150.0, "high")
     sink.update_health.assert_any_call("beam", "connected")
