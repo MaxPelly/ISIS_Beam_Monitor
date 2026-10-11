@@ -206,8 +206,10 @@ class InstrumentTracker:
             started = state.run_started_at
             fresh = started is not None and time_now - started <= NEW_EXPERIMENT_RUN_WINDOW
             last = state.current_counts if state.run_rb == old_rb and state.current_counts > 0 and not fresh else 0.0
-            if not last and state.run_rb == old_rb:  # not a run already counted for an older one
+            if not last and state.run_rb == old_rb:
                 state.run_rb, new_first_run = rb, True
+            else:  # counted for an older experiment (or no one's), even if its RB number comes back
+                state.run_rb = ""
             runs = state.exp_runs + (last > 0)
             if old_rb != "0" and runs and state.exp_since is not None:  # "0" was no experiment
                 notification = experiment_finished(

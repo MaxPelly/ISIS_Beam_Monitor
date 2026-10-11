@@ -1469,6 +1469,25 @@ async def test_corrected_rb_number_doesnt_count_the_last_run_again(mock_config, 
     assert (a["Runs"], c["Runs"], c["Total collected"]) == ("1", "1", "40.0 µA·h")
 
 
+async def test_rb_number_back_from_zero_doesnt_count_the_last_run_again(mock_config, mock_channels):
+    """A -> "0" -> A (e.g. cleared and re-entered) ends A, then starts it again."""
+    _, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+    await m._handle_update(rb("Z"))
+    await m._handle_update(rb("A"))
+    await m._handle_update(title("A1"))
+    await _finish_runs(m, 40.0)
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 50.0})  # in progress
+    _age_run(m)
+    await m._handle_update(rb("0"))
+    await m._handle_update(rb("A"))
+    await _finish_runs(m, 50.0, 10.0)  # the 50 completes
+    await m._handle_update(rb("B"))
+    first, second = (dict(card.facts) for card in _experiment_cards(exp_channel))
+    assert (first["Runs"], first["Total collected"]) == ("2", "90.0 µA·h")
+    assert (second["Runs"], second["Total collected"]) == ("1", "10.0 µA·h")
+
+
 async def test_experiment_progress_survives_a_restart(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
