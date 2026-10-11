@@ -1384,12 +1384,16 @@ async def test_rb_number_change_sends_the_old_experiments_summary(mock_config, m
 
     # B's: its first run is the one that starts now, as the 50 was A's.
     await _finish_runs(m, 0.0, 20.0, 30.0)
-    await tracker(m).handle_rb_number("0", now)  # no experiment: ignored
-    await tracker(m).handle_rb_number("C", now + timedelta(hours=5))
+    await tracker(m).handle_rb_number("0", now + timedelta(hours=5))  # B ends; the instrument is idle
     card = _experiment_cards(exp_channel)[-1]
-    assert dict(card.facts) == {
+    assert (card.text, dict(card.facts)) == ("RB B", {
         "Runs": "2", "Total collected": "50.0 µA·h", "Average run": "25.0 µA·h", "Duration": "5h 0m",
-    }
+    })
+    # Runs with no experiment are no one's.
+    await _finish_runs(m, 10.0, 10.0)
+    await tracker(m).handle_rb_number("C", now + timedelta(hours=6))
+    assert len(_experiment_cards(exp_channel)) == 2
+    assert tracker(m).state.exp_partial is False  # C's start was seen
 
     # An RB number with no runs (e.g. one corrected straight away) gets no card.
     await tracker(m).handle_rb_number("D", now + timedelta(hours=5))
@@ -1430,12 +1434,11 @@ async def test_new_experiments_first_run_gets_the_fallback_target(mock_config, m
 
 @pytest.mark.parametrize("before, resent, partial", [
     ("A", "0", True),  # A ended while unwatched
-    ("0", "0", False),  # A's end was seen; the instrument was idle all along
-    ("A", "A", False),
+    ("A", "B", True),
+    ("0", "B", False),  # A's end was seen, and the instrument was idle until B
 ])
-async def test_rb_zero_resent_on_connect(mock_config, mock_channels, before, resent, partial):
-    """Between experiments the RB number is often "0": re-sent on connect it
-    can mean A ended unwatched, but the next experiment's start is still seen."""
+async def test_rb_number_resent_on_connect(mock_config, mock_channels, before, resent, partial):
+    """PVWS re-sends the RB number on connect: a change then happened unwatched."""
     _, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
     await m._handle_update(rb("Z"))
@@ -1446,9 +1449,8 @@ async def test_rb_zero_resent_on_connect(mock_config, mock_channels, before, res
     await m._handle_update(rb(before))
     tracker(m).resubscribed()
     await m._handle_update(rb(resent))
-    await m._handle_update(rb("B"))
     assert dict(_experiment_cards(exp_channel)[-1].facts)["Runs"] == ("at least 1" if partial else "1")
-    assert tracker(m).state.exp_partial is False
+    assert tracker(m).state.exp_partial is True  # the new one began unwatched too
 
 
 async def test_corrected_rb_number_doesnt_count_the_last_run_again(mock_config, mock_channels):
@@ -1506,8 +1508,8 @@ async def test_new_rb_number_starts_a_new_run_history(mock_config, mock_channels
     await _finish_runs(m, 60.0, 61.0, 62.0)
     assert tracker(m).state.run_target == 61.0
 
-    # The first seen and a repeat don't clear it, and nor does "0" (no experiment).
-    for update in (rb("2610028"), rb("0"), rb("")):
+    # The first seen and a repeat don't clear it.
+    for update in (rb("2610028"), rb("")):
         await m._handle_update(update)
     assert tracker(m).state.run_target == 61.0
 

@@ -7,7 +7,7 @@ This is a Python application that monitors the status of the ISIS beam, experime
 ## Features
 
 - **Beam Updates**: Monitors the ISIS beam status and sends debounced state-change cards (with severity colour, emoji, current/previous readings and time-in-state) based on configurable thresholds. Correlated multi-target trips are called out in the same card.
-- **Experiment Updates**: Tracks run starts/finishes on any number of instruments, each with its own notify threshold, using each instrument's total µA·h collected (`IN:<NAME>:DAE:TOTALUAMPS`): previous-run stats and the new run's target, collection rate and ETA, a warning if data collection stalls while that instrument's beam is on and its DAE is running (and a card when it resumes), and a summary of each experiment (runs, µA·h, duration) when the instrument's RB number changes.
+- **Experiment Updates**: Tracks run starts/finishes on any number of instruments, each with its own notify threshold, using each instrument's total µA·h collected (`IN:<NAME>:DAE:TOTALUAMPS`): previous-run stats and the new run's target, collection rate and ETA, a warning if data collection stalls while that instrument's beam is on and its DAE is running (and a card when it resumes), and a summary of each experiment (runs, µA·h, duration) when the instrument's RB number changes or goes to "0" (no experiment).
 - **MCR News**: Fetches the latest Main Control Room (MCR) news and classifies each update's severity (good/attention/warning) by keyword, with an optional "Open MCR news" link.
 - **Daily Summary**: Sends a per-target uptime/trip/sparkline summary card once a day at a configurable time.
 - **`fun_mode`**: Optional personality lines, longest-uptime records, run-count milestones and a daily fact, on top of the always-on severity/emoji information.
@@ -86,7 +86,8 @@ With `notify_counts = auto, <number>`, each run's target is set when it starts, 
 median of the last 5 completed runs of the same experiment. Very short runs (under 1 µA·h
 or a quarter of the typical run, e.g. a mistaken setup) are left out, and `<number>` is
 used until 3 runs remain. The experiment is told apart by its RB number
-(`IN:<NAME>:DAE:_RBNUMBER`): when it changes, the history starts again. The finishing
+(`IN:<NAME>:DAE:_RBNUMBER`): when it changes, including to "0" (no experiment), the
+history starts again. The finishing
 card shows an auto target as e.g. "60.5 / 60 µA·h (auto)", and the TUI as "≈60".
 
 ### Optional `[TUI]` section

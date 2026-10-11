@@ -98,8 +98,7 @@ class InstrumentState:
     auto_runs: int = 0  # how many runs an auto run_target came from; 0 = the fallback
     # Completed runs' totals (oldest first), for auto targets
     run_totals: Deque[float] = field(default_factory=lambda: deque(maxlen=AUTO_HISTORY))
-    rb_number: str = ""  # the experiment's; "" until known
-    rb_seen: str = ""  # the last RB value, "0" (no experiment) included
+    rb_number: str = ""  # the experiment's, or "0" for none; "" until known
     run_rb: str = ""  # rb_number when this run started; its total only counts for that experiment
     # The experiment's completed runs so far, for its summary card
     exp_since: Optional[datetime] = None  # when its RB number was first seen
@@ -176,7 +175,7 @@ class InstrumentTracker:
         if self.sink:
             s = self.state
             self.sink.update_experiment(
-                self.instrument.name, s.rb_number, s.rb_seen, s.run_rb, s.exp_since, s.exp_partial, s.exp_runs,
+                self.instrument.name, s.rb_number, s.run_rb, s.exp_since, s.exp_partial, s.exp_runs,
                 s.exp_uah,
             )
 
@@ -188,24 +187,15 @@ class InstrumentTracker:
         self.state.run_number = number.lstrip("0") or number  # "00127920" -> "127920"
 
     async def handle_rb_number(self, text: Any, time_now: datetime) -> None:
-        """`text` is IN:<NAME>:DAE:_RBNUMBER; a new experiment gets a summary
-        card for the last one, and starts a new run history. "0" (an
-        instrument with no experiment) doesn't end one, so the card waits for
-        the next RB number."""
+        """`text` is IN:<NAME>:DAE:_RBNUMBER, "0" while the instrument has no
+        experiment. A change ends the experiment, if any, with a summary card,
+        and starts a new run history."""
         rb = strip_controls(str(text)).strip()
         state = self.state
         if not rb:
             return
         unwatched, state.rb_resync = state.rb_resync, False
-        seen, state.rb_seen = state.rb_seen, rb
-        if rb == "0":
-            if unwatched and state.rb_number and seen != "0":  # it ended while the daemon wasn't watching
-                state.exp_partial = True
-            self._save_experiment()
-            return
         if rb == state.rb_number:
-            if seen != rb:  # back from "0" to the same experiment
-                self._save_experiment()
             return
         old_rb, notification, new_first_run = state.rb_number, None, False
         if old_rb:
@@ -219,7 +209,7 @@ class InstrumentTracker:
             if not last and state.run_rb == old_rb:  # not a run already counted for an older one
                 state.run_rb, new_first_run = rb, True
             runs = state.exp_runs + (last > 0)
-            if runs and state.exp_since is not None:
+            if old_rb != "0" and runs and state.exp_since is not None:  # "0" was no experiment
                 notification = experiment_finished(
                     self.instrument.name, old_rb, runs, state.exp_uah + last,
                     time_now - state.exp_since, state.exp_partial or unwatched, time_now,
@@ -228,7 +218,7 @@ class InstrumentTracker:
             state.exp_partial = unwatched
         else:
             state.run_rb = rb  # the first seen; the run in progress is taken to be its
-        state.run_totals.clear()  # also runs from before any RB number, e.g. while it was "0"
+        state.run_totals.clear()  # also runs from before any RB number
         state.rb_number = rb
         state.exp_since, state.exp_runs, state.exp_uah = time_now, 0, 0.0
         if new_first_run:  # its target is the new experiment's too: (auto's) fallback
@@ -411,7 +401,6 @@ class InstrumentTracker:
         if self.instrument.auto_counts:  # a fixed target's old totals would be stale by the time auto is on
             self.state.run_totals.extend(saved.get("run_totals", ()))
         self.state.rb_number = str(saved.get("rb_number", ""))
-        self.state.rb_seen = str(saved.get("rb_seen", ""))
         self.state.run_rb = str(saved.get("run_rb", ""))
         since = saved.get("exp_since")
         self.state.exp_since = datetime.fromisoformat(since) if since else None
