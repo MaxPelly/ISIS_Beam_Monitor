@@ -90,6 +90,11 @@ used until 3 runs remain. The experiment is told apart by its RB number
 history starts again. The finishing
 card shows an auto target as e.g. "60.5 / 60 µA·h (auto)", and the TUI as "≈60".
 
+Known issue: retitling a run more than 2 minutes after it began is taken as a new run, as
+a new title usually comes just before BEGIN. That sends a new-run card and records the
+µA·h so far as a completed run, so the run is counted twice in the experiment card, the
+daily summary and the auto target history.
+
 ### Optional `[TUI]` section
 
 ```ini
