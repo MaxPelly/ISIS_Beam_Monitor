@@ -1253,6 +1253,12 @@ def auto_monitor(mock_config, mock_channels, sink=None, fallback=100):
     return m
 
 
+def _age_run(m):
+    """Make the run in progress older than NEW_EXPERIMENT_RUN_WINDOW, so an RB
+    number change finds it well under way."""
+    tracker(m).state.run_started_at -= timedelta(hours=1)
+
+
 async def _finish_runs(m, *totals):
     """Collect each total in turn, each new run started by the DAE's counts reset."""
     for total in totals:
@@ -1324,6 +1330,7 @@ async def test_rb_change_mid_run_keeps_that_runs_target_through_a_restart(mock_c
     await m._handle_update(rb("A"))
     await _finish_runs(m, 100.0, 100.0, 100.0)
     await m._handle_update({"pv": PEARL_UAMPS, "value": 40.0})
+    _age_run(m)
     await m._handle_update(rb("B"))  # the next experiment's, while A's last run counts
     exp_channel.broadcast.reset_mock()
     await m._handle_update({"pv": PEARL_UAMPS, "value": 40.5})
@@ -1366,6 +1373,7 @@ async def test_rb_number_change_sends_the_old_experiments_summary(mock_config, m
     await tracker(m).handle_rb_number("A", now - timedelta(hours=30))  # first seen: started earlier
     await _finish_runs(m, 40.0, 60.0)
     await m._handle_update({"pv": PEARL_UAMPS, "value": 50.0})  # the last run ends, not yet completed
+    tracker(m).state.run_started_at = now - timedelta(hours=1)
     await tracker(m).handle_rb_number("B", now)
     (card,) = _experiment_cards(exp_channel)
     assert (card.title, card.text) == ("PEARL: Experiment finished", "RB A")
@@ -1388,6 +1396,29 @@ async def test_rb_number_change_sends_the_old_experiments_summary(mock_config, m
     assert len(_experiment_cards(exp_channel)) == 2
 
 
+@pytest.mark.parametrize("first", ["title", "reset", "counts"])
+async def test_new_experiments_first_run_counts_whatever_order_its_pvs_come_in(mock_config, mock_channels, first):
+    """An automated run plan: A's last run ends at 50, then B's first run
+    starts, its title, BEGIN's reset (or even a few counts) coming before B."""
+    _, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+    await m._handle_update(rb("A"))
+    await m._handle_update(title("A1"))
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 50.0})
+    if first == "title":
+        await m._handle_update(title("B1"))
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 0.0})
+    if first == "counts":
+        await m._handle_update({"pv": PEARL_UAMPS, "value": 0.5})
+    await m._handle_update(rb("B"))
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 40.0})
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 0.0})  # B2 begins
+    await m._handle_update(rb("C"))
+    a, b = (dict(c.facts) for c in _experiment_cards(exp_channel))
+    assert (a["Runs"], a["Total collected"]) == ("at least 1", "at least 50.0 µA·h")
+    assert (b["Runs"], b["Total collected"]) == ("1", "40.0 µA·h")
+
+
 async def test_experiment_progress_survives_a_restart(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
@@ -1395,6 +1426,8 @@ async def test_experiment_progress_survives_a_restart(mock_config, mock_channels
     tracker(m).state.run_name = "Run 0"
     tracker(m).state.run_started_at = now = datetime.now(timezone.utc)
     await tracker(m).handle_rb_number("A", now)
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 10.0})
+    tracker(m).state.run_started_at = now - timedelta(hours=1)
     await tracker(m).handle_rb_number("B", now)
     await _finish_runs(m, 40.0, 50.0)  # the 40 run began before B
     restored = DaemonState(instruments=[tracker(m).instrument])
@@ -1427,6 +1460,7 @@ async def test_new_rb_number_starts_a_new_run_history(mock_config, mock_channels
 
     # The last run of the old experiment ended; the new one's RB comes first.
     await m._handle_update({"pv": PEARL_UAMPS, "value": 63.0})
+    _age_run(m)
     await m._handle_update(rb("2620381"))
     assert tracker(m).state.run_target == 61.0 and not tracker(m).state.run_totals  # still the old run's
     await m._handle_update({"pv": PEARL_UAMPS, "value": 0.0})  # its first run begins

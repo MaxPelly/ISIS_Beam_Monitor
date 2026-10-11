@@ -34,6 +34,9 @@ COUNTING_RUN_STATES = ("RUNNING", "VETOING")
 # after its BEGIN) names that run rather than starting another; the card has
 # already gone out under the old title.
 RESET_RETITLE_WINDOW = timedelta(minutes=2)
+# A run started this soon before an RB number change is taken to be the new
+# experiment's: PVWS sends the PVs of an automated run's start in no fixed order.
+NEW_EXPERIMENT_RUN_WINDOW = timedelta(seconds=30)
 # notify_counts = auto: a run's target is the median of the experiment's last
 # AUTO_RUNS run totals, leaving out very short ones (e.g. a mistaken setup),
 # once AUTO_MIN_RUNS are left; AUTO_HISTORY totals are kept to allow for them.
@@ -192,8 +195,13 @@ class InstrumentTracker:
         if old_rb:
             logger.info(f"{self.instrument.name} RB number {old_rb} -> {rb}: run history cleared")
             # The run in progress is usually the old experiment's last, ended
-            # but only completed when the next one starts.
-            last = state.current_counts if state.run_rb == old_rb and state.current_counts > 0 else 0.0
+            # but only completed when the next one starts; unless it's just
+            # begun (or has nothing collected), when it's the new one's first.
+            started = state.run_started_at
+            fresh = started is not None and time_now - started <= NEW_EXPERIMENT_RUN_WINDOW
+            last = state.current_counts if state.run_rb == old_rb and state.current_counts > 0 and not fresh else 0.0
+            if not last:
+                state.run_rb = rb
             runs = state.exp_runs + (last > 0)
             if runs and state.exp_since is not None:
                 notification = experiment_finished(
