@@ -191,7 +191,7 @@ class InstrumentTracker:
         state = self.state
         if rb in ("", "0") or rb == state.rb_number:
             return
-        old_rb, notification = state.rb_number, None
+        old_rb, notification, new_first_run = state.rb_number, None, False
         if old_rb:
             logger.info(f"{self.instrument.name} RB number {old_rb} -> {rb}: run history cleared")
             # The run in progress is usually the old experiment's last, ended
@@ -201,7 +201,7 @@ class InstrumentTracker:
             fresh = started is not None and time_now - started <= NEW_EXPERIMENT_RUN_WINDOW
             last = state.current_counts if state.run_rb == old_rb and state.current_counts > 0 and not fresh else 0.0
             if not last:
-                state.run_rb = rb
+                state.run_rb, new_first_run = rb, True
             runs = state.exp_runs + (last > 0)
             if runs and state.exp_since is not None:
                 notification = experiment_finished(
@@ -214,7 +214,10 @@ class InstrumentTracker:
         state.run_totals.clear()  # also runs from before any RB number, e.g. while it was "0"
         state.rb_number = rb
         state.exp_since, state.exp_runs, state.exp_uah = time_now, 0, 0.0
-        self._save_target()  # the run in progress keeps its target; the next is the new experiment's
+        if new_first_run:  # its target is the new experiment's too: (auto's) fallback
+            self._set_target()
+        else:  # the run in progress keeps its target; the next is the new experiment's
+            self._save_target()
         self._save_experiment()
         if notification:
             logger.info(f"Experiment finished: {notification.to_plain_text()}")

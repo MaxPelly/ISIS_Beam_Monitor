@@ -1419,6 +1419,15 @@ async def test_new_experiments_first_run_counts_whatever_order_its_pvs_come_in(m
     assert (b["Runs"], b["Total collected"]) == ("1", "40.0 µA·h")
 
 
+async def test_new_experiments_first_run_gets_the_fallback_target(mock_config, mock_channels):
+    m = auto_monitor(mock_config, mock_channels, fallback=30)
+    await m._handle_update(rb("A"))
+    await _finish_runs(m, 100.0, 100.0, 100.0)  # the last starts B's first run, targeted at 100
+    assert tracker(m).state.run_target == 100.0
+    await m._handle_update(rb("B"))
+    assert (tracker(m).state.run_target, tracker(m).state.auto_runs) == (30.0, 0)
+
+
 async def test_experiment_progress_survives_a_restart(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
