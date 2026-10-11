@@ -223,6 +223,9 @@ class BeamMonitor:
         self.pv_to_run_state: Dict[str, InstrumentTracker] = {
             t.instrument.run_state_pv: t for t in self.instruments.values()
         }
+        self.pv_to_run_number: Dict[str, InstrumentTracker] = {
+            t.instrument.run_number_pv: t for t in self.instruments.values()
+        }
         # Only auto targets need the experiment's RB number.
         self.pv_to_rb_number: Dict[str, InstrumentTracker] = {
             t.instrument.rb_number_pv: t for t in self.instruments.values() if t.instrument.auto_counts
@@ -311,6 +314,9 @@ class BeamMonitor:
             case {"pv": pv, "text": text} if pv in self.pv_to_run_state:
                 self.pv_to_run_state[pv].handle_run_state(text)
 
+            case {"pv": pv, "text": text} if pv in self.pv_to_run_number:
+                self.pv_to_run_number[pv].handle_run_number(text)
+
             case {"pv": pv, "text": text} if pv in self.pv_to_rb_number:
                 self.pv_to_rb_number[pv].handle_rb_number(text)
 
@@ -396,7 +402,7 @@ class BeamMonitor:
             "type": "subscribe",
             "pvs": [
                 *self.pv_to_beam, *self.pv_to_rb_number, *self.pv_to_run_name, *self.pv_to_counts,
-                *self.pv_to_run_state,
+                *self.pv_to_run_state, *self.pv_to_run_number,
             ],
         })
         logger.info(f"Beam Monitor started. Connecting to {self.data_url}...")

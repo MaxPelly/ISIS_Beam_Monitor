@@ -96,6 +96,9 @@ class InstrumentState:
     run_rb: str = ""  # rb_number when this run started; its total only counts for that experiment
 
     run_state: str = ""  # IN:<NAME>:DAE:RUNSTATE_STR; "" until known
+    # IN:<NAME>:DAE:RUNNUMBER, for cards sent mid-run (it changes at BEGIN,
+    # in no fixed order with the title and counts); "" until known
+    run_number: str = ""
 
     # Periodic collection-progress check (InstrumentTracker.check_collection_progress)
     collection_stalled_since: Optional[datetime] = None
@@ -157,6 +160,10 @@ class InstrumentTracker:
 
     def handle_run_state(self, text: Any) -> None:
         self.state.run_state = strip_controls(str(text)).strip().upper()
+
+    def handle_run_number(self, text: Any) -> None:
+        number = strip_controls(str(text)).strip()
+        self.state.run_number = number.lstrip("0") or number  # "00127920" -> "127920"
 
     def handle_rb_number(self, text: Any) -> None:
         """`text` is IN:<NAME>:DAE:_RBNUMBER; a new experiment's runs start a
@@ -319,6 +326,7 @@ class InstrumentTracker:
                 rng=self.flavour_rng,
                 channel=self._card_channel(),
                 auto=self.state.auto_runs > 0,
+                run_number=self.state.run_number,
             )
             logger.info(f"Run finishing: {notification.to_plain_text()}")
             await self.experiment_channel.broadcast(notification)
@@ -417,7 +425,7 @@ class InstrumentTracker:
                 self.state.stall_warned = True
                 notification = collection_stalled(
                     self.instrument.name, self.instrument.beam_target, stalled_for, time_now,
-                    channel=self._card_channel(),
+                    channel=self._card_channel(), run_number=self.state.run_number,
                 )
                 logger.info(f"Stall Warning: {notification.to_plain_text()}")
                 await self.experiment_channel.broadcast(notification)

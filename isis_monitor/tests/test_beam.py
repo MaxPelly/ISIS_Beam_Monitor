@@ -747,7 +747,7 @@ async def test_run_loop_subscribes_and_dispatches_updates(mock_config, mock_chan
 
     assert set(server.subscriptions[0]["pvs"]) == {
         mock_config.ts1_beam_current_pv, mock_config.ts2_beam_current_pv,
-        mock_config.muon_beam_current_pv, PEARL_UAMPS, PEARL_TITLE, "IN:PEARL:DAE:RUNSTATE_STR",
+        mock_config.muon_beam_current_pv, PEARL_UAMPS, PEARL_TITLE, "IN:PEARL:DAE:RUNSTATE_STR", "IN:PEARL:DAE:RUNNUMBER",
     }
     sink.update_beam_state.assert_called_with("TS1", 150.0, "high")
     sink.update_health.assert_any_call("beam", "connected")
@@ -1271,6 +1271,20 @@ async def test_auto_target_comes_from_recent_runs_once_there_are_enough(mock_con
     await m._handle_update({"pv": PEARL_UAMPS, "value": 60.5})
     card = exp_channel.broadcast.call_args[0][0]
     assert dict(card.facts)["Collected"] == "60.5 / 60 µA·h (auto)"
+
+
+async def test_finishing_and_stall_cards_name_the_run_number(mock_config, mock_channels):
+    _, exp_channel = mock_channels
+    m = stall_monitor(replace(mock_config, finish_warning_minutes=0), mock_channels)
+    await m._handle_update({"pv": "IN:PEARL:DAE:RUNNUMBER", "text": "00127920"})
+    now = datetime.now(timezone.utc)
+    _seed_collected_baseline(m, now, 100.0)
+    tracker(m).state.current_counts = 100.0
+    await m._check_collection_progress(now)
+    await m._check_collection_progress(now + timedelta(seconds=1))
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 1001.0})
+    stalled, finishing = (c[0][0] for c in exp_channel.broadcast.call_args_list)
+    assert dict(stalled.facts)["Run number"] == dict(finishing.facts)["Run number"] == "127920"
 
 
 async def test_fixed_target_ignores_run_totals(mock_config, mock_channels):

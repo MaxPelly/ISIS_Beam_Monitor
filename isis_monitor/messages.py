@@ -217,8 +217,10 @@ def run_finishing(
     rng: Optional[random.Random] = None,
     channel: str = "",
     auto: bool = False,  # counts_target came from recent runs (notify_counts = auto)
+    run_number: str = "",
 ) -> Notification:
-    facts = [("Collected", f"{counts_collected:.1f} / {counts_target:g} µA·h{' (auto)' if auto else ''}")]
+    facts = [("Run number", run_number)] if run_number else []
+    facts.append(("Collected", f"{counts_collected:.1f} / {counts_target:g} µA·h{' (auto)' if auto else ''}"))
     # µA·h collected per hour is simply the average beam current, in µA.
     facts.append(("Rate", f"{rate_per_second * 3600:.1f} µA"))
     if counts_collected >= counts_target:
@@ -242,11 +244,13 @@ def run_finishing(
 
 
 def collection_stalled(
-    instrument: str, beam_target: str, stalled_for: timedelta, time_now: datetime, channel: str = ""
+    instrument: str, beam_target: str, stalled_for: timedelta, time_now: datetime, channel: str = "",
+    run_number: str = "",
 ) -> Notification:
     return Notification(
         title=f"{instrument}: Data collection stalled",
         text=f"No µA·h collected for {fmt_duration(stalled_for)} while {beam_target} beam is on.",
+        facts=[("Run number", run_number)] if run_number else [],
         severity=Severity.WARNING,
         emoji="⚠️",
         timestamp=time_now,
