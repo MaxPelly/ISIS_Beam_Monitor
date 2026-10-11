@@ -192,9 +192,14 @@ class InstrumentTracker:
         between experiments doesn't end one."""
         rb = strip_controls(str(text)).strip()
         state = self.state
-        if rb in ("", "0"):
+        if not rb:
             return
         unwatched, state.rb_resync = state.rb_resync, False
+        if rb == "0":
+            if unwatched and state.rb_number:  # the experiment ended while the daemon wasn't watching
+                state.exp_partial = True
+                self._save_experiment()
+            return
         if rb == state.rb_number:
             return
         old_rb, notification, new_first_run = state.rb_number, None, False
@@ -206,7 +211,7 @@ class InstrumentTracker:
             started = state.run_started_at
             fresh = started is not None and time_now - started <= NEW_EXPERIMENT_RUN_WINDOW
             last = state.current_counts if state.run_rb == old_rb and state.current_counts > 0 and not fresh else 0.0
-            if not last:
+            if not last and state.run_rb == old_rb:  # not a run already counted for an older one
                 state.run_rb, new_first_run = rb, True
             runs = state.exp_runs + (last > 0)
             if runs and state.exp_since is not None:

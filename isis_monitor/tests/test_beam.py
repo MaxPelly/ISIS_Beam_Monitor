@@ -1428,6 +1428,40 @@ async def test_new_experiments_first_run_gets_the_fallback_target(mock_config, m
     assert (tracker(m).state.run_target, tracker(m).state.auto_runs) == (30.0, 0)
 
 
+@pytest.mark.parametrize("resent, partial", [("0", True), ("A", False)])
+async def test_rb_zero_resent_on_connect(mock_config, mock_channels, resent, partial):
+    """Between experiments the RB number is often "0": re-sent on connect it
+    means A ended unwatched, but the next experiment's start is still seen."""
+    _, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+    await m._handle_update(rb("Z"))
+    await m._handle_update(rb("A"))  # A's start is seen: its figures are exact
+    await m._handle_update(title("A1"))
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 50.0})
+    _age_run(m)
+    tracker(m).resubscribed()
+    await m._handle_update(rb(resent))
+    await m._handle_update(rb("B"))
+    assert dict(_experiment_cards(exp_channel)[-1].facts)["Runs"] == ("at least 1" if partial else "1")
+    assert tracker(m).state.exp_partial is False
+
+
+async def test_corrected_rb_number_doesnt_count_the_last_run_again(mock_config, mock_channels):
+    _, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+    await m._handle_update(rb("Z"))
+    await m._handle_update(rb("A"))  # A's start is seen: its figures are exact
+    await m._handle_update(title("A1"))
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 50.0})
+    _age_run(m)
+    await m._handle_update(rb("B"))  # a typo, corrected to C
+    await m._handle_update(rb("C"))
+    await _finish_runs(m, 50.0, 40.0)  # A1 ends; C's first run collects 40
+    await m._handle_update(rb("D"))
+    a, c = (dict(card.facts) for card in _experiment_cards(exp_channel))
+    assert (a["Runs"], c["Runs"], c["Total collected"]) == ("1", "1", "40.0 µA·h")
+
+
 async def test_experiment_progress_survives_a_restart(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
