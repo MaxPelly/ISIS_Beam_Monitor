@@ -226,9 +226,8 @@ class BeamMonitor:
         self.pv_to_run_number: Dict[str, InstrumentTracker] = {
             t.instrument.run_number_pv: t for t in self.instruments.values()
         }
-        # Only auto targets need the experiment's RB number.
         self.pv_to_rb_number: Dict[str, InstrumentTracker] = {
-            t.instrument.rb_number_pv: t for t in self.instruments.values() if t.instrument.auto_counts
+            t.instrument.rb_number_pv: t for t in self.instruments.values()
         }
 
     @staticmethod
@@ -318,7 +317,7 @@ class BeamMonitor:
                 self.pv_to_run_number[pv].handle_run_number(text)
 
             case {"pv": pv, "text": text} if pv in self.pv_to_rb_number:
-                self.pv_to_rb_number[pv].handle_rb_number(text)
+                await self.pv_to_rb_number[pv].handle_rb_number(text, time_now)
 
     def restore_instruments(self, saved: Dict[str, dict]) -> None:
         """Seed each tracker from DaemonState's restored per-instrument state."""

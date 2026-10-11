@@ -359,6 +359,29 @@ def daily_summary(
     )
 
 
+def experiment_finished(
+    instrument: str, rb_number: str, runs: int, uah: float, duration: timedelta, partial: bool,
+    time_now: datetime, channel: str = "",
+) -> Notification:
+    """On an instrument's RB number changing: the experiment it ended. `partial`
+    means it had started before the daemon saw it, so its totals are only the runs since."""
+    at_least = "at least " if partial else ""
+    return Notification(
+        title=f"{instrument}: Experiment finished",
+        text=f"RB {rb_number}",
+        emoji="📋",
+        facts=[
+            ("Runs", f"{at_least}{runs}"),
+            ("Total collected", f"{at_least}{uah:.1f} µA·h"),
+            ("Average run", f"{uah / runs:.1f} µA·h"),
+            ("Duration", f"{at_least}{fmt_duration(duration)}"),
+        ],
+        timestamp=time_now,
+        channel=channel,
+        topic=instrument,
+    )
+
+
 def run_milestone(
     instrument: str,
     run_count: int,

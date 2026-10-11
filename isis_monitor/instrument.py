@@ -11,7 +11,10 @@ from typing import Any, Callable, Deque, Optional, Sequence, Tuple
 
 from isis_monitor.config import InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
-from isis_monitor.messages import collection_resumed, collection_stalled, run_finishing, run_milestone, run_started, strip_controls
+from isis_monitor.messages import (
+    collection_resumed, collection_stalled, experiment_finished, run_finishing, run_milestone, run_started,
+    strip_controls,
+)
 from isis_monitor.notifiers import NotificationChannel
 
 logger = logging.getLogger(__name__)
@@ -92,8 +95,13 @@ class InstrumentState:
     auto_runs: int = 0  # how many runs an auto run_target came from; 0 = the fallback
     # Completed runs' totals (oldest first), for auto targets
     run_totals: Deque[float] = field(default_factory=lambda: deque(maxlen=AUTO_HISTORY))
-    rb_number: str = ""  # the experiment's, for auto targets; "" until known
+    rb_number: str = ""  # the experiment's; "" until known
     run_rb: str = ""  # rb_number when this run started; its total only counts for that experiment
+    # The experiment's completed runs so far, for its summary card
+    exp_since: Optional[datetime] = None  # when its RB number was first seen
+    exp_partial: bool = True  # whether it had started before then (the daemon saw no change to it)
+    exp_runs: int = 0
+    exp_uah: float = 0.0
 
     run_state: str = ""  # IN:<NAME>:DAE:RUNSTATE_STR; "" until known
     # IN:<NAME>:DAE:RUNNUMBER, for cards sent mid-run (it changes at BEGIN,
@@ -154,8 +162,14 @@ class InstrumentTracker:
     def _save_target(self) -> None:
         if self.sink:
             self.sink.update_target(
-                self.instrument.name, self.state.run_target, self.state.auto_runs,
-                list(self.state.run_totals), self.state.rb_number, self.state.run_rb,
+                self.instrument.name, self.state.run_target, self.state.auto_runs, list(self.state.run_totals)
+            )
+
+    def _save_experiment(self) -> None:
+        if self.sink:
+            s = self.state
+            self.sink.update_experiment(
+                self.instrument.name, s.rb_number, s.run_rb, s.exp_since, s.exp_partial, s.exp_runs, s.exp_uah
             )
 
     def handle_run_state(self, text: Any) -> None:
@@ -165,20 +179,38 @@ class InstrumentTracker:
         number = strip_controls(str(text)).strip()
         self.state.run_number = number.lstrip("0") or number  # "00127920" -> "127920"
 
-    def handle_rb_number(self, text: Any) -> None:
-        """`text` is IN:<NAME>:DAE:_RBNUMBER; a new experiment's runs start a
-        new run history. "0" (an instrument with no experiment) and blanks are
-        ignored, so a gap between experiments doesn't clear it."""
+    async def handle_rb_number(self, text: Any, time_now: datetime) -> None:
+        """`text` is IN:<NAME>:DAE:_RBNUMBER; a new experiment gets a summary
+        card for the last one, and starts a new run history. "0" (an
+        instrument with no experiment) and blanks are ignored, so a gap
+        between experiments doesn't end one."""
         rb = strip_controls(str(text)).strip()
-        if rb in ("", "0") or rb == self.state.rb_number:
+        state = self.state
+        if rb in ("", "0") or rb == state.rb_number:
             return
-        if self.state.rb_number:
-            logger.info(f"{self.instrument.name} RB number {self.state.rb_number} -> {rb}: run history cleared")
+        old_rb, notification = state.rb_number, None
+        if old_rb:
+            logger.info(f"{self.instrument.name} RB number {old_rb} -> {rb}: run history cleared")
+            # The run in progress is usually the old experiment's last, ended
+            # but only completed when the next one starts.
+            last = state.current_counts if state.run_rb == old_rb and state.current_counts > 0 else 0.0
+            runs = state.exp_runs + (last > 0)
+            if runs and state.exp_since is not None:
+                notification = experiment_finished(
+                    self.instrument.name, old_rb, runs, state.exp_uah + last,
+                    time_now - state.exp_since, state.exp_partial, time_now, channel=self._card_channel(),
+                )
+            state.exp_partial = False
         else:
-            self.state.run_rb = rb  # the first seen; the run in progress is taken to be its
-        self.state.run_totals.clear()  # also runs from before any RB number, e.g. while it was "0"
-        self.state.rb_number = rb
+            state.run_rb = rb  # the first seen; the run in progress is taken to be its
+        state.run_totals.clear()  # also runs from before any RB number, e.g. while it was "0"
+        state.rb_number = rb
+        state.exp_since, state.exp_runs, state.exp_uah = time_now, 0, 0.0
         self._save_target()  # the run in progress keeps its target; the next is the new experiment's
+        self._save_experiment()
+        if notification:
+            logger.info(f"Experiment finished: {notification.to_plain_text()}")
+            await self.experiment_channel.broadcast(notification)
 
     async def handle_run_name(self, b64_data: Any, time_now: datetime) -> None:
         if _is_blank(b64_data):
@@ -220,12 +252,12 @@ class InstrumentTracker:
         elif self.state.stale_counts < 0:  # kept through title edits before BEGIN
             self.state.stale_counts = self.state.current_counts
         self.state.counts_reset_at = None if from_title else time_now
-        if (
-            self.instrument.auto_counts
-            and self.state.current_counts > 0  # not an unread or retitled run
-            and self.state.run_rb == self.state.rb_number
-        ):
-            self.state.run_totals.append(self.state.current_counts)
+        if self.state.current_counts > 0 and self.state.run_rb == self.state.rb_number:  # not unread or retitled
+            if self.instrument.auto_counts:
+                self.state.run_totals.append(self.state.current_counts)
+            if self.state.rb_number:
+                self.state.exp_runs += 1
+                self.state.exp_uah += self.state.current_counts
         self.state.run_rb = self.state.rb_number
         self.state.current_counts = 0
         self.state.end_notified = False  # saved below with the new run's start
@@ -239,6 +271,7 @@ class InstrumentTracker:
         self.state.run_name = name
         self.state.run_started_at = time_now
         self._set_target()
+        self._save_experiment()
         if self.sink:
             self.sink.update_run_name(self.instrument.name, name)
             self.sink.update_counts(self.instrument.name, 0)
@@ -349,8 +382,13 @@ class InstrumentTracker:
         re-sends the same run title on connect, which then changes nothing."""
         if self.instrument.auto_counts:  # a fixed target's old totals would be stale by the time auto is on
             self.state.run_totals.extend(saved.get("run_totals", ()))
-            self.state.rb_number = str(saved.get("rb_number", ""))
-            self.state.run_rb = str(saved.get("run_rb", ""))
+        self.state.rb_number = str(saved.get("rb_number", ""))
+        self.state.run_rb = str(saved.get("run_rb", ""))
+        since = saved.get("exp_since")
+        self.state.exp_since = datetime.fromisoformat(since) if since else None
+        self.state.exp_partial = bool(saved.get("exp_partial", True))
+        self.state.exp_runs = int(saved.get("exp_runs", 0))
+        self.state.exp_uah = float(saved.get("exp_uah", 0.0))
         if saved.get("target") is None:  # DaemonState drops it if notify_counts has changed
             self._set_target()
         else:  # the run keeps the target it started with, even if its history has since been cleared

@@ -751,7 +751,8 @@ async def test_run_loop_subscribes_and_dispatches_updates(mock_config, mock_chan
 
     assert set(server.subscriptions[0]["pvs"]) == {
         mock_config.ts1_beam_current_pv, mock_config.ts2_beam_current_pv,
-        mock_config.muon_beam_current_pv, PEARL_UAMPS, PEARL_TITLE, "IN:PEARL:DAE:RUNSTATE_STR", "IN:PEARL:DAE:RUNNUMBER",
+        mock_config.muon_beam_current_pv, PEARL_UAMPS, PEARL_TITLE,
+        "IN:PEARL:DAE:RUNSTATE_STR", "IN:PEARL:DAE:RUNNUMBER", "IN:PEARL:DAE:_RBNUMBER",
     }
     sink.update_beam_state.assert_called_with("TS1", 150.0, "high")
     sink.update_health.assert_any_call("beam", "connected")
@@ -1270,7 +1271,7 @@ async def test_auto_target_comes_from_recent_runs_once_there_are_enough(mock_con
     assert tracker(m).state.run_target == 60.0
     assert dict(exp_channel.broadcast.call_args[0][0].facts)["Target"] == "60 µA·h (auto, from 3 runs)"
     exp_channel.broadcast.reset_mock()  # the new-run cards
-    sink.update_target.assert_called_with("PEARL", 60.0, 3, [60.0, 5.0, 62.0, 58.0], "", "")
+    sink.update_target.assert_called_with("PEARL", 60.0, 3, [60.0, 5.0, 62.0, 58.0])
     await m._handle_update({"pv": PEARL_UAMPS, "value": 59.0})
     exp_channel.broadcast.assert_not_called()
     await m._handle_update({"pv": PEARL_UAMPS, "value": 60.5})
@@ -1306,7 +1307,7 @@ async def test_restored_run_totals_set_the_auto_target(mock_config, mock_channel
     m = auto_monitor(mock_config, mock_channels, sink=sink)
     m.restore_instruments({"PEARL": {"run_totals": [50.0, 52.0, 48.0], "rb_number": "1", "run_rb": "1"}})
     assert tracker(m).state.run_target == 50.0
-    sink.update_target.assert_called_with("PEARL", 50.0, 3, [50.0, 52.0, 48.0], "1", "1")
+    sink.update_target.assert_called_with("PEARL", 50.0, 3, [50.0, 52.0, 48.0])
 
 
 PEARL_RB = "IN:PEARL:DAE:_RBNUMBER"
@@ -1314,12 +1315,6 @@ PEARL_RB = "IN:PEARL:DAE:_RBNUMBER"
 
 def rb(number):
     return {"pv": PEARL_RB, "text": number}
-
-
-async def test_rb_number_is_only_subscribed_for_auto_targets(mock_config, mock_channels):
-    assert make_monitor(mock_config, mock_channels).pv_to_rb_number == {}
-    m = auto_monitor(mock_config, mock_channels)
-    assert list(m.pv_to_rb_number) == [PEARL_RB]
 
 
 async def test_rb_change_mid_run_keeps_that_runs_target_through_a_restart(mock_config, mock_channels):
@@ -1357,6 +1352,57 @@ async def test_first_rb_number_mid_run_keeps_that_runs_target_through_a_restart(
     m2 = auto_monitor(mock_config, mock_channels, fallback=30)
     m2.restore_instruments(restored.instruments)
     assert (tracker(m2).state.run_target, tracker(m2).state.auto_runs) == (100.0, 3)
+
+
+def _experiment_cards(exp_channel):
+    return [c[0][0] for c in exp_channel.broadcast.call_args_list if c[0][0].title.endswith("Experiment finished")]
+
+
+async def test_rb_number_change_sends_the_old_experiments_summary(mock_config, mock_channels):
+    _, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels)  # a fixed target tracks experiments too
+    tracker(m).state.run_name = "Run 0"
+    tracker(m).state.run_started_at = now = datetime.now(timezone.utc)
+    await tracker(m).handle_rb_number("A", now - timedelta(hours=30))  # first seen: started earlier
+    await _finish_runs(m, 40.0, 60.0)
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 50.0})  # the last run ends, not yet completed
+    await tracker(m).handle_rb_number("B", now)
+    (card,) = _experiment_cards(exp_channel)
+    assert (card.title, card.text) == ("PEARL: Experiment finished", "RB A")
+    assert dict(card.facts) == {
+        "Runs": "at least 3", "Total collected": "at least 150.0 µA·h", "Average run": "50.0 µA·h",
+        "Duration": "at least 30h 0m",
+    }
+
+    # B's: its first run is the one that starts now, as the 50 was A's.
+    await _finish_runs(m, 0.0, 20.0, 30.0)
+    await tracker(m).handle_rb_number("0", now)  # no experiment: ignored
+    await tracker(m).handle_rb_number("C", now + timedelta(hours=5))
+    card = _experiment_cards(exp_channel)[-1]
+    assert dict(card.facts) == {
+        "Runs": "2", "Total collected": "50.0 µA·h", "Average run": "25.0 µA·h", "Duration": "5h 0m",
+    }
+
+    # An RB number with no runs (e.g. one corrected straight away) gets no card.
+    await tracker(m).handle_rb_number("D", now + timedelta(hours=5))
+    assert len(_experiment_cards(exp_channel)) == 2
+
+
+async def test_experiment_progress_survives_a_restart(mock_config, mock_channels):
+    _, exp_channel = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+    tracker(m).sink = state = DaemonState(instruments=[tracker(m).instrument])
+    tracker(m).state.run_name = "Run 0"
+    tracker(m).state.run_started_at = now = datetime.now(timezone.utc)
+    await tracker(m).handle_rb_number("A", now)
+    await tracker(m).handle_rb_number("B", now)
+    await _finish_runs(m, 40.0, 50.0)  # the 40 run began before B
+    restored = DaemonState(instruments=[tracker(m).instrument])
+    restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
+    m2 = make_monitor(mock_config, mock_channels)
+    m2.restore_instruments(restored.instruments)
+    await tracker(m2).handle_rb_number("C", now + timedelta(hours=1))
+    assert dict(_experiment_cards(exp_channel)[-1].facts)["Runs"] == "1"
 
 
 async def test_runs_before_any_rb_number_are_not_in_its_history(mock_config, mock_channels):

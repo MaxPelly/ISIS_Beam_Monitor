@@ -157,7 +157,9 @@ def test_run_name_and_counts_events():
     assert snap["instruments"]["WISH"] == {
         "run_name": "Run 42", "counts": 12.5, "total_runs": 0, "notify_counts": 50.0, "beam_target": "TS2",
         "run_started_at": None, "end_notified": False, "stale_counts": -1.0,
-        "run_totals": [], "rb_number": "", "run_rb": "", "target": 50.0, "auto_runs": 0, "auto": False,
+        "run_totals": [], "rb_number": "", "run_rb": "",
+        "exp_since": None, "exp_partial": True, "exp_runs": 0, "exp_uah": 0.0,
+        "target": 50.0, "auto_runs": 0, "auto": False,
     }
     assert snap["instruments"]["PEARL"]["run_name"] == ""
 
@@ -243,7 +245,9 @@ def test_instrument_state_persists_through_snapshot():
     assert restored.instruments["WISH"] == {
         "run_name": "Run 7", "counts": 3.0, "total_runs": 1, "notify_counts": 75.0, "beam_target": "TS2",
         "run_started_at": None, "end_notified": False, "stale_counts": -1.0,
-        "run_totals": [], "rb_number": "", "run_rb": "", "target": None, "auto_runs": 0, "auto": False,  # None: for the tracker to redo
+        "run_totals": [], "rb_number": "", "run_rb": "",
+        "exp_since": None, "exp_partial": True, "exp_runs": 0, "exp_uah": 0.0,
+        "target": None, "auto_runs": 0, "auto": False,  # None: for the tracker to redo
     }
     assert restored.instruments["MERLIN"]["total_runs"] == 0
     assert "PEARL" not in restored.instruments
@@ -269,15 +273,20 @@ def test_malformed_instrument_entries_in_snapshot_are_skipped():
 def test_auto_target_is_published_and_run_totals_survive_a_snapshot():
     state = DaemonState(instruments=INSTRUMENTS)
     q = state.subscribe()
-    state.update_target("WISH", 98.5, 3, [97.0, 98.5, 99.0], "2610028", "2610028")
-    state.update_target("MERLIN", 1.0, 0, [], "", "")  # unknown: ignored
+    state.update_target("WISH", 98.5, 3, [97.0, 98.5, 99.0])
+    state.update_target("MERLIN", 1.0, 0, [])  # unknown: ignored
+    since = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
+    state.update_experiment("WISH", "2610028", "2610028", since, False, 4, 400.0)
     assert [(e.event, e.payload) for e in _drain(q)] == [
         ("target", {"instrument": "WISH", "target": 98.5, "auto_runs": 3}),
     ]
     restored = DaemonState(instruments=INSTRUMENTS)
     restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
     assert restored.instruments["WISH"]["run_totals"] == [97.0, 98.5, 99.0]
-    assert restored.instruments["WISH"]["rb_number"] == restored.instruments["WISH"]["run_rb"] == "2610028"
+    wish = restored.instruments["WISH"]
+    assert {k: wish[k] for k in ("rb_number", "run_rb", "exp_since", "exp_runs", "exp_uah")} == {
+        "rb_number": "2610028", "run_rb": "2610028", "exp_since": since.isoformat(), "exp_runs": 4, "exp_uah": 400.0,
+    }
     assert (restored.instruments["WISH"]["target"], restored.instruments["WISH"]["auto_runs"]) == (98.5, 3)
     # One for another notify_counts isn't kept.
     changed = DaemonState(instruments=[InstrumentConfig("WISH", 60.0, "TS2")])

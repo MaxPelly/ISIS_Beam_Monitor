@@ -78,8 +78,13 @@ class DaemonState:
                 "end_notified": False,
                 "stale_counts": -1.0,
                 "run_totals": [],  # completed runs' µA·h, for auto targets
-                "rb_number": "",  # and the experiment they're for
+                # The current experiment, for InstrumentTracker's summary card
+                "rb_number": "",
                 "run_rb": "",
+                "exp_since": None,  # ISO timestamp
+                "exp_partial": True,
+                "exp_runs": 0,
+                "exp_uah": 0.0,
                 "target": inst.notify_counts,
                 "auto_runs": 0,  # how many runs an auto target came from; 0 = the fallback
                 "notify_counts": inst.notify_counts,
@@ -196,16 +201,23 @@ class DaemonState:
         self.instruments[instrument]["counts"] = float(counts)
         self._publish("counts", {"instrument": instrument, "counts": counts})
 
-    def update_target(
-        self, instrument: str, target: float, auto_runs: int, run_totals: List[float], rb_number: str, run_rb: str,
-    ) -> None:
+    def update_target(self, instrument: str, target: float, auto_runs: int, run_totals: List[float]) -> None:
         """The current run's target, and the run history it came from."""
         if instrument not in self.instruments:
             return
-        self.instruments[instrument].update(
-            target=float(target), auto_runs=int(auto_runs), run_totals=run_totals, rb_number=rb_number, run_rb=run_rb,
-        )
+        self.instruments[instrument].update(target=float(target), auto_runs=int(auto_runs), run_totals=run_totals)
         self._publish("target", {"instrument": instrument, "target": target, "auto_runs": auto_runs})
+
+    def update_experiment(
+        self, instrument: str, rb_number: str, run_rb: str, since: Optional[datetime], partial: bool,
+        runs: int, uah: float,
+    ) -> None:
+        """Saved, not published: only restored into the tracker."""
+        if instrument in self.instruments:
+            self.instruments[instrument].update(
+                rb_number=rb_number, run_rb=run_rb, exp_since=since.isoformat() if since else None,
+                exp_partial=bool(partial), exp_runs=int(runs), exp_uah=float(uah),
+            )
 
     def update_health(self, component: str, status: str) -> None:
         # Monitors re-report the same status on every successful poll; only
@@ -296,7 +308,7 @@ class DaemonState:
                 continue
             current = self.instruments[name]
             try:
-                started = info.get("run_started_at")
+                started, exp_since = info.get("run_started_at"), info.get("exp_since")
                 # A finishing card sent for, or a target from, another
                 # notify_counts (changed by the config save behind this
                 # restart) doesn't cover the new one, which may still be ahead.
@@ -315,6 +327,10 @@ class DaemonState:
                     "run_totals": _finite_floats(info.get("run_totals", [])),
                     "rb_number": str(info.get("rb_number", "")),
                     "run_rb": str(info.get("run_rb", "")),
+                    "exp_since": _aware_iso(exp_since) if exp_since else None,
+                    "exp_partial": bool(info.get("exp_partial", True)),
+                    "exp_runs": int(info.get("exp_runs", 0)),
+                    "exp_uah": float(info.get("exp_uah", 0.0)),
                 }
                 # None has the tracker work the target out again (see InstrumentTracker.restore).
                 restored.update(
