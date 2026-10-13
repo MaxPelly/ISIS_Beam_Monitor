@@ -216,16 +216,17 @@ def test_build_channels_only_configured_webhooks(tmp_path):
     assert isinstance(mcr.notifiers[0], TeamsNotifier)
 
 
-def test_build_channels_adds_the_push_webhook_to_every_channel(tmp_path):
+def test_build_channels_shares_one_push_webhook_and_session(tmp_path):
+    session = MagicMock()
     channels = main.build_channels(
         _config(tmp_path, beam_teams_url="http://beam", push_url="http://push", push_secret=b"s" * 32, push_timeout=1),
-        dummy=False,
+        dummy=False, session=session,
     )
-    for ch in channels:
-        push = ch.notifiers[-1]
-        assert isinstance(push, WebhookNotifier)
-        assert (push.webhook_url, push.secret, push.timeout) == ("http://push", b"s" * 32, 1)
+    (push,) = {ch.notifiers[-1] for ch in channels}  # one notifier, so one queue: the feed keeps its order
+    assert isinstance(push, WebhookNotifier)
+    assert (push.webhook_url, push.secret, push.timeout) == ("http://push", b"s" * 32, 1)
     assert [type(n) for n in channels[0].notifiers] == [TeamsNotifier, WebhookNotifier]
+    assert channels[0].notifiers[0]._session is push._session is session
 
 
 # The Teams payload's channel, which Power Automate flows route on, for one
@@ -275,10 +276,11 @@ async def test_teams_channel_field_is_unchanged_for_every_kind_of_card(tmp_path)
         return None, False, None
     with patch.object(TeamsNotifier, "_post", post):
         for channel, kind, _ in TEAMS_ROUTES:
-            await channels[channel].broadcast(_card(kind))
-            await channels[channel].flush(1)
+            channels[channel].broadcast(_card(kind))
+            (teams,) = channels[channel].notifiers
+            await teams.flush(1)
     for ch in channels.values():
-        await ch.close()
+        await ch.notifiers[0].close()
     assert posted == [route for _, _, route in TEAMS_ROUTES]
 
 
@@ -412,6 +414,21 @@ async def test_run_daemon_serves_ipc_and_shuts_down_cleanly_with_tui_attached(tm
     snap = json.loads(store.load_snapshot("daemon_state"))
     store.close()
     assert snap["beam_states"]["TS1"]["power"] == "high"
+
+
+async def test_run_daemon_closes_each_notifier_once_then_the_session(tmp_path):
+    config = _config(tmp_path, beam_teams_url="http://127.0.0.1:9/beam", push_url="http://127.0.0.1:9/ingest",
+                     push_secret=b"s" * 32)
+    args = argparse.Namespace(dummy=False, notify_current=False)
+    order = []
+    with patch.object(main.Notifier, "close", autospec=True, side_effect=lambda n, t: order.append(n)), \
+            patch.object(main.aiohttp.ClientSession, "close", autospec=True,
+                         side_effect=lambda s: order.append("session")):
+        async with daemon(config, args):
+            pass
+    # (The MCR monitor closes a session of its own earlier.)
+    assert [type(n) for n in order if n != "session"] == [TeamsNotifier, WebhookNotifier]
+    assert order[-1] == "session"
 
 
 async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):

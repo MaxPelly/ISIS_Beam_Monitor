@@ -2,7 +2,7 @@
 import asyncio
 import contextlib
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 import websockets
 
@@ -19,9 +19,9 @@ async def wait_until(predicate, timeout=2.0):
 
 
 def fake_channel(name="Test"):
-    """A NotificationChannel whose broadcast is an AsyncMock."""
+    """A NotificationChannel whose broadcast is a mock."""
     channel = NotificationChannel(name)
-    channel.broadcast = AsyncMock()
+    channel.broadcast = MagicMock()
     return channel
 
 

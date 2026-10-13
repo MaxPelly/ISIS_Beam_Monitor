@@ -139,7 +139,7 @@ class MCRNewsMonitor:
                     notification = mcr_news(
                         news, time_now=datetime.now(timezone.utc), url=self.config.mcr_page_url or None,
                     )
-                    await self.channel.broadcast(notification)
+                    self.channel.broadcast(notification)
                 except Exception:
                     logger.exception("Failed to send the MCR news notification")
 

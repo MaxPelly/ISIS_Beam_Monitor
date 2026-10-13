@@ -171,7 +171,7 @@ async def daily_summary_loop(
                     time_now=now_utc,
                     coverage_pct=target_summary.coverage_pct,
                 )
-                await beam_channel.broadcast(notification)
+                beam_channel.broadcast(notification)
         except Exception:
             logger.exception("Failed to send the daily summary")
 

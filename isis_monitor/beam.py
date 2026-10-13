@@ -159,7 +159,7 @@ class BeamChangeAggregator:
             trip_note=trip_note,
         )
         logger.info(f"State Change: {notification.to_summary()}")
-        await self.beam_channel.broadcast(notification)
+        self.beam_channel.broadcast(notification)
 
     def pending(self, state_key: str) -> Optional[_PendingChange]:
         """The unconfirmed change for a target, if one is waiting to flush."""
@@ -268,7 +268,7 @@ class BeamMonitor:
                     bt.state_key, beam=bt.channel_label, state=new_state, beam_val=beam_val, time_now=time_now,
                 )
                 logger.info(f"Startup: {notification.to_summary()}")
-                await self.beam_channel.broadcast(notification)
+                self.beam_channel.broadcast(notification)
                 beam_state.since = time_now
             else:
                 pending = self.change_aggregator.pending(bt.state_key)

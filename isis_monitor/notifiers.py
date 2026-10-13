@@ -53,12 +53,71 @@ def _retry_after(value: object, cap: float) -> Optional[float]:
 
 
 class Notifier(ABC):
-    """Abstract interface for any notification method."""
+    """Abstract interface for any notification method.
+
+    queue() only queues a notification; a worker task sends them in order,
+    so a slow or hung destination never holds up the caller (notably the
+    beam WebSocket loop, which would otherwise stop reading and miss
+    keepalive pongs) or any other notifier.
+    """
+    QUEUE_SIZE = 100  # beyond this (e.g. a long Teams outage) the oldest are dropped
+    _queue: Optional[asyncio.Queue] = None
+    _worker: Optional[asyncio.Task] = None
+    _closed = False
+
     @abstractmethod
     async def send(self, notification: Notification, route: str = ""):
         """`route` is the Teams channel name the NotificationChannel chose."""
 
-    async def close(self) -> None:
+    def queue(self, notification: Notification, route: str = "") -> None:
+        """Queue the notification for sending and return straight away."""
+        name = type(self).__name__
+        if self._closed:
+            logger.warning(f"{name} is closed; not sending: {notification.title}")
+            return
+        if self._queue is None:
+            self._queue = asyncio.Queue(maxsize=self.QUEUE_SIZE)
+            self._worker = asyncio.create_task(self._send_loop())
+        if self._queue.full():
+            dropped, _ = self._queue.get_nowait()
+            self._queue.task_done()
+            logger.warning(f"{name} send queue full; dropped notification: {dropped.title}")
+        self._queue.put_nowait((notification, route))
+
+    async def _send_loop(self) -> None:
+        while True:
+            notification, route = await self._queue.get()
+            try:
+                await self.send(notification, route)
+            except Exception:  # never let one bad send stop all later ones
+                logger.exception(f"{type(self).__name__} failed to send: {notification.title}")
+            finally:
+                self._queue.task_done()
+
+    async def flush(self, timeout: Optional[float] = None) -> bool:
+        """Wait until the queue is empty (including anything queued meanwhile);
+        False on timeout."""
+        if self._queue is None:
+            return True
+        try:
+            await asyncio.wait_for(self._queue.join(), timeout)
+            return True
+        except TimeoutError:
+            return False
+
+    async def close(self, timeout: float = 5.0) -> None:
+        """Give queued notifications up to `timeout` seconds to go out, then
+        stop the worker and release any resources."""
+        self._closed = True
+        if not await self.flush(timeout):
+            logger.warning(f"{type(self).__name__} closed with {self._queue.qsize()} notification(s) unsent")
+        if self._worker is not None:
+            self._worker.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._worker
+        await self._release()
+
+    async def _release(self) -> None:
         """Release any resources held by the notifier."""
 
 
@@ -67,27 +126,30 @@ class HTTPNotifier(Notifier):
 
     Rate limiting (429), server errors and network failures are retried
     after each of RETRY_DELAYS (or the server's Retry-After, capped at
-    MAX_RETRY_AFTER); the channel's worker waits meanwhile, so this is kept
-    short and bounded.
+    MAX_RETRY_AFTER); this notifier's later notifications wait meanwhile,
+    so this is kept short and bounded.
+
+    `session` is shared with other notifiers and closed by its owner;
+    without one, the notifier makes and closes its own.
     """
     RETRY_DELAYS = (2.0, 4.0)  # seconds before the 2nd and 3rd attempts
-    MAX_RETRY_AFTER = 60.0  # cap on a server's Retry-After, so it can't stall the channel
+    MAX_RETRY_AFTER = 60.0  # cap on a server's Retry-After, so it can't stall the queue
     LABEL = "webhook"  # how log messages refer to the destination
 
-    def __init__(self, webhook_url: str, timeout: float = 10.0):
+    def __init__(self, webhook_url: str, timeout: float = 10.0, session: Optional[aiohttp.ClientSession] = None):
         self.webhook_url = webhook_url
         self.timeout = timeout
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session = session
+        self._owns_session = False
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Lazily creates and reuses a single ClientSession."""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
+            self._owns_session = True
         return self._session
 
-    async def close(self) -> None:
-        """Close the underlying HTTP session."""
-        if self._session and not self._session.closed:
+    async def _release(self) -> None:
+        if self._owns_session and self._session and not self._session.closed:
             await self._session.close()
             self._session = None
 
@@ -226,13 +288,9 @@ class WebhookNotifier(HTTPNotifier):
     afresh; the payload's `id` stays the same, so a receiver can drop repeats.
     """
     LABEL = "Push webhook"
-    # Shorter than Teams': the channel's worker waits on retries, and this
-    # extra receiver shouldn't hold up the Teams cards queued behind it.
-    RETRY_DELAYS = (1.0, 2.0)
-    MAX_RETRY_AFTER = 5.0
 
-    def __init__(self, url: str, secret: bytes, timeout: float = 2.0):
-        super().__init__(url, timeout=timeout)
+    def __init__(self, url: str, secret: bytes, timeout: float = 2.0, session: Optional[aiohttp.ClientSession] = None):
+        super().__init__(url, timeout=timeout, session=session)
         self.secret = secret
 
     def _create_payload(self, notification: Notification, route: str) -> dict:
@@ -270,86 +328,27 @@ class DummyNotifier(Notifier):
 
 
 class NotificationChannel:
-    """Manages a group of notifiers for a specific topic.
+    """A category of notifications (e.g. "Beam Updates") and the notifiers
+    they go to. A notifier may belong to several channels.
 
     `route` picks the Teams channel name for each notification, which
     downstream (e.g. Power Automate) flows route on; by default it's the
     channel's own name.
-
-    broadcast() only queues a notification; a worker task sends them in
-    order, so a slow or hung webhook (up to webhook_timeout per send) never
-    holds up the caller — notably the beam WebSocket loop, which would
-    otherwise stop reading and miss keepalive pongs.
     """
-    QUEUE_SIZE = 100  # beyond this (e.g. a long Teams outage) the oldest are dropped
-    CLOSE_TIMEOUT = 5.0  # how long close() waits for queued notifications to send
 
     def __init__(self, name: str, route: Optional[Callable[[Notification], str]] = None):
         self.name = name
         self.route = route or (lambda _n: name)
         self.notifiers: List[Notifier] = []
-        self._queue: Optional[asyncio.Queue] = None
-        self._worker: Optional[asyncio.Task] = None
-        self._closed = False
 
     def add_notifier(self, notifier: Notifier):
         self.notifiers.append(notifier)
 
-    async def broadcast(self, notification: Notification):
-        """Queue the notification for every notifier and return straight away."""
+    def broadcast(self, notification: Notification) -> None:
+        """Queue the notification on every notifier and return straight away."""
         if not self.notifiers:
-            logger.debug(
-                f"Channel '{self.name}' has no notifiers configured; skipping broadcast."
-            )
+            logger.debug(f"Channel '{self.name}' has no notifiers configured; skipping broadcast.")
             return
-        if self._closed:
-            logger.warning(f"Channel '{self.name}' is closed; not sending: {notification.title}")
-            return
-        if self._queue is None:
-            self._queue = asyncio.Queue(maxsize=self.QUEUE_SIZE)
-            self._worker = asyncio.create_task(self._send_loop())
-        if self._queue.full():
-            dropped = self._queue.get_nowait()
-            self._queue.task_done()
-            logger.warning(f"Channel '{self.name}' send queue full; dropped notification: {dropped[0].title}")
-        self._queue.put_nowait((notification, self.route(notification)))
-
-    async def _send_loop(self) -> None:
-        while True:
-            notification, route = await self._queue.get()
-            try:
-                await self._send(notification, route)
-            except Exception:  # never let one bad send stop all later ones
-                logger.exception(f"Sending on channel '{self.name}' failed")
-            finally:
-                self._queue.task_done()
-
-    async def _send(self, notification: Notification, route: str) -> None:
-        """Send to all registered notifiers in parallel."""
-        results = await asyncio.gather(
-            *(n.send(notification, route) for n in self.notifiers), return_exceptions=True
-        )
-        for notifier, result in zip(self.notifiers, results):
-            if isinstance(result, Exception):
-                logger.error(f"{type(notifier).__name__} failed on channel '{self.name}': {result!r}")
-
-    async def flush(self, timeout: Optional[float] = None) -> bool:
-        """Wait until the queue is empty (including anything queued meanwhile);
-        False on timeout."""
-        if self._queue is None:
-            return True
-        try:
-            await asyncio.wait_for(self._queue.join(), timeout)
-            return True
-        except TimeoutError:
-            return False
-
-    async def close(self) -> None:
-        self._closed = True
-        if not await self.flush(self.CLOSE_TIMEOUT):
-            logger.warning(f"Channel '{self.name}' closed with {self._queue.qsize()} notification(s) unsent")
-        if self._worker is not None:
-            self._worker.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._worker
-        await asyncio.gather(*(n.close() for n in self.notifiers), return_exceptions=True)
+        route = self.route(notification)
+        for notifier in self.notifiers:
+            notifier.queue(notification, route)

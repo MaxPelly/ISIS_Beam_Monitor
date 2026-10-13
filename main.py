@@ -17,6 +17,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
+import aiohttp
+
 from isis_monitor import __version__
 from isis_monitor.beam import BeamMonitor
 from isis_monitor.config_editor import run_config_editor
@@ -36,7 +38,7 @@ from isis_monitor.daemon_state import MCR_NEWS_PLACEHOLDER, DaemonState
 from isis_monitor.ipc import IPCClient, IPCServer
 from isis_monitor.mcr import MCRNewsMonitor
 from isis_monitor.messages import Notification, set_timezone
-from isis_monitor.notifiers import DummyNotifier, NotificationChannel, TeamsNotifier, WebhookNotifier
+from isis_monitor.notifiers import DummyNotifier, NotificationChannel, Notifier, TeamsNotifier, WebhookNotifier
 from isis_monitor.storage import SQLiteStateStore
 from isis_monitor.summary import daily_summary_loop
 
@@ -49,6 +51,7 @@ LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 # Set in the environment of a daemon that re-exec'd itself (see restart_process).
 RESTARTED_ENV = "ISIS_MONITOR_RESTARTED"
 LOOP_STOP_TIMEOUT = 5.0  # seconds run_daemon's loops get to exit after stop_event
+CLOSE_TIMEOUT = 5.0  # seconds the notifiers get to send what's queued, on shutdown
 IPC_REQUEST_TIMEOUT = 10.0  # for the TUI's sync and `stop`; a stuck daemon mustn't hang them
 
 
@@ -161,24 +164,29 @@ async def run_until_stopped(coro, stop_event: asyncio.Event) -> None:
         task.result()
 
 
-def build_channels(config, dummy: bool):
+def build_channels(config, dummy: bool, session: Optional[aiohttp.ClientSession] = None):
     """The beam, experiment and MCR channels. Each picks the Teams channel
     name that downstream flows route on: the beam target's, the instrument's
-    (with `channel = instrument`) or else the NotificationChannel's own."""
+    (with `channel = instrument`) or else the NotificationChannel's own.
+
+    Each Teams webhook gets its own notifier; one dummy or push notifier is
+    shared by all three, so the push feed keeps its order. The HTTP
+    notifiers share `session`, which the caller closes."""
     own_channel = {i.name for i in config.instruments if i.channel == "instrument"}
 
     def experiment_route(n: Notification) -> str:
         return n.topic if n.topic in own_channel else "Experiment Updates"
 
+    shared: Optional[Notifier] = DummyNotifier() if dummy else None
+    if not dummy and config.push_url:
+        shared = WebhookNotifier(config.push_url, config.push_secret, timeout=config.push_timeout, session=session)
+
     def channel(name: str, url: str, route=None) -> NotificationChannel:
         ch = NotificationChannel(name, route)
-        if dummy:
-            ch.add_notifier(DummyNotifier())
-        else:
-            if url:
-                ch.add_notifier(TeamsNotifier(url, timeout=config.webhook_timeout))
-            if config.push_url:
-                ch.add_notifier(WebhookNotifier(config.push_url, config.push_secret, timeout=config.push_timeout))
+        if url and not dummy:
+            ch.add_notifier(TeamsNotifier(url, timeout=config.webhook_timeout, session=session))
+        if shared:
+            ch.add_notifier(shared)
         return ch
 
     return (
@@ -249,7 +257,8 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
     logging.getLogger().addHandler(state_log_handler)
     logger.info(f"ISIS Beam Monitor v{__version__} starting")
 
-    channels = build_channels(config, args.dummy)
+    session = aiohttp.ClientSession()  # for every HTTP notifier
+    channels = build_channels(config, args.dummy, session)
     beam_channel, exp_channel, mcr_channel = channels
     beam_monitor = BeamMonitor(
         config,
@@ -346,7 +355,11 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             store.close()
 
         await store.run(_close_db)
-        await asyncio.gather(*(ch.close() for ch in channels))
+        # Each notifier once (the push notifier is in every channel), all
+        # within one CLOSE_TIMEOUT.
+        notifiers = dict.fromkeys(n for ch in channels for n in ch.notifiers)
+        await asyncio.gather(*(n.close(CLOSE_TIMEOUT) for n in notifiers))
+        await session.close()
         logging.getLogger().removeHandler(state_log_handler)
     return restart_requested
 

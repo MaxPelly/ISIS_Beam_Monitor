@@ -220,7 +220,7 @@ class InstrumentTracker:
         self._save_experiment()
         if notification:
             logger.info(f"Experiment finished: {notification.to_summary()}")
-            await self.experiment_channel.broadcast(notification)
+            self.experiment_channel.broadcast(notification)
 
     async def handle_run_name(self, b64_data: Any, time_now: datetime) -> None:
         if _is_blank(b64_data):
@@ -299,7 +299,7 @@ class InstrumentTracker:
             prev_counts=prev_counts, time_now=time_now, target=self.state.run_target, target_note=target_note,
         )
         logger.info(f"New Run: {notification.to_summary()}")
-        await self.experiment_channel.broadcast(notification)
+        self.experiment_channel.broadcast(notification)
 
     async def handle_counts(self, raw_value: Any, time_now: datetime) -> None:
         """`raw_value` is IN:<NAME>:DAE:TOTALUAMPS: total µA·h collected this run."""
@@ -368,7 +368,7 @@ class InstrumentTracker:
                 run_number=self.state.run_number,
             )
             logger.info(f"Run finishing: {notification.to_summary()}")
-            await self.experiment_channel.broadcast(notification)
+            self.experiment_channel.broadcast(notification)
             self.state.end_notified = True
             self._save_progress()
 
@@ -477,13 +477,13 @@ class InstrumentTracker:
                     time_now=time_now, run_number=self.state.run_number,
                 )
                 logger.info(f"Stall Warning: {notification.to_summary()}")
-                await self.experiment_channel.broadcast(notification)
+                self.experiment_channel.broadcast(notification)
         else:
             if self.state.stall_warned:
                 notification = collection_resumed(
                     self.instrument.name, stalled_for=time_now - self.state.collection_stalled_since, time_now=time_now,
                 )
                 logger.info(f"Collection resumed: {notification.to_summary()}")
-                await self.experiment_channel.broadcast(notification)
+                self.experiment_channel.broadcast(notification)
             self.state.collection_stalled_since = None
             self.state.stall_warned = False

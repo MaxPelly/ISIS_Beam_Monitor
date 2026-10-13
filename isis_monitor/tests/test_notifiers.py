@@ -222,39 +222,30 @@ def test_create_payload_url_action_only_when_url_given():
 # NotificationChannel
 # ---------------------------------------------------------------------------
 
-async def test_notification_channel_routes_by_its_name_or_its_route():
+def test_notification_channel_routes_by_its_name_or_its_route():
+    notifiers = [MagicMock(), MagicMock()]
     channel = NotificationChannel("TestChannel")
-
-    mock_notifier1 = MagicMock()
-    mock_notifier1.send = AsyncMock()
-    mock_notifier2 = MagicMock()
-    mock_notifier2.send = AsyncMock()
-
-    channel.add_notifier(mock_notifier1)
-    channel.add_notifier(mock_notifier2)
-
+    for notifier in notifiers:
+        channel.add_notifier(notifier)
     notification = Notification(title="Title", text="Broadcast message")
-    await channel.broadcast(notification)
-    await channel.flush()
-
+    channel.broadcast(notification)
     # By default every notification is routed to the channel's own name.
-    mock_notifier1.send.assert_called_once_with(notification, "TestChannel")
-    mock_notifier2.send.assert_called_once_with(notification, "TestChannel")
+    for notifier in notifiers:
+        notifier.queue.assert_called_once_with(notification, "TestChannel")
 
     routed = NotificationChannel("Beam", route=lambda n: n.beam)
-    routed.add_notifier(mock_notifier1)
+    routed.add_notifier(notifiers[0])
     beam_card = Notification(title="Title", text="Text", beam="Muons")
-    await routed.broadcast(beam_card)
-    await routed.flush()
-    mock_notifier1.send.assert_called_with(beam_card, "Muons")
+    routed.broadcast(beam_card)
+    notifiers[0].queue.assert_called_with(beam_card, "Muons")
 
 
-async def test_notification_channel_empty_logs_debug(caplog):
+def test_notification_channel_empty_logs_debug(caplog):
     """Broadcast on a channel with no notifiers should log at DEBUG level."""
     channel = NotificationChannel("Beam Updates")
 
     with caplog.at_level(logging.DEBUG):
-        await channel.broadcast(Notification(title="Title", text="some message"))
+        channel.broadcast(Notification(title="Title", text="some message"))
 
     assert "Beam Updates" in caplog.text
     assert "no notifiers" in caplog.text
@@ -265,19 +256,19 @@ class _FailingNotifier(DummyNotifier):
         raise RuntimeError("webhook exploded")
 
 
-async def test_notification_channel_logs_failing_notifier_and_still_delivers(caplog):
+async def test_a_failing_notifier_doesnt_stop_the_others_or_its_own_queue(caplog):
     channel = NotificationChannel("Beam")
-    good = DummyNotifier()
-    good.send = AsyncMock()
-    channel.add_notifier(_FailingNotifier())
+    failing, good = _FailingNotifier(), _SlowNotifier(0)
+    channel.add_notifier(failing)
     channel.add_notifier(good)
 
-    await channel.broadcast(Notification(title="t", text="x"))
-    await channel.flush()
-
-    good.send.assert_awaited_once()
-    assert "_FailingNotifier failed on channel 'Beam'" in caplog.text
+    channel.broadcast(Notification(title="a", text="x"))
+    channel.broadcast(Notification(title="b", text="x"))
+    assert await failing.flush(1) and await good.flush(1)
+    assert good.sent == ["a", "b"]
+    assert "_FailingNotifier failed to send: a" in caplog.text and "_FailingNotifier failed to send: b" in caplog.text
     assert "webhook exploded" in caplog.text
+    await asyncio.gather(failing.close(), good.close())
 
 
 @pytest.mark.parametrize("error, attempts, logged", [
@@ -347,16 +338,6 @@ async def test_teams_notifier_honours_retry_after():
     sleep.assert_awaited_once_with(7.0)
 
 
-async def test_webhook_notifier_caps_retry_after_lower_than_teams():
-    notifier = WebhookNotifier("http://127.0.0.1:8765/ingest", b"secret")
-    notifier._session = make_status_session(429, 429, 429, headers={"Retry-After": "60"})
-
-    with patch("isis_monitor.notifiers.asyncio.sleep", new=AsyncMock()) as sleep:
-        await notifier.send(Notification(title="t", text="x"))
-
-    assert [c.args[0] for c in sleep.await_args_list] == [5.0, 5.0]
-
-
 def test_retry_after_parsing():
     in_30s = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=30), usegmt=True)
 
@@ -370,22 +351,17 @@ def test_retry_after_parsing():
         assert _retry_after(bad, 60.0) is None, bad
 
 
-async def test_closing_the_channel_cancels_a_send_waiting_to_retry():
+async def test_closing_cancels_a_send_waiting_to_retry():
     notifier = TeamsNotifier("http://example.invalid/hook")
     notifier._session = make_status_session(503, 200)
-    channel = NotificationChannel("Beam")
-    channel.add_notifier(notifier)
-
-    with patch.object(TeamsNotifier, "RETRY_DELAYS", (60.0, 60.0)), \
-            patch.object(NotificationChannel, "CLOSE_TIMEOUT", 0.05):
-        await channel.broadcast(Notification(title="t", text="x"))
+    with patch.object(TeamsNotifier, "RETRY_DELAYS", (60.0, 60.0)):
+        notifier.queue(Notification(title="t", text="x"))
         await asyncio.sleep(0)  # let the worker make its first attempt
-        await asyncio.wait_for(channel.close(), timeout=2)
-
+        await asyncio.wait_for(notifier.close(0.05), timeout=2)
     assert notifier._session.post.call_count == 1
 
 
-async def test_teams_notifier_reuses_and_closes_session():
+async def test_teams_notifier_reuses_and_closes_its_own_session():
     notifier = TeamsNotifier("http://example.invalid/hook")
     session = await notifier._get_session()
     assert await notifier._get_session() is session
@@ -395,14 +371,12 @@ async def test_teams_notifier_reuses_and_closes_session():
     await notifier.close()  # idempotent
 
 
-async def test_notification_channel_close_closes_all_notifiers():
-    channel = NotificationChannel("Beam")
-    teams = TeamsNotifier("http://example.invalid/hook")
-    await teams._get_session()
-    channel.add_notifier(teams)
-    channel.add_notifier(DummyNotifier())  # base-class close() is a no-op
-    await channel.close()
-    assert teams._session is None
+async def test_a_shared_session_is_left_to_its_owner():
+    async with aiohttp.ClientSession() as session:
+        notifier = TeamsNotifier("http://example.invalid/hook", session=session)
+        assert await notifier._get_session() is session
+        await notifier.close()
+        assert not session.closed
 
 
 class _SlowNotifier(Notifier):
@@ -420,54 +394,48 @@ async def test_broadcast_returns_without_waiting_for_a_slow_webhook():
     channel = NotificationChannel("Beam")
     slow = _SlowNotifier(10)
     channel.add_notifier(slow)
-    await asyncio.wait_for(channel.broadcast(Notification(title="a", text="")), 0.1)
+    channel.broadcast(Notification(title="a", text=""))
     assert slow.sent == []
-    channel.CLOSE_TIMEOUT = 0.05
-    await channel.close()  # gives up on the unsent one rather than hanging
+    await asyncio.wait_for(slow.close(0.05), 1)  # gives up on the unsent one rather than hanging
+
+
+async def test_a_hung_notifier_doesnt_delay_the_others():
+    """A Teams webhook that never answers doesn't hold up push, or the reverse."""
+    for hung_first in (True, False):
+        hung, quick = _SlowNotifier(10), _SlowNotifier(0)
+        channel = NotificationChannel("Beam")
+        for notifier in (hung, quick) if hung_first else (quick, hung):
+            channel.add_notifier(notifier)
+        channel.broadcast(Notification(title="a", text=""))
+        channel.broadcast(Notification(title="b", text=""))
+        assert await quick.flush(1)
+        assert quick.sent == ["a", "b"] and hung.sent == []
+        await asyncio.gather(hung.close(0.01), quick.close())
 
 
 async def test_queued_notifications_are_sent_in_order_and_flushed_on_close():
-    channel = NotificationChannel("Beam")
     slow = _SlowNotifier(0.01)
-    channel.add_notifier(slow)
     for title in "abc":
-        await channel.broadcast(Notification(title=title, text=""))
-    await channel.close()
+        slow.queue(Notification(title=title, text=""))
+    await slow.close()
     assert slow.sent == ["a", "b", "c"]
 
 
 async def test_full_queue_drops_the_oldest_notification(caplog):
-    channel = NotificationChannel("Beam")
-    channel.QUEUE_SIZE = 2
     slow = _SlowNotifier(0.05)
-    channel.add_notifier(slow)
+    slow.QUEUE_SIZE = 2
     for title in "abcd":
-        await channel.broadcast(Notification(title=title, text=""))
-    await channel.close()
-    # broadcast() doesn't yield, so all four arrive before the worker takes one.
+        slow.queue(Notification(title=title, text=""))
+    await slow.close()
+    # queue() doesn't yield, so all four arrive before the worker takes one.
     assert slow.sent == ["c", "d"]
     assert "dropped notification: a" in caplog.text and "dropped notification: b" in caplog.text
 
 
-async def test_worker_survives_an_unexpected_send_error(caplog):
-    channel = NotificationChannel("Beam")
+async def test_queue_after_close_is_ignored(caplog):
     slow = _SlowNotifier(0)
-    channel.add_notifier(slow)
-    with patch.object(channel, "_send", side_effect=[RuntimeError("boom"), None]) as send:
-        await channel.broadcast(Notification(title="a", text=""))
-        await channel.broadcast(Notification(title="b", text=""))
-        await channel.flush(1)
-    assert send.await_count == 2
-    assert "Sending on channel 'Beam' failed" in caplog.text
-    await channel.close()
-
-
-async def test_broadcast_after_close_is_ignored(caplog):
-    channel = NotificationChannel("Beam")
-    slow = _SlowNotifier(0)
-    channel.add_notifier(slow)
-    await channel.close()
-    await channel.broadcast(Notification(title="late", text=""))
+    await slow.close()
+    slow.queue(Notification(title="late", text=""))
     await asyncio.sleep(0.01)
-    assert slow.sent == [] and channel._worker is None
-    assert "is closed; not sending: late" in caplog.text
+    assert slow.sent == [] and slow._worker is None
+    assert "_SlowNotifier is closed; not sending: late" in caplog.text
