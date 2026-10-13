@@ -22,9 +22,8 @@ experiment_teams_url =
 # README grants its own user read access by ACL). Relative to this file's
 # directory; with the push_site submodule, the site's own copy is shared.
 # secret_file = push_site/push.secret
-# Seconds before each attempt is abandoned (0.5-30). Kept short because a slow
-# receiver delays the Teams cards queued behind it (up to 3 attempts, 1s and
-# 2s apart, or a Retry-After of at most 5s).
+# Seconds before each attempt is abandoned (0.5-30). A slow receiver only
+# delays later push notifications, not the Teams cards.
 # timeout = 2
 
 # One section per monitored instrument; run notifications for all of them go
