@@ -15,6 +15,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 import pytest
 
 import main
+from isis_monitor import messages
 from isis_monitor.config import AppConfig, InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.ipc import IPCClient
@@ -226,6 +227,57 @@ def test_build_channels_adds_the_push_webhook_to_every_channel(tmp_path):
         assert isinstance(push, WebhookNotifier)
         assert (push.webhook_url, push.secret, push.timeout) == ("http://push", b"s" * 32, 1)
     assert [type(n) for n in channels[0].notifiers] == [TeamsNotifier, WebhookNotifier]
+
+
+# The Teams payload's channel, which Power Automate flows route on, for one
+# card of each kind. These are the values from before routing moved out of
+# Notification (1.1.1); they mustn't change.
+TEAMS_ROUTES = [
+    ("beam", "beam_change", "TS1"),
+    ("beam", "startup_status", "Muons"),
+    ("beam", "daily_summary", "TS2"),
+    ("exp", "run_started", "Experiment Updates"),
+    ("exp", "run_started_own_channel", "WISH"),
+    ("exp", "experiment_finished_own_channel", "WISH"),
+    ("mcr", "mcr_news", "MCR News"),
+]
+
+
+def _card(kind):
+    now = datetime.now(timezone.utc)
+    return {
+        "beam_change": lambda: messages.beam_change(
+            "TS1", "high", "off", 0, 150, 140, timedelta(hours=1), now, channel="TS1"),
+        "startup_status": lambda: messages.startup_status("Muon", "high", 5, now, channel="Muons"),
+        "daily_summary": lambda: messages.daily_summary("TS2", 99, 0, timedelta(hours=9), "", {}, now),
+        "run_started": lambda: messages.run_started("PEARL", "run", "old", timedelta(hours=1), 5, now, 10),
+        "run_started_own_channel": lambda: messages.run_started(
+            "WISH", "run", "old", timedelta(hours=1), 5, now, 10, channel="WISH"),
+        "experiment_finished_own_channel": lambda: messages.experiment_finished(
+            "WISH", "123", 2, 5, timedelta(hours=1), False, now, channel="WISH"),
+        "mcr_news": lambda: messages.mcr_news("news", now),
+    }[kind]()
+
+
+async def test_teams_channel_field_is_unchanged_for_every_kind_of_card(tmp_path):
+    config = _config(
+        tmp_path, beam_teams_url="http://beam", experiment_teams_url="http://exp", news_teams_url="http://news",
+        instruments=[InstrumentConfig("PEARL", 100, "TS1"), InstrumentConfig("WISH", 100, "TS2", channel="instrument")],
+    )
+    beam, exp, mcr = main.build_channels(config, dummy=False)
+    channels = {"beam": beam, "exp": exp, "mcr": mcr}
+    posted = []
+
+    async def post(self, payload):
+        posted.append(payload["attachments"][0]["content"]["channel"])
+        return None, False, None
+    with patch.object(TeamsNotifier, "_post", post):
+        for channel, kind, _ in TEAMS_ROUTES:
+            await channels[channel].broadcast(_card(kind))
+            await channels[channel].flush(1)
+    for ch in channels.values():
+        await ch.close()
+    assert posted == [route for _, _, route in TEAMS_ROUTES]
 
 
 # ---------------------------------------------------------------------------
