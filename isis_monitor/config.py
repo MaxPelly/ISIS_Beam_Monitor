@@ -29,7 +29,7 @@ BEAM_SECTION_PREFIX = "BEAM:"
 CHANNEL_MODES = ("experiment", "instrument")
 
 INSTRUMENT_SECTION_PREFIX = "INSTRUMENT:"
-_INSTRUMENT_KEYS = ("notify_counts", "beam_target", "channel")
+INSTRUMENT_KEYS = ("notify_counts", "beam_target", "channel")  # besides the name, from the section
 # [NOTIFICATIONS] keys the TUI may edit, mapped to their AppConfig field.
 EDITABLE_NOTIFICATION_KEYS = {
     "timezone": "notifications_timezone",
@@ -38,7 +38,7 @@ EDITABLE_NOTIFICATION_KEYS = {
     "finish_warning_minutes": "finish_warning_minutes",
     "summary_time": "summary_time",
 }
-_EDITABLE_INSTRUMENT_KEYS = ("name", *_INSTRUMENT_KEYS)
+_EDITABLE_INSTRUMENT_KEYS = ("name", *INSTRUMENT_KEYS)
 _WEEK_MINUTES = 7 * 24 * 60
 # (min, max, whether min itself is excluded) for numeric settings, which also
 # rejects nan and inf. Out-of-range values would busy-loop (0 intervals),
@@ -221,7 +221,7 @@ def _warn_unknown(parser: configparser.ConfigParser, config_path: Path) -> None:
     unknown = []
     for section in parser.sections():
         upper = section.upper()
-        keys = (_INSTRUMENT_KEYS if upper.startswith(INSTRUMENT_SECTION_PREFIX)
+        keys = (INSTRUMENT_KEYS if upper.startswith(INSTRUMENT_SECTION_PREFIX)
                 else _BEAM_KEYS if upper.startswith(BEAM_SECTION_PREFIX) else known.get(section))
         if keys is None:
             unknown.append(f"[{section}]")
@@ -541,7 +541,7 @@ def _apply_settings(parser: configparser.ConfigParser, settings: Any) -> None:
         if parser.has_section(section):
             raise ConfigError(f"Instrument {inst['name'].strip().upper()} is defined more than once")
         parser.add_section(section)
-        for key in _INSTRUMENT_KEYS:
+        for key in INSTRUMENT_KEYS:
             if inst.get(key, "").strip():
                 parser.set(section, key, inst[key].strip())
 

@@ -8,11 +8,11 @@ None if input was closed — so the editing logic can be tested without one.
 import copy
 from typing import Awaitable, Callable, List, Optional
 
+from isis_monitor.config import INSTRUMENT_KEYS
+
 ReadLine = Callable[[str], Awaitable[Optional[str]]]
 Write = Callable[[str], None]
 Request = Callable[[dict], Awaitable[dict]]
-
-_INSTRUMENT_FIELDS = ("name", "notify_counts", "beam_target", "channel")
 
 
 class _InputClosed(Exception):
@@ -70,10 +70,10 @@ def describe_changes(original: dict, edited: dict) -> List[str]:
     for name, inst in after_by_name.items():
         old = before_by_name.get(name)
         if old is None:
-            fields = ", ".join(f"{f}={inst.get(f, '')}" for f in _INSTRUMENT_FIELDS[1:])
+            fields = ", ".join(f"{f}={inst.get(f, '')}" for f in INSTRUMENT_KEYS)
             changes.append(f"  + {name} ({fields})")
             continue
-        for f in _INSTRUMENT_FIELDS[1:]:
+        for f in INSTRUMENT_KEYS:
             if inst.get(f, "") != old.get(f, ""):
                 changes.append(f"  {name} {f}: {old.get(f, '')} → {inst.get(f, '')}")
     changes.extend(f"  - {name}" for name in before_by_name if name not in after_by_name)
