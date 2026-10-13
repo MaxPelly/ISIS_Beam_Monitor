@@ -14,7 +14,7 @@ This is a Python application that monitors the status of the ISIS beam, experime
 - **Signed Webhook (optional)**: Can also POST every notification as HMAC-signed JSON, e.g. to the optional `push_site` for mobile push notifications (see `[PUSH]` below).
 - **Dummy Notifier**: Includes a logging-based dummy notifier for testing and development without sending actual webhooks.
 - **Concurrent Execution**: Uses `asyncio` to run beam and news monitors concurrently for real-time responsiveness.
-- **Live TUI Graph View**: Displays a rolling sparkline graph of beam current (μA) for TS1, TS2, and Muons directly in the terminal, `history_maxlen` samples long (1 hour by default). The graph is sampled every `sample_interval` (1 minute by default), fully decoupled from the beam WebSocket update rate — a silent beam produces a flat line at the last-known value.
+- **Live TUI Graph View**: Displays a rolling sparkline graph of beam current (μA) for TS1, TS2, and Muons directly in the terminal, `history_maxlen` samples long (1 hour by default). The graph is sampled every `[DAEMON] sample_interval` (1 minute by default), fully decoupled from the beam WebSocket update rate — a silent beam produces a flat line at the last-known value.
 - **TUI Instruments Panel and Config Editor**: Shows each instrument's run and progress towards its notify threshold (µA·h), and lets you edit instruments and notification settings from the TUI; the daemon validates, saves and restarts itself to apply them.
 
 ## Requirements
@@ -100,9 +100,9 @@ daily summary and the auto target history.
 [TUI]
 # Number of samples to retain per beam target (default = 60 → 1-hour rolling window at the default interval).
 # history_maxlen = 60
-# Interval in seconds between graph samples (default = 60).
-# sample_interval = 60
 ```
+
+The samples are taken every `[DAEMON] sample_interval` seconds (default 60).
 
 ### Optional `[NOTIFICATIONS]` section
 

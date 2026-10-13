@@ -8,6 +8,8 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+- `sample_interval` moves from `[TUI]` to `[DAEMON]`, since it sets how often the daemon samples beam history and saves its state.
+
 - `[WEBHOOKS]` URLs must start with `https://`, since whoever has one can post to the channel. A plain `http://` `[PUSH] url` to a host other than this one logs a warning.
 
 - On start, one warning lists every section and key in `config.ini` that isn't used, such as a typo or a setting retired by an upgrade. Before, only instrument sections were checked.

@@ -165,7 +165,6 @@ class AppConfig:
     webhook_timeout: float = _ini("TIMEOUTS_INTERVALS", 10.0)
 
     history_maxlen: int = _ini("TUI", 60)  # samples shown per beam target
-    sample_interval: float = _ini("TUI", 60.0)  # seconds between history samples
     refresh_per_second: int = _ini("TUI", 4)
     logs_maxlen: int = _ini("TUI", 50)
 
@@ -176,6 +175,8 @@ class AppConfig:
     daemon_socket_path: str = _ini("DAEMON", "isis_beam_monitor.sock", "socket_path")
     daemon_lock_file: str = _ini("DAEMON", "isis_beam_monitor.lock", "lock_file")
     retention_days: int = _ini("DAEMON", 7)
+    # Seconds between beam history samples, which are also when state is saved
+    sample_interval: float = _ini("DAEMON", 60.0)
 
     tui_reconnect_initial: float = _ini("TUI_CLIENT", 1.0, "reconnect_initial")
     tui_reconnect_max: float = _ini("TUI_CLIENT", 15.0, "reconnect_max")
@@ -377,7 +378,7 @@ def _validate(config: AppConfig, config_path: Path) -> None:
     samples = 86400 * config.retention_days / config.sample_interval
     if samples > MAX_HISTORY_SAMPLES:
         raise ConfigError(
-            f"[DAEMON] retention_days / [TUI] sample_interval would keep {samples:.0f} samples per beam "
+            f"[DAEMON] retention_days / sample_interval would keep {samples:.0f} samples per beam "
             f"in memory (at most {MAX_HISTORY_SAMPLES}); shorten retention or lengthen the interval"
         )
     if config.tui_reconnect_initial > config.tui_reconnect_max:

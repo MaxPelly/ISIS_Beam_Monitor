@@ -60,8 +60,6 @@ notify_counts = 130
 [TUI]
 # Number of samples the TUI shows per beam target (1-1000, default = 60 → 1-hour rolling window).
 # history_maxlen = 60
-# Interval in seconds between graph samples (1-3600, default = 60).
-# sample_interval = 60
 # Refresh rate for the UI (default = 4).
 # refresh_per_second = 4
 # Maximum number of log lines to show in the TUI (default = 50).
@@ -76,6 +74,9 @@ notify_counts = 130
 # socket_path = isis_beam_monitor.sock
 # Single-instance lock file for daemon mode.
 # lock_file = isis_beam_monitor.lock
+# Seconds between beam history samples, which is also how often state is
+# saved (1-3600). The TUI's graph shows one point per sample.
+# sample_interval = 60
 # Beam history retention window in days (1-365, but at most 100,000 samples per beam
 # are kept in memory, so about 69 days at the default 60s sample_interval).
 # retention_days = 7
