@@ -140,7 +140,8 @@ async def test_mcr_run_announces_news_posted_while_down(mock_config, mock_channe
     """With the news restored from before a restart, there's no baseline fetch:
     the first poll announces anything posted since."""
     monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=True, old_news="News A")
-    await run_script(monitor, feed)
+    delays = await run_script(monitor, feed)
+    assert delays == [mock_config.mcr_poll_interval]  # polled straight away, then waited
     assert mock_channel.broadcast.call_count == sent
     assert monitor.old_news == feed
 

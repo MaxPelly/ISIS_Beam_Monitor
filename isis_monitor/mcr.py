@@ -105,6 +105,7 @@ class MCRNewsMonitor:
         async with aiohttp.ClientSession(connector=connector) as session:
             # With news restored from before a restart, the first poll
             # announces anything posted since; otherwise take a baseline.
+            poll_now = self.old_news is not None
             if self.old_news is None and self.notify_current:
                 self.old_news = ""  # so the first successful poll is broadcast
             elif self.old_news is None:
@@ -117,9 +118,10 @@ class MCRNewsMonitor:
 
             failures = 0
             while True:
-                if await self._wait(self.config.mcr_poll_interval * 2 ** failures):
+                if not poll_now and await self._wait(self.config.mcr_poll_interval * 2 ** failures):
                     failures = 0
                     self._set_health("reconnecting")
+                poll_now = False
 
                 news = await self.get_news(session)
                 if news is None:
