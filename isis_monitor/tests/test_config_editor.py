@@ -71,7 +71,15 @@ async def test_edit_instrument_reprompts_for_invalid_beam_target():
     assert result["instruments"][1] == {
         "name": "WISH", "notify_counts": "75", "beam_target": "Muons", "channel": "experiment",
     }
-    assert "Beam target must be one of TS1, TS2, Muons." in term.text
+    assert "Beam target must be one of TS1, TS2, Muons, auto." in term.text
+
+
+async def test_auto_beam_target_is_stored_blank():
+    """"auto" leaves beam_target unset, so it comes from CS:INSTLIST."""
+    result, term = await edit("7", "", "", "AUTO", "", "s", "y")
+    assert result["instruments"][1]["beam_target"] == ""
+    assert "Beam target (TS1/TS2/Muons/auto) [TS2]: " in term.prompts
+    assert " 7) WISH     notify at 50 µA·h on (auto)" in render_menu(result)
 
 
 async def test_add_instrument_upper_cases_name():

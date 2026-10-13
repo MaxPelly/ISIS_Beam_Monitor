@@ -63,7 +63,9 @@ Each instrument gets its own section. Run notifications for every instrument go 
 # median of the experiment's recent runs instead, using 130 until there are enough.
 notify_counts = 130
 # Optional: TS1, TS2 or Muons — the beam reported on run cards and checked
-# before stall warnings (default = [PVS] instrument_target, itself TS1 by default).
+# before stall warnings. By default it's the instrument's target station from
+# ISIS's instrument list (CS:INSTLIST), or [PVS] instrument_target if that
+# list doesn't put it on TS1, TS2 or MUON.
 # beam_target = TS1
 # Optional: the Teams payload `channel` for this instrument's cards —
 # experiment (default) sends "Experiment Updates", instrument sends "PEARL".
@@ -135,9 +137,15 @@ The samples are taken every `[DAEMON] sample_interval` seconds (default 60).
 
 ```ini
 [PVS]
-# The beam_target for instrument sections that don't set one (default = TS1).
+# The beam_target for instruments that don't set one and that CS:INSTLIST
+# doesn't put on TS1, TS2 or MUON (or doesn't list at all) (default = TS1).
 # instrument_target = TS1
 ```
+
+The daemon also reads each instrument's PV prefix from `CS:INSTLIST`, as it isn't
+always `IN:<NAME>:` (e.g. `PEARL_SETUP` is `IN:PEARL_5B:`). It caches the list, so a
+restart starts with the right PVs; an instrument the list doesn't name (probably a
+typo) is logged and keeps `IN:<NAME>:`.
 
 ### Optional `[BEAM:<NAME>]` sections
 
@@ -228,9 +236,8 @@ Things to know:
 - If the file changed since the editor opened it (a hand edit, or another TUI saving
   first), the save is refused rather than overwriting those changes; reopen the editor.
 - Saving drops unknown keys from instrument sections and writes an explicit `channel`
-  and `beam_target` for every instrument, so
-  `[PVS] instrument_target` then only applies to sections added by hand without a
-  `beam_target`.
+  for every instrument. `beam_target` is only written when it's set; choose `auto` to
+  leave it to `CS:INSTLIST`.
 - The daemon's user needs write access to `config.ini` and its directory (for the temporary
   file and `config.ini.bak`); otherwise saving fails with a write error.
 - Each restart re-sends the beam "Monitor online" cards, as any daemon start does.

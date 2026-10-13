@@ -41,7 +41,7 @@ notify_counts = 130
     assert config.news_teams_url == "https://test.teams/news"
     assert config.beam_teams_url == "https://test.teams/beam"
     assert config.experiment_teams_url == "https://test.teams/exp"
-    assert config.instruments == [InstrumentConfig("PEARL", 130.0, "TS1")]
+    assert config.instruments == [InstrumentConfig("PEARL", 130.0)]  # beam_target from CS:INSTLIST
 
 
 def test_load_config_missing_file():
@@ -185,10 +185,6 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     (PEARL + "notify_counts = 5\nchannel = teams\n",
      r"\[INSTRUMENT:PEARL\] channel must be one of experiment, instrument"),
     (PEARL + "notify_counts = 5\n[INSTRUMENT:pearl]\nnotify_counts = 5\n", "defined more than once"),
-    ("[BEAM:TS1]\npv = IN:PEARL:DAE:TOTALUAMPS\n" + PEARL + "notify_counts = 5\n",
-     "already used by the TS1 beam"),
-    ("[beam:ts2]\npv = IN:PEARL:DAE:WDTITLE\n" + PEARL + "notify_counts = 5\n",
-     r"^\[INSTRUMENT:PEARL\] PV IN:PEARL:DAE:WDTITLE is already used by the TS2 beam"),
     ("[WEBHOOKS]\nbeam_teams_url = http://hooks.example/x\n", r"\[WEBHOOKS\] beam_teams_url must start with https://"),
     # [NOTIFICATIONS], caught at load time so a bad edit can't leave the daemon failing on restart
     (NOTIF + "timezone = Nowhere/City\n", "not a known timezone"),
@@ -265,7 +261,7 @@ notify_counts = 75
 """))
     assert config.instruments == [
         InstrumentConfig("PEARL", 200.0, "TS1"),
-        InstrumentConfig("WISH", 75.0, "TS2"),
+        InstrumentConfig("WISH", 75.0),  # instrument_target is only a fallback for CS:INSTLIST
     ]
     assert config.instruments[1].run_name_pv == "IN:WISH:DAE:WDTITLE"
 
@@ -320,7 +316,7 @@ def test_editable_settings_are_ini_strings(tmp_path):
             "timezone": "Europe/London", "debounce_seconds": "20",
             "stall_minutes": "10", "finish_warning_minutes": "15", "summary_time": "08:00",
         },
-        "instruments": [{"name": "PEARL", "notify_counts": "130", "beam_target": "TS1", "channel": "experiment"}],
+        "instruments": [{"name": "PEARL", "notify_counts": "130", "beam_target": "", "channel": "experiment"}],
     }
 
 
@@ -345,7 +341,7 @@ def test_update_config_file_round_trips_and_keeps_other_settings(tmp_path):
     assert reloaded.summary_time == "09:30" and reloaded.stall_minutes == 10.0
     assert reloaded.beam_teams_url == "https://secret"
     assert [(i.name, i.notify_counts, i.beam_target, i.channel) for i in reloaded.instruments] == [
-        ("PEARL", 200.0, "TS1", "instrument"), ("WISH", 50.0, "TS2", "experiment"),
+        ("PEARL", 200.0, None, "instrument"), ("WISH", 50.0, "TS2", "experiment"),
     ]
     assert "channel = instrument" in path.read_text()
     assert "a comment" not in path.read_text()  # documented limitation

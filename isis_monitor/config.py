@@ -108,33 +108,40 @@ class InstrumentConfig:
     """One monitored instrument, from an `[INSTRUMENT:<NAME>]` section."""
     name: str
     notify_counts: float  # total µA·h collected at which "run about to finish" is sent
-    beam_target: str  # which beam target's state to report in run cards; one of BEAM_NAMES
+    # The beam reported on run cards, one of BEAM_NAMES; None (unset) means
+    # the instrument's target station from CS:INSTLIST (see BeamMonitor).
+    beam_target: Optional[str] = None
     channel: str = "experiment"  # one of CHANNEL_MODES
     # "notify_counts = auto, N": each run's target comes from the experiment's
     # recent run totals, with notify_counts (N) used until there are enough.
     auto_counts: bool = False
     # The INI section it was read from, for error messages
     section: str = field(default="", compare=False, repr=False)
+    # Its PVs' prefix: IN:<NAME>: unless CS:INSTLIST says otherwise
+    pv_prefix: str = ""
+
+    def __post_init__(self):
+        self.pv_prefix = self.pv_prefix or f"IN:{self.name}:"
 
     @property
     def counts_pv(self) -> str:  # total µA·h collected this run
-        return f"IN:{self.name}:DAE:TOTALUAMPS"
+        return f"{self.pv_prefix}DAE:TOTALUAMPS"
 
     @property
     def run_name_pv(self) -> str:
-        return f"IN:{self.name}:DAE:WDTITLE"
+        return f"{self.pv_prefix}DAE:WDTITLE"
 
     @property
     def run_state_pv(self) -> str:  # the DAE's run state, e.g. RUNNING or SETUP
-        return f"IN:{self.name}:DAE:RUNSTATE_STR"
+        return f"{self.pv_prefix}DAE:RUNSTATE_STR"
 
     @property
     def run_number_pv(self) -> str:  # as text, e.g. "00127920"
-        return f"IN:{self.name}:DAE:RUNNUMBER"
+        return f"{self.pv_prefix}DAE:RUNNUMBER"
 
     @property
     def rb_number_pv(self) -> str:  # the experiment's RB number, as text
-        return f"IN:{self.name}:DAE:_RBNUMBER"
+        return f"{self.pv_prefix}DAE:_RBNUMBER"
 
 
 @dataclass
@@ -155,7 +162,8 @@ class AppConfig:
     push_timeout: float = _ini("PUSH", 2.0, "timeout")
     push_secret: bytes = field(default=b"", repr=False)  # set by the daemon from read_push_secret()
 
-    # The default beam_target for instrument sections that don't set one
+    # The beam_target for instruments that don't set one and that CS:INSTLIST
+    # doesn't put on TS1, TS2 or MUON (or doesn't list)
     instrument_target: str = _ini("PVS", "TS1")
     # From the [BEAM:<NAME>] sections, in BEAM_NAMES order
     beams: Tuple[BeamTargetConfig, ...] = DEFAULT_BEAMS
@@ -288,7 +296,7 @@ def _read_instruments(
         except ValueError as exc:
             raise ConfigError(f"[{section}] notify_counts: {exc}") from exc
         raw_target = parser.get(section, "beam_target", fallback="").strip()
-        beam_target = (beam_name(raw_target) or raw_target) if raw_target else config.instrument_target
+        beam_target = (beam_name(raw_target) or raw_target) if raw_target else None
         channel = parser.get(section, "channel", fallback="").strip().lower() or "experiment"
         instruments.append(InstrumentConfig(
             name, notify_counts, beam_target, channel=channel, auto_counts=auto_counts, section=section
@@ -327,27 +335,27 @@ def _check_choice(section: str, key: str, value: str, choices) -> None:
 
 
 def _validate_instruments(config: AppConfig) -> None:
-    names = set()
-    pv_owners = {}
+    # Instruments' PVs aren't checked for clashes: their prefixes are only
+    # known at runtime, and two instruments can't share one without sharing
+    # a name, which is refused below.
+    beam_pvs = {}
     for beam in config.beams:
-        if beam.pv in pv_owners:
-            raise ConfigError(f"[{BEAM_SECTION_PREFIX}{beam.name}] PV {beam.pv} is already used by {pv_owners[beam.pv]}")
-        pv_owners[beam.pv] = f"the {beam.name} beam"
+        if beam.pv in beam_pvs:
+            raise ConfigError(f"[{BEAM_SECTION_PREFIX}{beam.name}] PV {beam.pv} is already used by the "
+                              f"{beam_pvs[beam.pv]} beam")
+        beam_pvs[beam.pv] = beam.name
+    names = set()
     for inst in config.instruments:
         section = inst.section or f"{INSTRUMENT_SECTION_PREFIX}{inst.name}"
         if inst.name in names:
             raise ConfigError(f"Instrument {inst.name} is defined more than once")
         names.add(inst.name)
-        _check_choice(section, "beam_target", inst.beam_target, BEAM_NAMES)
+        if inst.beam_target is not None:
+            _check_choice(section, "beam_target", inst.beam_target, BEAM_NAMES)
         _check_choice(section, "channel", inst.channel, CHANNEL_MODES)
         # Also rejects nan and inf, which would never be reached.
         if not (math.isfinite(inst.notify_counts) and inst.notify_counts > 0):
             raise ConfigError(f"[{section}] notify_counts must be a positive number")
-        # Each PV update is routed to exactly one owner, so PVs can't be shared.
-        for pv in (inst.counts_pv, inst.run_name_pv, inst.run_state_pv, inst.run_number_pv, inst.rb_number_pv):
-            if pv in pv_owners:
-                raise ConfigError(f"[{section}] PV {pv} is already used by {pv_owners[pv]}")
-            pv_owners[pv] = f"instrument {inst.name}"
 
 
 def _validate(config: AppConfig, config_path: Path) -> None:
@@ -492,7 +500,7 @@ def editable_settings(config: AppConfig) -> dict:
             {
                 "name": inst.name,
                 "notify_counts": _format_notify_counts(inst),
-                "beam_target": inst.beam_target,
+                "beam_target": inst.beam_target or "",
                 "channel": inst.channel,
             }
             for inst in config.instruments

@@ -47,7 +47,7 @@ def render_menu(settings: dict) -> str:
     for i, inst in enumerate(settings["instruments"], start=offset):
         lines.append(
             f"  {i:>2}) {inst.get('name', ''):<8} notify at {inst.get('notify_counts', '')} µA·h"
-            f" on {inst.get('beam_target', '') or '(default)'}"
+            f" on {inst.get('beam_target', '') or '(auto)'}"
             f" · Teams channel: {inst.get('name', '') if inst.get('channel') == 'instrument' else 'Experiment Updates'}"
         )
     lines.append(
@@ -104,9 +104,11 @@ async def _edit_instrument(
     edited["notify_counts"] = await _ask_default(
         read_line, "Notify at (µA·h, or 'auto, <fallback µA·h>')", inst.get("notify_counts", "")
     )
-    edited["beam_target"] = await _ask_choice(
-        read_line, write, "Beam target", inst.get("beam_target", ""), beam_targets
+    # "auto" (stored as blank) means the instrument's target station from CS:INSTLIST.
+    target = await _ask_choice(
+        read_line, write, "Beam target", inst.get("beam_target") or "auto", [*beam_targets, "auto"]
     )
+    edited["beam_target"] = "" if target == "auto" else target
     edited["channel"] = await _ask_choice(
         read_line, write, "Teams channel", inst.get("channel", "") or "experiment", channel_modes
     )

@@ -36,13 +36,16 @@ experiment_teams_url =
 #                  using <number> until at least 3 runs have been seen; the
 #                  history restarts when IN:<NAME>:DAE:_RBNUMBER changes
 #   beam_target    (optional) TS1, TS2 or Muons: the beam reported on run cards and
-#                  checked before stall warnings (default: [PVS] instrument_target)
+#                  checked before stall warnings. By default, the instrument's target
+#                  station from ISIS's instrument list (CS:INSTLIST), or [PVS]
+#                  instrument_target if it isn't listed on TS1, TS2 or MUON
 #   channel        (optional) Teams payload channel for this instrument's cards:
 #                  experiment (default) = "Experiment Updates", or instrument =
 #                  the instrument's name
-# Progress is read from IN:<NAME>:DAE:TOTALUAMPS, the run name from
-# IN:<NAME>:DAE:WDTITLE, and the run state, run number and RB number from
-# IN:<NAME>:DAE:RUNSTATE_STR, RUNNUMBER and _RBNUMBER, all derived from the name.
+# Progress is read from <prefix>DAE:TOTALUAMPS, the run name from <prefix>DAE:WDTITLE,
+# and the run state, run number and RB number from <prefix>DAE:RUNSTATE_STR,
+# RUNNUMBER and _RBNUMBER. The prefix is the instrument's from CS:INSTLIST, which
+# is usually IN:<NAME>: (used until the list arrives, or if it doesn't name it).
 # Instruments and [NOTIFICATIONS] can also be edited from the TUI (press c); saving
 # there rewrites this file without its comments (the old file is kept as .bak).
 [INSTRUMENT:PEARL]
@@ -54,7 +57,8 @@ notify_counts = 130
 # channel = instrument
 
 [PVS]
-# Default beam_target for instrument sections that don't set one (TS1, TS2 or Muons).
+# The beam_target for instruments that don't set one and that CS:INSTLIST doesn't
+# put on TS1, TS2 or MUON (TS1, TS2 or Muons).
 # instrument_target = TS1
 
 [TUI]

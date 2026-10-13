@@ -132,7 +132,9 @@ class InstrumentTracker:
     """Tracks one instrument's runs and counts, and sends its run notifications.
 
     `beam_power` looks up a beam target's current power label, so run cards
-    and the stall check can report on the instrument's beam.
+    and the stall check can report on the instrument's beam: `beam_target`,
+    the config's if it sets one, else its target station from CS:INSTLIST
+    (see set_station), else `default_target` ([PVS] instrument_target).
     """
     def __init__(
         self,
@@ -142,8 +144,12 @@ class InstrumentTracker:
         stall_minutes: float,
         finish_warning_minutes: float = 15.0,
         sink: Optional[DaemonState] = None,
+        default_target: str = "TS1",
     ):
         self.instrument = instrument
+        self.default_target = default_target
+        self.beam_target = instrument.beam_target or default_target
+        self._station_warned = False
         self.experiment_channel = experiment_channel
         self.beam_power = beam_power
         self.stall_minutes = stall_minutes
@@ -151,8 +157,21 @@ class InstrumentTracker:
         self.sink = sink
         self.state = InstrumentState(run_target=instrument.notify_counts)
 
+    def set_station(self, station: Optional[str]) -> None:
+        """The instrument's target station from CS:INSTLIST, or None if it
+        isn't on TS1, TS2 or MUON."""
+        if self.instrument.beam_target:
+            return
+        if station is None and not self._station_warned:
+            self._station_warned = True
+            logger.warning(f"{self.instrument.name}: CS:INSTLIST doesn't put it on TS1, TS2 or MUON; using "
+                           f"{self.default_target} ([PVS] instrument_target) unless its beam_target is set")
+        self.beam_target = station or self.default_target
+        if self.sink:
+            self.sink.update_beam_target(self.instrument.name, self.beam_target)
+
     def _beam_state(self) -> str:
-        return self.beam_power(self.instrument.beam_target)
+        return self.beam_power(self.beam_target)
 
     def _set_target(self) -> None:
         """Fix the current run's target: notify_counts, or with auto_counts,
@@ -498,7 +517,7 @@ class InstrumentTracker:
             ):
                 self.state.stall_warned = True
                 notification = collection_stalled(
-                    self.instrument.name, beam_target=self.instrument.beam_target, stalled_for=stalled_for,
+                    self.instrument.name, beam_target=self.beam_target, stalled_for=stalled_for,
                     time_now=time_now, run_number=self.state.run_number,
                 )
                 logger.info(f"Stall Warning: {notification.to_summary()}")

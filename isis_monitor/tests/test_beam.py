@@ -17,6 +17,7 @@ from isis_monitor.beam import (
     _PendingChange,
 )
 from isis_monitor.instrument import STALL_CHECK_WINDOW, _fit_rate, auto_target
+from isis_monitor.tests.test_instlist import encode
 from isis_monitor.tests.helpers import FakePVWS, fake_channel, running, wait_until
 
 
@@ -733,7 +734,7 @@ async def test_run_loop_subscribes_and_dispatches_updates(mock_config, mock_chan
             await wait_until(lambda: sink.update_beam_state.called)
 
     assert set(server.subscriptions[0]["pvs"]) == {
-        TS1_PV, TS2_PV,
+        "CS:INSTLIST", TS1_PV, TS2_PV,
         MUONS_PV, PEARL_UAMPS, PEARL_TITLE,
         "IN:PEARL:DAE:RUNSTATE_STR", "IN:PEARL:DAE:RUNNUMBER", "IN:PEARL:DAE:_RBNUMBER",
     }
@@ -1032,7 +1033,7 @@ async def test_run_loop_subscribes_to_every_instruments_pvs(mock_config, mock_ch
             await wait_until(lambda: server.subscriptions)
 
     pvs = server.subscriptions[0]["pvs"]
-    assert pvs[:3] == [b.pv for b in DEFAULT_BEAMS]
+    assert pvs[:4] == ["CS:INSTLIST", *(b.pv for b in DEFAULT_BEAMS)]
     # Each instrument's RB and run numbers first, then its title before its
     # counts, so a run changed while disconnected is started by its title.
     for name in ("PEARL", "WISH"):
@@ -1041,13 +1042,14 @@ async def test_run_loop_subscribes_to_every_instruments_pvs(mock_config, mock_ch
         ]
 
 
-@pytest.mark.parametrize("pv", [TS1_PV, PEARL_UAMPS, PEARL_TITLE, "IN:PEARL:DAE:RUNSTATE_STR",
+@pytest.mark.parametrize("pv", ["CS:INSTLIST", TS1_PV, PEARL_UAMPS, PEARL_TITLE, "IN:PEARL:DAE:RUNSTATE_STR",
                                 "IN:PEARL:DAE:RUNNUMBER", "IN:PEARL:DAE:_RBNUMBER"])
 async def test_severity_only_updates_are_ignored(mock_config, mock_channels, pv):
     """PVWS sends updates with only a new severity; they mustn't read as a
     missing value (beam "unknown", a counts warning or run state "NONE")."""
     sink = MagicMock()
     m = make_monitor(mock_config, mock_channels, sink=sink)
+    sink.reset_mock()
     before = (vars(tracker(m).state).copy(), vars(m.beams["TS1"]).copy())
     await m._handle_update({"type": "update", "pv": pv, "severity": "MAJOR"})
     assert (vars(tracker(m).state), vars(m.beams["TS1"])) == before
@@ -1561,3 +1563,96 @@ def test_restored_run_name_is_cleaned_like_a_live_one(mock_config, mock_channels
     m = make_monitor(mock_config, mock_channels)
     m.restore_instruments({"PEARL": {"run_name": "Run 1\x00", "run_started_at": "2026-01-01T00:00:00+00:00"}})
     assert tracker(m).state.run_name == "Run 1"
+
+
+# ---------------------------------------------------------------------------
+# CS:INSTLIST: PV prefixes and default beam targets
+# ---------------------------------------------------------------------------
+
+def instlist(*entries):
+    """A CS:INSTLIST update listing (name, prefix, targetStation) entries."""
+    return {"pv": "CS:INSTLIST", "b64byt": encode(
+        [{"name": name, "pvPrefix": prefix, "targetStation": station} for name, prefix, station in entries]
+    )}
+
+
+def listed_monitor(mock_config, mock_channels, sink=None, **instrument):
+    """A monitor whose PEARL has no beam_target set, so it comes from CS:INSTLIST."""
+    config = replace(mock_config, instrument_target="TS2",
+                     instruments=[InstrumentConfig("PEARL", 100.0, **instrument)])
+    return make_monitor(config, mock_channels, sink=sink)
+
+
+async def test_instlist_sets_the_beam_target_and_resubscribes_a_new_prefix(mock_config, mock_channels):
+    sink = MagicMock()
+    m = listed_monitor(mock_config, mock_channels, sink=sink)
+    assert tracker(m).beam_target == "TS2"  # [PVS] instrument_target until the list comes
+    m._current_ws = AsyncMock()
+
+    await m._handle_update(instlist(("PEARL", "IN:PEARL_5B:", "MUON")))
+
+    assert tracker(m).beam_target == "Muons"
+    sink.update_beam_target.assert_called_with("PEARL", "Muons")
+    old = [f"IN:PEARL:DAE:{pv}" for pv in ("_RBNUMBER", "RUNNUMBER", "WDTITLE", "TOTALUAMPS", "RUNSTATE_STR")]
+    new = [pv.replace("IN:PEARL:", "IN:PEARL_5B:") for pv in old]
+    assert [json.loads(c.args[0]) for c in m._current_ws.send.await_args_list] == [
+        {"type": "clear", "pvs": old}, {"type": "subscribe", "pvs": new},
+    ]
+    assert set(new) <= set(m.routes) and not set(old) & set(m.routes)
+    await m._handle_update({"pv": "IN:PEARL_5B:DAE:TOTALUAMPS", "value": 12.0})
+    assert tracker(m).state.current_counts == 12.0
+
+    m._current_ws.send.reset_mock()
+    await m._handle_update(instlist(("PEARL", "IN:PEARL_5B:", "MUON")))  # re-sent on reconnect
+    m._current_ws.send.assert_not_awaited()
+
+
+async def test_instlist_misc_falls_back_to_instrument_target_with_one_warning(mock_config, mock_channels, caplog):
+    m = listed_monitor(mock_config, mock_channels)
+    for _ in range(2):
+        await m._handle_update(instlist(("PEARL", "IN:PEARL:", "MISC")))
+    assert tracker(m).beam_target == "TS2"
+    assert caplog.text.count("PEARL: CS:INSTLIST doesn't put it on TS1, TS2 or MUON") == 1
+
+
+async def test_a_configured_beam_target_wins_over_instlist(mock_config, mock_channels):
+    m = listed_monitor(mock_config, mock_channels, beam_target="TS1")
+    await m._handle_update(instlist(("PEARL", "IN:PEARL:", "MUON")))
+    assert tracker(m).beam_target == "TS1"
+
+
+async def test_an_unlisted_instrument_keeps_its_pvs_with_one_warning(mock_config, mock_channels, caplog):
+    m = listed_monitor(mock_config, mock_channels)
+    for _ in range(2):
+        await m._handle_update(instlist(("WISH", "IN:WISH:", "TS2")))
+    assert caplog.text.count("PEARL isn't in CS:INSTLIST") == 1
+    assert PEARL_UAMPS in m.routes and tracker(m).beam_target == "TS2"
+
+
+async def test_an_unreadable_instlist_changes_nothing(mock_config, mock_channels):
+    state = DaemonState(instruments=[InstrumentConfig("PEARL", 100.0)])
+    state.instlist = {"PEARL": ("IN:PEARL:", "TS1")}
+    m = listed_monitor(mock_config, mock_channels, sink=state)
+    await m._handle_update({"pv": "CS:INSTLIST", "b64byt": "!!!"})
+    assert tracker(m).beam_target == "TS1" and PEARL_UAMPS in m.routes
+    assert state.instlist == {"PEARL": ("IN:PEARL:", "TS1")}  # the last good one is kept
+
+
+async def test_the_cached_instlist_is_used_from_the_first_connection(mock_config, mock_channels):
+    state = DaemonState(instruments=[InstrumentConfig("PEARL", 100.0)])
+    state.instlist = {"PEARL": ("IN:PEARL_5B:", "Muons")}
+    async with FakePVWS([]) as server:
+        m = listed_monitor(replace(mock_config, isis_websocket_url=server.url), mock_channels, sink=state)
+        async with running(m):
+            await wait_until(lambda: server.subscriptions)
+    assert "IN:PEARL_5B:DAE:TOTALUAMPS" in server.subscriptions[0]["pvs"]
+    assert state.instruments["PEARL"]["beam_target"] == "Muons"
+
+
+async def test_a_new_instlist_is_saved_for_the_next_start(mock_config, mock_channels):
+    state = DaemonState(instruments=[InstrumentConfig("PEARL", 100.0)])
+    m = listed_monitor(mock_config, mock_channels, sink=state)
+    await m._handle_update(instlist(("PEARL", "IN:PEARL:", "TS1")))
+    restored = DaemonState()
+    restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
+    assert restored.instlist == {"PEARL": ("IN:PEARL:", "TS1")}

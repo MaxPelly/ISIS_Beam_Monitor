@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from isis_monitor import instlist
 from isis_monitor.config import BEAM_NAMES, InstrumentConfig
 
 logger = logging.getLogger(__name__)
@@ -66,9 +67,9 @@ class DaemonState:
         }
         self.mcr_news = MCR_NEWS_PLACEHOLDER
         self.logs: Deque[str] = deque(maxlen=logs_maxlen)
-        # notify_counts, auto and beam_target come from the config, for
-        # clients to display; the saved notify_counts and auto are also
-        # checked on restore. target is the current run's (see InstrumentTracker).
+        # notify_counts and auto come from the config, for clients to display,
+        # and are checked on restore; beam_target is the tracker's (see
+        # update_beam_target). target is the current run's (see InstrumentTracker).
         self.instruments: Dict[str, Dict[str, object]] = {
             inst.name: {
                 "run_name": "",
@@ -95,6 +96,8 @@ class DaemonState:
             for inst in instruments
         }
         self.run_completions: Deque[Tuple[datetime, str, float]] = deque(maxlen=2000)  # (time, instrument, µA·h)
+        # The last good CS:INSTLIST, so a restart starts with the right PV prefixes
+        self.instlist: instlist.Instruments = {}
         self.health: Dict[str, str] = {
             "daemon": "starting",
             "beam": "unknown",
@@ -209,6 +212,12 @@ class DaemonState:
         self.instruments[instrument].update(target=float(target), auto_runs=int(auto_runs), run_totals=run_totals)
         self._publish("target", {"instrument": instrument, "target": target, "auto_runs": auto_runs})
 
+    def update_beam_target(self, instrument: str, beam: str) -> None:
+        """The beam target the instrument's tracker reports on, e.g. from CS:INSTLIST."""
+        if instrument in self.instruments and self.instruments[instrument]["beam_target"] != beam:
+            self.instruments[instrument]["beam_target"] = beam
+            self._publish("beam_target", {"instrument": instrument, "beam_target": beam})
+
     def update_experiment(
         self, instrument: str, rb_number: str, run_rb: str, since: Optional[datetime],
         partial: bool, runs: int, uah: float,
@@ -256,6 +265,7 @@ class DaemonState:
             "run_completions": [
                 [ts.isoformat(), name, uah] for ts, name, uah in self.run_completions if ts >= cutoff
             ],
+            "instlist": instlist.to_snapshot(self.instlist),
         }
 
     def get_history_snapshot(self, limit: Optional[int] = None) -> dict:
@@ -294,6 +304,7 @@ class DaemonState:
         self.mcr_news = str(snap.get("mcr_news", self.mcr_news))
         self._restore_instruments(snap)
         self._restore_run_completions(snap.get("run_completions"))
+        self.instlist = instlist.from_snapshot(snap.get("instlist"))
 
     def _restore_instruments(self, snap: dict) -> None:
         """Restore run state for instruments still in the config; instruments

@@ -416,6 +416,8 @@ def _apply_event_to_tui(tui: RichTUI, message: dict) -> None:
             str(payload.get("instrument", "")),
             target=float(payload.get("target", 0.0)), auto_runs=int(payload.get("auto_runs", 0)),
         )
+    elif ev == "beam_target":
+        tui.update_instrument(str(payload.get("instrument", "")), beam_target=str(payload.get("beam_target", "")))
     elif ev == "health":
         tui.update_log(f"Health: {payload.get('component', '')} -> {payload.get('status', '')}")
 

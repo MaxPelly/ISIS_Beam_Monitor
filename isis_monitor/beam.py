@@ -5,14 +5,15 @@ import logging
 import math
 import socket
 import ssl
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import websockets
 
 from isis_monitor.config import AppConfig, BeamTargetConfig
 from isis_monitor.daemon_state import DaemonState
+from isis_monitor.instlist import INSTLIST_PV, Instruments, parse_instlist
 from isis_monitor.instrument import InstrumentTracker, PVHandler, on_field
 from isis_monitor.messages import beam_change, fmt_duration, startup_status
 from isis_monitor.notifiers import NotificationChannel
@@ -182,22 +183,64 @@ class BeamMonitor:
         self._current_ws = None
         self._close_task: Optional[asyncio.Task] = None
 
-
         self.instruments: Dict[str, InstrumentTracker] = {
             inst.name: InstrumentTracker(
                 inst, experiment_channel, self._beam_power, config.stall_minutes,
                 finish_warning_minutes=config.finish_warning_minutes,
-                sink=sink,
+                sink=sink, default_target=config.instrument_target,
             )
             for inst in config.instruments
         }
-        # Each PV's update handler, in the order they're subscribed to.
-        self.routes: Dict[str, PVHandler] = {
+        self._unlisted_warned: set = set()
+        # Start with the PV prefixes and stations last seen, until CS:INSTLIST comes.
+        self.apply_instlist(sink.instlist if sink else {})
+        for tracker in self.instruments.values():
+            if sink:
+                sink.update_beam_target(tracker.instrument.name, tracker.beam_target)
+        self._build_routes()
+
+    def _build_routes(self) -> None:
+        # Each PV's update handler, in the order they're subscribed to:
+        # CS:INSTLIST, the beams, then each instrument's (see pv_handlers).
+        self.routes: Dict[str, PVHandler] = {INSTLIST_PV: on_field("b64byt", self._handle_instlist)}
+        self.routes.update({
             bt.pv: on_field("value", lambda value, now, bt=bt: self._handle_beam_current(bt, value, now))
-            for bt in config.beams
-        }
+            for bt in self.config.beams
+        })
         for tracker in self.instruments.values():
             self.routes.update(tracker.pv_handlers())
+
+    def apply_instlist(self, listed: Instruments) -> Tuple[List[str], List[str]]:
+        """Set each instrument's PV prefix and target station from
+        CS:INSTLIST; returns the PVs to stop and start subscribing to."""
+        old, new = [], []
+        for name, tracker in self.instruments.items():
+            if name not in listed:
+                if listed and name not in self._unlisted_warned:
+                    self._unlisted_warned.add(name)
+                    logger.warning(f"{name} isn't in CS:INSTLIST (a typo?); using IN:{name}: for its PVs")
+                continue
+            prefix, station = listed[name]
+            tracker.set_station(station)
+            if prefix != tracker.instrument.pv_prefix:
+                logger.info(f"{name}: its PVs start {prefix}, from CS:INSTLIST")
+                old += tracker.pv_handlers()
+                tracker.instrument = replace(tracker.instrument, pv_prefix=prefix)
+                new += tracker.pv_handlers()
+        return old, new
+
+    async def _handle_instlist(self, b64: Any, time_now: datetime) -> None:
+        listed = parse_instlist(b64)
+        if not listed:
+            return
+        if self.sink:
+            self.sink.instlist = listed
+        old, new = self.apply_instlist(listed)
+        if new:
+            self._build_routes()
+            if self._current_ws is not None:
+                await self._current_ws.send(json.dumps({"type": "clear", "pvs": old}))
+                await self._current_ws.send(json.dumps({"type": "subscribe", "pvs": new}))
 
     @staticmethod
     def _parse_current(value: Any) -> Optional[float]:
@@ -340,8 +383,6 @@ class BeamMonitor:
             logger.exception(f"Failed to handle PV update: {data!r:.200}")
 
     async def _run_loop(self) -> None:
-        # In the routes' order: beams, then each instrument's (see pv_handlers).
-        subscribe_msg = json.dumps({"type": "subscribe", "pvs": list(self.routes)})
         logger.info(f"Beam Monitor started. Connecting to {self.data_url}...")
         interval = self.config.beam_reconnect_interval
 
@@ -370,7 +411,7 @@ class BeamMonitor:
                     self._set_health("connected")
                     for tracker in self.instruments.values():
                         tracker.resubscribed()
-                    await ws.send(subscribe_msg)
+                    await ws.send(json.dumps({"type": "subscribe", "pvs": list(self.routes)}))
                     async for raw in ws:
                         await self._handle_message(raw)
             except Exception as exc:

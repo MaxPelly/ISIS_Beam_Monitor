@@ -8,6 +8,8 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+- Each instrument's PV prefix and default beam target come from ISIS's instrument list, `CS:INSTLIST`, so instruments whose PVs aren't under `IN:<NAME>:` work. `beam_target` is now optional and best left unset; set it only for an instrument the list doesn't put on TS1, TS2 or MUON, or to override the list. `[PVS] instrument_target` changes meaning: it's now only the fallback for such an instrument (or one the list doesn't name). The config editor offers `auto` for the beam target and no longer writes an explicit one.
+
 - `sample_interval` moves from `[TUI]` to `[DAEMON]`, since it sets how often the daemon samples beam history and saves its state.
 
 - `[WEBHOOKS]` URLs must start with `https://`, since whoever has one can post to the channel. A plain `http://` `[PUSH] url` to a host other than this one logs a warning.
