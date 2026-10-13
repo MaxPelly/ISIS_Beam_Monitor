@@ -156,7 +156,8 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     ("[BEAM:TS2]\npv = AC:TS1:BEAM:CURR\n", r"\[BEAM:TS2\] PV AC:TS1:BEAM:CURR is already used by the TS1 beam"),
     ("[INSTRUMENT:WISH]\n[INSTRUMENT:WISH]\n", "Could not parse"),  # duplicate section
     # Out-of-range numbers
-    ("[TUI_CLIENT]\nreconnect_initial = 0\nreconnect_max = 5\n", "positive"),
+    ("[TUI_CLIENT]\nreconnect_initial = 0\nreconnect_max = 5\n", "reconnect_initial must be above 0 and at most 3600"),
+    ("[TUI_CLIENT]\nreconnect_max = inf\n", "reconnect_max must be above 0"),
     ("[TUI_CLIENT]\nreconnect_initial = 10\nreconnect_max = 5\n", "cannot be greater"),
     ("[TIMEOUTS_INTERVALS]\nmcr_poll_interval = 0\n", r"\[TIMEOUTS_INTERVALS\] mcr_poll_interval must be between 5"),
     ("[TIMEOUTS_INTERVALS]\nbeam_reconnect_interval = -1\n", "beam_reconnect_interval must be between"),

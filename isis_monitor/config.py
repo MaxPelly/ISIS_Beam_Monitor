@@ -37,21 +37,27 @@ EDITABLE_NOTIFICATION_KEYS = {
     "summary_time": "summary_time",
 }
 _EDITABLE_INSTRUMENT_KEYS = ("name", *_INSTRUMENT_KEYS)
-MAX_DEBOUNCE_SECONDS = 3600
-MAX_STALL_MINUTES = 7 * 24 * 60
-# (min, max) for numeric settings only edited by hand. Out-of-range values
-# would busy-loop (0 intervals), disable timeouts (aiohttp treats 0 as none),
-# crash (negative deque sizes, timedelta overflow) or exhaust memory.
+_WEEK_MINUTES = 7 * 24 * 60
+# (min, max, whether min itself is excluded) for numeric settings, which also
+# rejects nan and inf. Out-of-range values would busy-loop (0 intervals),
+# disable timeouts (aiohttp treats 0 as none), crash (negative deque sizes,
+# timedelta overflow, e.g. a huge stall_minutes at the first stall), exhaust
+# memory or, for an infinite debounce, silently stop beam cards.
 _BOUNDS = {
-    "mcr_poll_interval": (5, 86400),
-    "beam_reconnect_interval": (0.5, 3600),
-    "webhook_timeout": (1, 300),
-    "push_timeout": (0.5, 30),
-    "sample_interval": (1, 3600),
-    "history_maxlen": (1, 1_000),  # the TUI fetches this many per beam in one IPC reply
-    "refresh_per_second": (1, 60),
-    "logs_maxlen": (1, 10_000),
-    "retention_days": (1, 365),
+    "mcr_poll_interval": (5, 86400, False),
+    "beam_reconnect_interval": (0.5, 3600, False),
+    "webhook_timeout": (1, 300, False),
+    "push_timeout": (0.5, 30, False),
+    "sample_interval": (1, 3600, False),
+    "history_maxlen": (1, 1_000, False),  # the TUI fetches this many per beam in one IPC reply
+    "refresh_per_second": (1, 60, False),
+    "logs_maxlen": (1, 10_000, False),
+    "retention_days": (1, 365, False),
+    "debounce_seconds": (0, 3600, False),
+    "stall_minutes": (0, _WEEK_MINUTES, True),
+    "finish_warning_minutes": (0, _WEEK_MINUTES, False),
+    "tui_reconnect_initial": (0, 3600, True),
+    "tui_reconnect_max": (0, 3600, True),
 }
 # The daemon keeps retention_days of samples per beam in memory.
 MAX_HISTORY_SAMPLES = 100_000
@@ -347,29 +353,18 @@ def _validate(config: AppConfig, config_path: Path) -> None:
         ZoneInfo(config.notifications_timezone)
     except (KeyError, ValueError, OSError):  # ZoneInfoNotFoundError is a KeyError
         raise ConfigError(f"[NOTIFICATIONS] timezone '{config.notifications_timezone}' is not a known timezone")
-    # Bounded (which also rejects nan/inf): an infinite debounce silently stops
-    # beam cards, and a huge stall_minutes overflows timedelta at the first stall.
-    if not 0 <= config.debounce_seconds <= MAX_DEBOUNCE_SECONDS:
-        raise ConfigError(f"[NOTIFICATIONS] debounce_seconds must be between 0 and {MAX_DEBOUNCE_SECONDS}")
-    if not 0 < config.stall_minutes <= MAX_STALL_MINUTES:
-        raise ConfigError(f"[NOTIFICATIONS] stall_minutes must be above 0 and at most {MAX_STALL_MINUTES}")
-    if not 0 <= config.finish_warning_minutes <= MAX_STALL_MINUTES:
-        raise ConfigError(f"[NOTIFICATIONS] finish_warning_minutes must be between 0 and {MAX_STALL_MINUTES}")
-    for name, (low, high) in _BOUNDS.items():
+    for name, (low, high, low_excluded) in _BOUNDS.items():
         value = getattr(config, name)
-        if not low <= value <= high:  # also rejects nan
+        if not (low < value if low_excluded else low <= value) or not value <= high:  # also rejects nan
             meta = next(f.metadata for f in fields(AppConfig) if f.name == name)
-            raise ConfigError(
-                f"[{meta['section']}] {meta['key'] or name} must be between {low} and {high}, got {value}"
-            )
+            limits = f"above {low} and at most {high}" if low_excluded else f"between {low} and {high}"
+            raise ConfigError(f"[{meta['section']}] {meta['key'] or name} must be {limits}, got {value}")
     samples = 86400 * config.retention_days / config.sample_interval
     if samples > MAX_HISTORY_SAMPLES:
         raise ConfigError(
             f"[DAEMON] retention_days / [TUI] sample_interval would keep {samples:.0f} samples per beam "
             f"in memory (at most {MAX_HISTORY_SAMPLES}); shorten retention or lengthen the interval"
         )
-    if config.tui_reconnect_initial <= 0 or config.tui_reconnect_max <= 0:
-        raise ConfigError("[TUI_CLIENT] reconnect values must be positive")
     if config.tui_reconnect_initial > config.tui_reconnect_max:
         raise ConfigError("[TUI_CLIENT] reconnect_initial cannot be greater than reconnect_max")
     if config.push_url:
