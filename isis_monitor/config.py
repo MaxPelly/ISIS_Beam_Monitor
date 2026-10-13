@@ -393,7 +393,7 @@ def _validate(config: AppConfig, config_path: Path) -> None:
         raise ConfigError("[TUI_CLIENT] reconnect_initial cannot be greater than reconnect_max")
     for name in ("news_teams_url", "beam_teams_url", "experiment_teams_url"):
         # The URL is a secret (whoever has it can post), so never send it in the clear.
-        if getattr(config, name) and not getattr(config, name).startswith("https://"):
+        if getattr(config, name) and not getattr(config, name).lower().startswith("https://"):
             raise ConfigError(f"[WEBHOOKS] {name} must start with https://")
     if config.push_url:
         if not config.push_url.startswith(("http://", "https://")):

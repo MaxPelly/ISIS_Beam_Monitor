@@ -34,7 +34,7 @@ def parse_instlist(b64: object) -> Instruments:
         name = entry.get("name") if isinstance(entry, dict) else None
         prefix = entry.get("pvPrefix") if isinstance(entry, dict) else None
         if isinstance(name, str) and isinstance(prefix, str) and _PREFIX_RE.fullmatch(prefix):
-            result[name.upper()] = (prefix, _STATIONS.get(entry.get("targetStation")))
+            result[name.upper()] = (prefix, _STATIONS.get(str(entry.get("targetStation"))))
     return result
 
 

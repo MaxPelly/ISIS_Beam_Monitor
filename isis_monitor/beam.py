@@ -48,8 +48,6 @@ def _classify_ws_error(exc: BaseException) -> Tuple[str, str]:
     return "unexpected", f"unexpected error: {exc!r}"
 
 
-
-
 @dataclass
 class BeamState:
     """Per-beam runtime state."""

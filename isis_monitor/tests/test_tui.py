@@ -234,8 +234,8 @@ class TestUpdateLog:
 # ---------------------------------------------------------------------------
 
 INSTRUMENTS = {
-    "PEARL": {"run_name": "Pearl run", "counts": 65.0, "total_runs": 3, "target": 130.0, "beam_target": "TS1"},
-    "EMU": {"run_name": "", "counts": -1.0, "total_runs": 0, "target": 10.0, "beam_target": "Muons"},
+    "PEARL": {"run_name": "Pearl run", "counts": 65.0, "target": 130.0, "beam_target": "TS1"},
+    "EMU": {"run_name": "", "counts": -1.0, "target": 10.0, "beam_target": "Muons"},
 }
 
 

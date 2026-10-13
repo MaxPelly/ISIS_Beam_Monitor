@@ -357,7 +357,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
         # Each notifier once (the push notifier is in every channel), all
         # within one CLOSE_TIMEOUT.
         notifiers = dict.fromkeys(n for ch in channels for n in ch.notifiers)
-        await asyncio.gather(*(n.close(CLOSE_TIMEOUT) for n in notifiers))
+        await asyncio.gather(*(n.close(CLOSE_TIMEOUT) for n in notifiers), return_exceptions=True)
         await session.close()
         logging.getLogger().removeHandler(state_log_handler)
     return restart_requested
