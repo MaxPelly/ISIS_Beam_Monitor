@@ -8,7 +8,15 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-13
+
+Includes push site v1.0.3, whose feed keeps the newest 75 notifications of each kind (see its changelog for a `push_site.ini` change).
+
 - MCR news posted while the daemon was stopped is announced when it starts again, instead of being taken as the baseline.
+- A failure to send a beam change card is logged instead of being lost.
+- Each notification is logged on one line, and routine shutdown is logged at INFO rather than WARNING.
+- `pip install -e .` works from a checkout.
+- `.gitignore` covers `config.ini.bak` and the config editor's temporary files, which can hold webhook URLs.
 
 ## [1.1.0] - 2026-10-11
 
