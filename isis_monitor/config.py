@@ -1,6 +1,7 @@
 import configparser
 import contextlib
 import hashlib
+import ipaddress
 import logging
 import math
 import os
@@ -11,6 +12,7 @@ import tempfile
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("isis_monitor.config")
@@ -380,12 +382,28 @@ def _validate(config: AppConfig, config_path: Path) -> None:
         )
     if config.tui_reconnect_initial > config.tui_reconnect_max:
         raise ConfigError("[TUI_CLIENT] reconnect_initial cannot be greater than reconnect_max")
+    for name in ("news_teams_url", "beam_teams_url", "experiment_teams_url"):
+        # The URL is a secret (whoever has it can post), so never send it in the clear.
+        if getattr(config, name) and not getattr(config, name).startswith("https://"):
+            raise ConfigError(f"[WEBHOOKS] {name} must start with https://")
     if config.push_url:
         if not config.push_url.startswith(("http://", "https://")):
             raise ConfigError("[PUSH] url must start with http:// or https://")
         if not config.push_secret_file:
             raise ConfigError("[PUSH] secret_file is required when url is set")
+        if config.push_url.startswith("http://") and not _is_loopback(urlsplit(config.push_url).hostname or ""):
+            logger.warning("[PUSH] url is plain http:// to another host, so notifications cross the network "
+                           "unencrypted (they're signed, so can't be forged); use https:// unless it's local")
     _validate_instruments(config)
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def load_config(config_path: Path) -> AppConfig:

@@ -28,9 +28,9 @@ mcr_news_url = http://test.com/news
 isis_websocket_url = wss://test.com/ws
 
 [WEBHOOKS]
-news_teams_url = http://test.teams/news
-beam_teams_url = http://test.teams/beam
-experiment_teams_url = http://test.teams/exp
+news_teams_url = https://test.teams/news
+beam_teams_url = https://test.teams/beam
+experiment_teams_url = https://test.teams/exp
 
 [INSTRUMENT:PEARL]
 notify_counts = 130
@@ -38,9 +38,9 @@ notify_counts = 130
     config = load_config(config_file)
     assert config.mcr_news_url == "http://test.com/news"
     assert config.isis_websocket_url == "wss://test.com/ws"
-    assert config.news_teams_url == "http://test.teams/news"
-    assert config.beam_teams_url == "http://test.teams/beam"
-    assert config.experiment_teams_url == "http://test.teams/exp"
+    assert config.news_teams_url == "https://test.teams/news"
+    assert config.beam_teams_url == "https://test.teams/beam"
+    assert config.experiment_teams_url == "https://test.teams/exp"
     assert config.instruments == [InstrumentConfig("PEARL", 130.0, "TS1")]
 
 
@@ -189,6 +189,7 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
      "already used by the TS1 beam"),
     ("[beam:ts2]\npv = IN:PEARL:DAE:WDTITLE\n" + PEARL + "notify_counts = 5\n",
      r"^\[INSTRUMENT:PEARL\] PV IN:PEARL:DAE:WDTITLE is already used by the TS2 beam"),
+    ("[WEBHOOKS]\nbeam_teams_url = http://hooks.example/x\n", r"\[WEBHOOKS\] beam_teams_url must start with https://"),
     # [NOTIFICATIONS], caught at load time so a bad edit can't leave the daemon failing on restart
     (NOTIF + "timezone = Nowhere/City\n", "not a known timezone"),
     (NOTIF + "timezone = ../etc\n", "not a known timezone"),
@@ -216,6 +217,19 @@ def test_load_config_blank_numeric_value_uses_default(tmp_path):
     config = load_config(_write(tmp_path, "[DAEMON]\nretention_days =\n[TUI]\nhistory_maxlen =\n"))
     assert config.retention_days == 7
     assert config.history_maxlen == 60
+
+
+@pytest.mark.parametrize("url, warned", [
+    ("http://127.0.0.1:8765/ingest", False),
+    ("http://localhost:8765/ingest", False),
+    ("http://[::1]:8765/ingest", False),
+    ("https://push.example.org/ingest", False),
+    ("http://push.example.org/ingest", True),
+    ("http://10.0.0.5/ingest", True),
+])
+def test_push_over_plain_http_to_another_host_warns(tmp_path, caplog, url, warned):
+    load_config(_write(tmp_path, f"[PUSH]\nurl = {url}\nsecret_file = push.secret\n"))
+    assert ("[PUSH] url is plain http://" in caplog.text) is warned
 
 
 def test_load_config_resolves_relative_paths_against_the_config_dir(tmp_path):
@@ -284,7 +298,7 @@ EDITABLE_BASE = """\
 mcr_news_url = http://test.com/news
 # a comment that won't survive a rewrite
 [WEBHOOKS]
-beam_teams_url = http://secret
+beam_teams_url = https://secret
 [NOTIFICATIONS]
 stall_minutes = 10
 [INSTRUMENT:PEARL]
@@ -329,7 +343,7 @@ def test_update_config_file_round_trips_and_keeps_other_settings(tmp_path):
 
     reloaded = load_config(path)
     assert reloaded.summary_time == "09:30" and reloaded.stall_minutes == 10.0
-    assert reloaded.beam_teams_url == "http://secret"
+    assert reloaded.beam_teams_url == "https://secret"
     assert [(i.name, i.notify_counts, i.beam_target, i.channel) for i in reloaded.instruments] == [
         ("PEARL", 200.0, "TS1", "instrument"), ("WISH", 50.0, "TS2", "experiment"),
     ]

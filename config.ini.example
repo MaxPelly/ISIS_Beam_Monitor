@@ -7,6 +7,7 @@ isis_websocket_url = wss://ndaextweb4.nd.rl.ac.uk/pvws/pv
 [WEBHOOKS]
 # Webhook URLs should be kept secret. Consider restricting permissions on this file (e.g. chmod 600)
 # to prevent other users from reading it. Leave a URL blank to disable that channel's Teams notifier.
+# Each must be an https:// URL.
 news_teams_url =
 beam_teams_url =
 experiment_teams_url =
@@ -14,6 +15,7 @@ experiment_teams_url =
 [PUSH]
 # Optional: also POST every notification as HMAC-signed JSON to this URL, e.g. the
 # push_site submodule (mobile push notifications). Leave blank to disable.
+# Plain http:// is fine to this host; to another, use https:// (a warning says so).
 # url = http://127.0.0.1:8765/ingest
 # File holding the shared secret (at least 32 characters, e.g. from
 # `openssl rand -hex 32`); keep it unreadable by others (the push site's
