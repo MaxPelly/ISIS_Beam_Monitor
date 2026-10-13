@@ -8,9 +8,15 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
-- Run detection by run number runs in shadow alongside the current title and counts heuristics: it sends nothing, and logs what it would do with a `[shadow]` prefix, for comparing the two before it takes over. Each instrument's `DAE:STARTTIME` is now subscribed to as well.
+## [1.3.0rc1] - 2026-10-13
 
+A release candidate for comparing the new run detection with the current one live. Includes push site v1.0.3 (unchanged).
+
+Upgrading: this release resets each instrument's saved state once (see below), so deploy it between experiments if you can. To compare the two run detections with `compare_shadow.py`, keep `[LOGGING] file = monitor.log`.
+
+- Run detection by run number (`IN:<NAME>:DAE:RUNNUMBER`) runs in shadow alongside the current title and counts heuristics: it sends nothing, and logs what it would do with a `[shadow]` prefix. A run starts once it's under way past BEGINNING under a new number, completes when its number moves on, and an abort begins the same run again (seen by its `DAE:STARTTIME`, which is now subscribed to as well). Its counts are only credited once PVWS's replay after a reconnect, restart or outage has delivered both the run number and state.
 - Each instrument's saved state has a new layout, kept by its tracker alone, and each run completion now records its run number. The first start after upgrading ignores the old instrument entries and run completions (one warning each), so the current experiment's progress, the auto-target history and the current run's start are forgotten, and the next daily summary under-reports runs.
+- The TUI refreshes its instruments panel every 2s.
 
 ## [1.2.0] - 2026-10-13
 
