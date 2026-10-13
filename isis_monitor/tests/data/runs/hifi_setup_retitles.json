@@ -1,0 +1,21 @@
+{"instrument": "HIFI", "note": "Retitled twice in SETUP before BEGIN.",
+ "updates": [
+  [0.0, "RUNNUMBER", "00211425"],
+  [0.0, "RUNNUMBER", "00211425"],
+  [0.0, "WDTITLE", "Y3Cu9OH19Cl8_T=sample temperature_F=20.0"],
+  [0.0, "WDTITLE", "Y3Cu9OH19Cl8_T=sample temperature_F=20.0"],
+  [0.0, "TOTALUAMPS", 0.0],
+  [0.0, "TOTALUAMPS", 0.0],
+  [0.0, "RUNSTATE_STR", "SETUP"],
+  [0.0, "RUNSTATE_STR", "SETUP"],
+  [0.0, "_RBNUMBER", "2610537"],
+  [0.0, "_RBNUMBER", "2610537"],
+  [0.0, "STARTTIME", "Tue 13-Oct-2026 10:16:51"],
+  [0.0, "STARTTIME", "Tue 13-Oct-2026 10:16:51"],
+  [87.5, "WDTITLE", "Y3Cu9OH19Cl8_T=sample temperature_F=0"],
+  [87.5, "WDTITLE", "Y3Cu9OH19Cl8_T=sample temperature_F=0"],
+  [130.2, "WDTITLE", "Y3Cu9OH19Cl8_T=0.075_F=0"],
+  [130.5, "RUNSTATE_STR", "BEGINNING"],
+  [133.0, "RUNSTATE_STR", "RUNNING"],
+  [133.1, "STARTTIME", "Tue 13-Oct-2026 10:29:19"]
+]}

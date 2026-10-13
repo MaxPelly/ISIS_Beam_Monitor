@@ -1,0 +1,15 @@
+{"instrument": "LARMOR", "note": "An abort, and the run begun again.",
+ "updates": [
+  [0.0, "RUNNUMBER", "00101373"],
+  [0.0, "WDTITLE", "{Empty Beam A1=20x20 A2=6x8}_TRANS"],
+  [0.0, "TOTALUAMPS", 0.0],
+  [0.0, "RUNSTATE_STR", "WAITING"],
+  [0.0, "_RBNUMBER", "2520052"],
+  [0.0, "STARTTIME", "Tue 13-Oct-2026 11:31:38"],
+  [29.6, "RUNSTATE_STR", "ABORTING"],
+  [30.7, "RUNSTATE_STR", "SETUP"],
+  [63.5, "WDTITLE", "{RT1_Standard}_TRANS"],
+  [68.5, "RUNSTATE_STR", "BEGINNING"],
+  [73.5, "RUNSTATE_STR", "WAITING"],
+  [73.5, "STARTTIME", "Tue 13-Oct-2026 11:39:19"]
+]}

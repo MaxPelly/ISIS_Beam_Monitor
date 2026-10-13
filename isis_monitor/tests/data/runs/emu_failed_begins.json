@@ -1,0 +1,21 @@
+{"instrument": "EMU", "note": "Repeated failed begins (BEGINNING -> SETUP after 5s): no run.",
+ "updates": [
+  [0.0, "RUNNUMBER", "00146546"],
+  [0.0, "WDTITLE", "Hidden"],
+  [0.0, "TOTALUAMPS", 0.0],
+  [0.0, "RUNSTATE_STR", "SETUP"],
+  [0.0, "_RBNUMBER", "2620802"],
+  [0.0, "STARTTIME", "Tue 13-Oct-2026 08:22:49"],
+  [62.4, "RUNSTATE_STR", "BEGINNING"],
+  [67.4, "RUNSTATE_STR", "SETUP"],
+  [111.5, "RUNSTATE_STR", "BEGINNING"],
+  [116.5, "RUNSTATE_STR", "SETUP"],
+  [230.1, "RUNSTATE_STR", "BEGINNING"],
+  [235.1, "RUNSTATE_STR", "SETUP"],
+  [240.0, "RUNSTATE_STR", "BEGINNING"],
+  [245.1, "RUNSTATE_STR", "SETUP"],
+  [270.3, "WDTITLE", "Hidden"],
+  [294.4, "WDTITLE", "Hidden"],
+  [294.8, "RUNSTATE_STR", "BEGINNING"],
+  [299.9, "RUNSTATE_STR", "SETUP"]
+]}

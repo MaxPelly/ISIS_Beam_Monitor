@@ -143,6 +143,10 @@ class InstrumentConfig:
     def rb_number_pv(self) -> str:  # the experiment's RB number, as text
         return f"{self.pv_prefix}DAE:_RBNUMBER"
 
+    @property
+    def start_time_pv(self) -> str:  # when the run (last) began, e.g. "Tue 13-Oct-2026 10:49:43", UK time
+        return f"{self.pv_prefix}DAE:STARTTIME"
+
 
 @dataclass
 class AppConfig:
