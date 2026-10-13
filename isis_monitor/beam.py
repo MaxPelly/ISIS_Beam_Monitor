@@ -218,7 +218,8 @@ class BeamMonitor:
             if name not in listed:
                 if listed and name not in self._unlisted_warned:
                     self._unlisted_warned.add(name)
-                    logger.warning(f"{name} isn't in CS:INSTLIST (a typo?); using IN:{name}: for its PVs")
+                    logger.warning(f"{name} isn't in CS:INSTLIST (a typo?); keeping {tracker.instrument.pv_prefix} "
+                                   "for its PVs")
                 continue
             prefix, station = listed[name]
             tracker.set_station(station)
@@ -226,6 +227,7 @@ class BeamMonitor:
                 logger.info(f"{name}: its PVs start {prefix}, from CS:INSTLIST")
                 old += tracker.pv_handlers()
                 tracker.instrument = replace(tracker.instrument, pv_prefix=prefix)
+                tracker.resubscribed()  # the new PVs' values come in as on a reconnect
                 new += tracker.pv_handlers()
         return old, new
 

@@ -1588,8 +1588,10 @@ async def test_instlist_sets_the_beam_target_and_resubscribes_a_new_prefix(mock_
     m = listed_monitor(mock_config, mock_channels, sink=sink)
     assert tracker(m).beam_target == "TS2"  # [PVS] instrument_target until the list comes
     m._current_ws = AsyncMock()
+    tracker(m).state.rb_resync = False
 
     await m._handle_update(instlist(("PEARL", "IN:PEARL_5B:", "MUON")))
+    assert tracker(m).state.rb_resync  # an RB number from the new PVs wasn't watched changing
 
     assert tracker(m).beam_target == "Muons"
     sink.update_beam_target.assert_called_with("PEARL", "Muons")
