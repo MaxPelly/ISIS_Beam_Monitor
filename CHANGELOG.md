@@ -8,7 +8,11 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
-- With `[PUSH] url` set, the daemon also sends its status (beams with their last 24h, each instrument's run, MCR news, health) to the push site's `/ingest/status` every `sample_interval` and soon after a significant change, for the site's Status page (push site 1.1.0 or later; an older site just refuses it).
+## [1.3.0rc2] - 2026-10-13
+
+1.3.0rc1 plus the status publisher, for the push site's new Status page. Includes push site v1.1.0, which must be running first (an older push site refuses the status, which is only logged at debug). No config change, and no reset of saved state beyond rc1's: from rc1 it carries on where it left off, while from 1.2.0 the rc1 notes apply.
+
+- With `[PUSH] url` set, the daemon also sends its status (beams with their last 24h, each instrument's run, MCR news, health) to the push site's `/ingest/status` every `sample_interval` and soon after a significant change, for the site's Status page (push site 1.1.0 or later; an older site just refuses it). While an instrument's IOC is down, the page shows its run state and counts as unknown.
 
 ## [1.3.0rc1] - 2026-10-13
 
