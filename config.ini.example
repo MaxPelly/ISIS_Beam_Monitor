@@ -34,7 +34,7 @@ experiment_teams_url =
 #                  the experiment's recent runs (ignoring very short ones),
 #                  using <number> until at least 3 runs have been seen; the
 #                  history restarts when IN:<NAME>:DAE:_RBNUMBER changes
-#   beam_target    (optional) TS1, TS2 or Muon: the beam reported on run cards and
+#   beam_target    (optional) TS1, TS2 or Muons: the beam reported on run cards and
 #                  checked before stall warnings (default: [PVS] instrument_target)
 #   channel        (optional) Teams payload channel for this instrument's cards:
 #                  experiment (default) = "Experiment Updates", or instrument =
@@ -53,7 +53,7 @@ notify_counts = 130
 # channel = instrument
 
 [PVS]
-# Default beam_target for instrument sections that don't set one (TS1, TS2 or Muon).
+# Default beam_target for instrument sections that don't set one (TS1, TS2 or Muons).
 # instrument_target = TS1
 
 [TUI]
@@ -98,11 +98,21 @@ notify_counts = 130
 # Seconds before a Teams webhook send is abandoned (1-300).
 # webhook_timeout = 10.0
 
-[BEAM_BOUNDARIES]
-# Defined as 'off_limit, low_limit, medium_limit' in microamps
-# ts1_boundaries = 0.0, 50.0, 140.0
-# ts2_boundaries = 0.0, 10.0, 30.0
-# muon_boundaries = 0.0, 2.0, 5.0
+# One optional section per beam target: TS1, TS2 and Muons (any case; Muon works too).
+#   pv          its beam current PV, in µA
+#   boundaries  power cutoffs in µA, in increasing order: off at or below the
+#               first, low below the second, medium below the third, else high
+[BEAM:TS1]
+# pv = AC:TS1:BEAM:CURR
+# boundaries = 0, 50, 140
+
+[BEAM:TS2]
+# pv = AC:TS2:BEAM:CURR
+# boundaries = 0, 10, 30
+
+[BEAM:Muons]
+# pv = AC:MUON:BEAM:CURR
+# boundaries = 0, 2, 5
 
 [NOTIFICATIONS]
 # Timezone for card timestamps and for summary_time.

@@ -16,7 +16,7 @@ import pytest
 
 import main
 from isis_monitor import messages
-from isis_monitor.config import AppConfig, InstrumentConfig
+from isis_monitor.config import DEFAULT_BEAMS, AppConfig, InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.ipc import IPCClient
 from isis_monitor.notifiers import DummyNotifier, TeamsNotifier, WebhookNotifier
@@ -249,9 +249,9 @@ def _card(kind):
     run = dict(new_run_name="run", prev_run_name="old", prev_duration=hour, prev_counts=5, time_now=now, target=10)
     return {
         "beam_change": lambda: messages.beam_change(
-            "TS1", beam="TS1", prev_state="high", new_state="off", beam_val=0, prev_val=150, high_threshold=140,
+            "TS1", prev_state="high", new_state="off", beam_val=0, prev_val=150, high_threshold=140,
             time_in_prev_state=hour, time_now=now),
-        "startup_status": lambda: messages.startup_status("Muon", beam="Muons", state="high", beam_val=5, time_now=now),
+        "startup_status": lambda: messages.startup_status("Muons", state="high", beam_val=5, time_now=now),
         "daily_summary": lambda: messages.daily_summary(
             "TS2", uptime_pct=99, trips=0, longest_on_streak=hour, sparkline="", instrument_runs={}, time_now=now),
         "run_started": lambda: messages.run_started("PEARL", **run),
@@ -380,7 +380,7 @@ async def daemon(config, args=DAEMON_ARGS):
 
 
 async def test_run_daemon_serves_ipc_and_shuts_down_cleanly_with_tui_attached(tmp_path):
-    update = {"type": "update", "pv": AppConfig.ts1_beam_current_pv, "value": 150.0}
+    update = {"type": "update", "pv": DEFAULT_BEAMS[0].pv, "value": 150.0}
     async with FakePVWS([update]) as pvws:
         config = _config(tmp_path, isis_websocket_url=pvws.url, sample_interval=0.02)
         root_handlers = list(logging.getLogger().handlers)
@@ -710,7 +710,7 @@ async def test_daemon_get_config_reads_the_file(tmp_path):
     async with daemon_with_file(tmp_path) as (task, client, ini):
         reply = await client.request({"method": "get_config"})
     assert reply["config"]["instruments"][0]["name"] == "PEARL"
-    assert reply["beam_targets"] == ["TS1", "TS2", "Muon"]
+    assert reply["beam_targets"] == ["TS1", "TS2", "Muons"]
     assert reply["channel_modes"] == ["experiment", "instrument"]
     assert len(reply["revision"]) == 64
     assert task.result() is False  # plain stop, no restart

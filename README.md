@@ -62,7 +62,7 @@ Each instrument gets its own section. Run notifications for every instrument go 
 # reaching it, if the rate isn't known yet). "auto, 130" targets each run at the
 # median of the experiment's recent runs instead, using 130 until there are enough.
 notify_counts = 130
-# Optional: TS1, TS2 or Muon — the beam reported on run cards and checked
+# Optional: TS1, TS2 or Muons — the beam reported on run cards and checked
 # before stall warnings (default = [PVS] instrument_target, itself TS1 by default).
 # beam_target = TS1
 # Optional: the Teams payload `channel` for this instrument's cards —
@@ -137,6 +137,17 @@ daily summary and the auto target history.
 [PVS]
 # The beam_target for instrument sections that don't set one (default = TS1).
 # instrument_target = TS1
+```
+
+### Optional `[BEAM:<NAME>]` sections
+
+Each beam target (`TS1`, `TS2`, `Muons`) can override its current PV and power boundaries:
+
+```ini
+[BEAM:Muons]
+# pv = AC:MUON:BEAM:CURR
+# Off at or below the first value, low below the second, medium below the third, else high (µA).
+# boundaries = 0, 2, 5
 ```
 
 ### Optional `[PUSH]` signed webhook

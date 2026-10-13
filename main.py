@@ -23,8 +23,7 @@ from isis_monitor import __version__
 from isis_monitor.beam import BeamMonitor
 from isis_monitor.config_editor import run_config_editor
 from isis_monitor.config import (
-    BEAM_TARGET_KEYS,
-    CHANNEL_LABELS,
+    BEAM_NAMES,
     CHANNEL_MODES,
     ConfigChangedError,
     ConfigError,
@@ -294,7 +293,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
         return {
             "config": editable_settings(file_config),
             "revision": revision,
-            "beam_targets": list(BEAM_TARGET_KEYS),
+            "beam_targets": list(BEAM_NAMES),
             "channel_modes": list(CHANNEL_MODES),
         }
 
@@ -379,7 +378,7 @@ def restart_process() -> None:
 
 def _apply_snapshot_to_tui(tui: RichTUI, snapshot: dict) -> None:
     beam_states = snapshot.get("beam_states", {})
-    for beam in CHANNEL_LABELS:
+    for beam in BEAM_NAMES:
         state = beam_states.get(beam)
         if state:
             tui.update_beam_state(beam, float(state.get("current", 0.0)), str(state.get("power", "unknown")))

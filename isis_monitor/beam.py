@@ -7,11 +7,11 @@ import socket
 import ssl
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import websockets
 
-from isis_monitor.config import TARGET_LABELS, AppConfig
+from isis_monitor.config import AppConfig, BeamTargetConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.instrument import InstrumentTracker
 from isis_monitor.messages import beam_change, fmt_duration, startup_status
@@ -47,14 +47,6 @@ def _classify_ws_error(exc: BaseException) -> Tuple[str, str]:
     return "unexpected", f"unexpected error: {exc!r}"
 
 
-@dataclass
-class BeamTarget:
-    """Describes one accelerator beam target."""
-    state_key: str      # Key into BeamMonitor.beams; also the name used in messages
-    channel_label: str  # Passed to the sink and notifications as the channel name
-
-
-BEAM_TARGETS: List[BeamTarget] = [BeamTarget(key, label) for key, label in TARGET_LABELS.items()]
 
 
 @dataclass
@@ -68,7 +60,7 @@ class BeamState:
 @dataclass
 class _PendingChange:
     """A not-yet-confirmed state change, awaiting the debounce window."""
-    bt: BeamTarget
+    bt: BeamTargetConfig
     prev_state: str
     prev_val: float
     prev_since: datetime
@@ -98,7 +90,7 @@ class BeamChangeAggregator:
         self._recent_offs: Dict[str, datetime] = {}
 
     def queue_change(self, change: _PendingChange) -> None:
-        key = change.bt.state_key
+        key = change.bt.name
         existing = self._pending.get(key)
         if existing is not None:
             # Already pending — just update the latest reading; the original
@@ -123,13 +115,13 @@ class BeamChangeAggregator:
             return
 
         if pending.new_state == pending.prev_state:
-            logger.debug(f"{pending.bt.state_key}: flapped back to {pending.prev_state}, dropping.")
+            logger.debug(f"{pending.bt.name}: flapped back to {pending.prev_state}, dropping.")
             return
 
         trip_note = ""
         if pending.new_state == "off":
             also_off = [
-                other.bt.state_key
+                other.bt.name
                 for key, other in self._pending.items()
                 if key != state_key
                 and other.new_state == "off"
@@ -147,8 +139,7 @@ class BeamChangeAggregator:
             self._recent_offs[state_key] = pending.started_at
 
         notification = beam_change(
-            pending.bt.state_key,
-            beam=pending.bt.channel_label,
+            pending.bt.name,
             prev_state=pending.prev_state,
             new_state=pending.new_state,
             beam_val=pending.beam_val,
@@ -185,22 +176,13 @@ class BeamMonitor:
         self.data_url = config.isis_websocket_url
         self.beam_channel = beam_channel
         self.sink = sink
-        self.beams: Dict[str, BeamState] = {bt.state_key: BeamState() for bt in BEAM_TARGETS}
+        self.beams: Dict[str, BeamState] = {bt.name: BeamState() for bt in config.beams}
         self.change_aggregator = BeamChangeAggregator(beam_channel, config.debounce_seconds)
         self._force_reconnect = asyncio.Event()
         self._current_ws = None
         self._close_task: Optional[asyncio.Task] = None
 
-        # Each target's current PV and power boundaries, by its state key.
-        per_target = {
-            "TS1": (config.ts1_beam_current_pv, config.ts1_boundaries),
-            "TS2": (config.ts2_beam_current_pv, config.ts2_boundaries),
-            "Muon": (config.muon_beam_current_pv, config.muon_boundaries),
-        }
-        self.pv_to_beam: Dict[str, BeamTarget] = {
-            per_target[bt.state_key][0]: bt for bt in BEAM_TARGETS
-        }
-        self.beam_boundaries = {key: boundaries for key, (_, boundaries) in per_target.items()}
+        self.pv_to_beam: Dict[str, BeamTargetConfig] = {bt.pv: bt for bt in config.beams}
 
         self.instruments: Dict[str, InstrumentTracker] = {
             inst.name: InstrumentTracker(
@@ -236,27 +218,27 @@ class BeamMonitor:
             return None
         return val if math.isfinite(val) else None
 
-    def _get_power_label(self, beam_uA: float, beam: str) -> str:
-        boundaries = self.beam_boundaries[beam]
+    @staticmethod
+    def _get_power_label(beam_uA: float, boundaries: tuple) -> str:
         if beam_uA <= boundaries[0]: return "off"
         if beam_uA < boundaries[1]: return "low"
         if beam_uA < boundaries[2]: return "medium"
         return "high"
 
     async def _handle_beam_current(
-        self, bt: BeamTarget, raw_val: Any, time_now: datetime
+        self, bt: BeamTargetConfig, raw_val: Any, time_now: datetime
     ):
         """Handle a beam-current value update for a single target."""
         beam_val = self._parse_current(raw_val)
         if beam_val is None:
             # No notification either way, but the last reading can't be
             # trusted: "unknown" keeps it out of the history (and uptime).
-            logger.debug(f"Unreadable {bt.state_key} beam current {raw_val!r}")
+            logger.debug(f"Unreadable {bt.name} beam current {raw_val!r}")
             if self.sink:
-                self.sink.update_beam_state(bt.channel_label, self.beams[bt.state_key].current, "unknown")
+                self.sink.update_beam_state(bt.name, self.beams[bt.name].current, "unknown")
             return
-        new_state = self._get_power_label(beam_val, bt.state_key)
-        beam_state = self.beams[bt.state_key]
+        new_state = self._get_power_label(beam_val, bt.boundaries)
+        beam_state = self.beams[bt.name]
         prev_state = beam_state.power
         prev_val = beam_state.current
         prev_since = beam_state.since
@@ -265,16 +247,16 @@ class BeamMonitor:
             if prev_state == "":
                 # First reading for this target — always send immediately, never debounced.
                 notification = startup_status(
-                    bt.state_key, beam=bt.channel_label, state=new_state, beam_val=beam_val, time_now=time_now,
+                    bt.name, state=new_state, beam_val=beam_val, time_now=time_now,
                 )
                 logger.info(f"Startup: {notification.to_summary()}")
                 self.beam_channel.broadcast(notification)
                 beam_state.since = time_now
             else:
-                pending = self.change_aggregator.pending(bt.state_key)
+                pending = self.change_aggregator.pending(bt.name)
                 self.change_aggregator.queue_change(_PendingChange(
                     bt, prev_state, prev_val, prev_since or time_now,
-                    new_state, beam_val, self.beam_boundaries[bt.state_key][2], time_now,
+                    new_state, beam_val, bt.boundaries[2], time_now,
                 ))
                 if pending is not None and new_state == pending.prev_state:
                     # Back where it was before a flicker the debounce will drop,
@@ -286,7 +268,7 @@ class BeamMonitor:
         beam_state.current = beam_val
         beam_state.power = new_state
         if self.sink:
-            self.sink.update_beam_state(bt.channel_label, beam_val, new_state)
+            self.sink.update_beam_state(bt.name, beam_val, new_state)
 
     async def _handle_update(self, message: Dict[str, Any]):
         """Dispatch WebSocket update messages."""

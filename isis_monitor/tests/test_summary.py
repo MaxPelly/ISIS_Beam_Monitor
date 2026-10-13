@@ -180,7 +180,7 @@ async def test_daily_summary_tolerates_a_corrupt_last_sent_date(store):
 async def test_daily_summary_counts_runs_only_on_instruments_using_that_target(store):
     state = DaemonState(instruments=[
         InstrumentConfig("PEARL", 130.0, "TS1"),
-        InstrumentConfig("EMU", 10.0, "Muon"),
+        InstrumentConfig("EMU", 10.0, "Muons"),
     ])
     now = datetime.now(timezone.utc)
     state.record_run_completed("PEARL", now, 60.0)

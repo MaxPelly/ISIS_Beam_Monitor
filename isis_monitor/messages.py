@@ -67,9 +67,9 @@ class Notification:
     url: Optional[str] = None
     url_label: str = "Open"
     timestamp: Optional[datetime] = None
-    topic: str = ""  # what it's about, for subscribers filtering it: a beam target's channel
-                     # label, an instrument name, "MCR" or "Summary"
-    beam: str = ""  # the beam target's channel label (e.g. "Muons") for beam cards and summaries
+    topic: str = ""  # what it's about, for subscribers filtering it: a beam target,
+                     # an instrument name, "MCR" or "Summary"
+    beam: str = ""  # the beam target (e.g. "Muons") of beam cards and summaries
 
     def _parts(self) -> List[str]:
         parts = [f"{self.emoji} {self.title}".strip(), self.text]
@@ -95,9 +95,8 @@ class Notification:
 # ---------------------------------------------------------------------------
 
 def beam_change(
-    display_name: str,
-    *,
     beam: str,
+    *,
     prev_state: str,
     new_state: str,
     beam_val: float,
@@ -123,14 +122,14 @@ def beam_change(
     )
     emoji = RESTORED_EMOJI if restored else STATE_EMOJI[new_state]
 
-    text = f"{display_name} beam moved from {prev_state} to {new_state}."
+    text = f"{beam} beam moved from {prev_state} to {new_state}."
     if trip_note:
         text = f"{text}\n\n{trip_note}"
 
     pct_of_high = f"{beam_val / high_threshold * 100:.0f}%" if high_threshold > 0 else "n/a"
 
     return Notification(
-        title=f"{display_name} {arrow} {prev_state} → {new_state}",
+        title=f"{beam} {arrow} {prev_state} → {new_state}",
         text=text,
         severity=severity,
         emoji=emoji,
@@ -146,9 +145,9 @@ def beam_change(
     )
 
 
-def startup_status(display_name: str, *, beam: str, state: str, beam_val: float, time_now: datetime) -> Notification:
+def startup_status(beam: str, *, state: str, beam_val: float, time_now: datetime) -> Notification:
     return Notification(
-        title=f"Monitor online: {display_name} is {state}",
+        title=f"Monitor online: {beam} is {state}",
         text=f"Current: {beam_val:.3f} uA",
         emoji="🛰️",
         timestamp=time_now,
@@ -283,7 +282,7 @@ def mcr_news(news_text: str, *, time_now: datetime, url: Optional[str] = None) -
 
 
 def daily_summary(
-    display_name: str,
+    beam: str,
     *,
     uptime_pct: float,
     trips: int,
@@ -293,7 +292,7 @@ def daily_summary(
     time_now: datetime,
     coverage_pct: float = 100.0,
 ) -> Notification:
-    text = f"{display_name}: {uptime_pct:.0f}% uptime over the last 24h."
+    text = f"{beam}: {uptime_pct:.0f}% uptime over the last 24h."
 
     facts = [("Uptime", f"{uptime_pct:.0f}%")]
     # Uptime only covers the time the beam feed was connected; say so when
@@ -312,14 +311,14 @@ def daily_summary(
     ]
 
     return Notification(
-        title=f"{display_name} daily summary",
+        title=f"{beam} daily summary",
         text=text,
         severity=Severity.GOOD if uptime_pct >= 90 else Severity.INFO,
         emoji="📊",
         facts=facts,
         timestamp=time_now,
         topic="Summary",
-        beam=display_name,  # already the beam target's channel label (e.g. "TS1")
+        beam=beam,
     )
 
 

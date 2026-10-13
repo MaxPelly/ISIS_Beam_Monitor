@@ -103,7 +103,7 @@ def test_to_summary_is_one_line_with_details():
 # ---------------------------------------------------------------------------
 
 # Typical arguments for each builder; tests override what they check.
-CHANGE = dict(beam="TS1", prev_state="low", new_state="high", beam_val=150.0, prev_val=20.0, high_threshold=140.0,
+CHANGE = dict(prev_state="low", new_state="high", beam_val=150.0, prev_val=20.0, high_threshold=140.0,
               time_in_prev_state=timedelta(hours=1), time_now=DT)
 STARTED = dict(new_run_name="Run 2", prev_run_name="Run 1", prev_duration=timedelta(hours=1), prev_counts=1000.0,
                time_now=DT, target=130.0)
@@ -153,7 +153,7 @@ def test_beam_change_builder_restored_emoji_only_after_an_hour_plus_outage():
 
 def test_beam_change_builder_zero_high_threshold_does_not_crash():
     """A misconfigured (0.0) high boundary must degrade gracefully, not raise."""
-    n = beam_change("Muon", **kw(CHANGE, beam="Muons", high_threshold=0.0))
+    n = beam_change("Muons", **kw(CHANGE, high_threshold=0.0))
     assert ("% of high threshold", "n/a") in n.facts
 
 
@@ -164,7 +164,7 @@ def test_beam_change_builder_includes_trip_note():
 
 
 def test_startup_status_builder():
-    n = startup_status("TS1", beam="TS1", state="high", beam_val=150.0, time_now=DT)
+    n = startup_status("TS1", state="high", beam_val=150.0, time_now=DT)
     assert n.title == "Monitor online: TS1 is high"
     assert n.emoji == "🛰️"
     assert "150.000 uA" in n.text
@@ -282,7 +282,7 @@ def test_no_builder_bakes_its_own_emoji_into_the_title():
     or it renders twice everywhere the notification is shown."""
     notifications = [
         beam_change("TS1", **CHANGE),
-        startup_status("TS1", beam="TS1", state="high", beam_val=150.0, time_now=DT),
+        startup_status("TS1", state="high", beam_val=150.0, time_now=DT),
         run_started("PEARL", **STARTED),
         run_finishing("PEARL", **FINISHING),
         collection_stalled("PEARL", **STALLED),
@@ -295,7 +295,7 @@ def test_no_builder_bakes_its_own_emoji_into_the_title():
 
 
 def test_builders_set_topic():
-    assert beam_change("Muon", **kw(CHANGE, beam="Muons")).topic == "Muons"
+    assert beam_change("Muons", **CHANGE).topic == "Muons"
     assert mcr_news("Machine update.", time_now=DT).topic == "MCR"
     # Run cards carry the instrument as their topic whatever their channel.
     for n in (

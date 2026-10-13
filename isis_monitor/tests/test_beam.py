@@ -9,11 +9,10 @@ import base64
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
-from isis_monitor.config import AppConfig, InstrumentConfig
+from isis_monitor.config import DEFAULT_BEAMS, AppConfig, InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.beam import (
     BeamMonitor,
-    BEAM_TARGETS,
     _classify_ws_error,
     _PendingChange,
 )
@@ -23,6 +22,8 @@ from isis_monitor.tests.helpers import FakePVWS, fake_channel, running, wait_unt
 
 PEARL_UAMPS = "IN:PEARL:DAE:TOTALUAMPS"
 PEARL_TITLE = "IN:PEARL:DAE:WDTITLE"
+TS1_PV, TS2_PV, MUONS_PV = (b.pv for b in DEFAULT_BEAMS)
+TS1, TS2 = DEFAULT_BEAMS[0].boundaries, DEFAULT_BEAMS[1].boundaries
 
 
 def tracker(m):
@@ -92,11 +93,11 @@ async def test_unreadable_beam_current_is_ignored_not_off(mock_config, mock_chan
     """E.g. PVWS's NaN before a PV has a value: no "beam off" card or sample."""
     beam_channel, _ = mock_channels
     m = make_monitor(mock_config, mock_channels)
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": junk})
+    await m._handle_update({"pv": TS1_PV, "value": junk})
     beam_channel.broadcast.assert_not_called()
     assert m.beams["TS1"].power == ""
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": junk})
+    await m._handle_update({"pv": TS1_PV, "value": "60.0"})
+    await m._handle_update({"pv": TS1_PV, "value": junk})
     assert (m.beams["TS1"].power, m.beams["TS1"].current) == ("medium", 60.0)
 
 
@@ -104,8 +105,8 @@ async def test_unreadable_beam_current_shows_as_unknown(mock_config, mock_channe
     """Unknown isn't sampled into the history, so a dead PV doesn't count as uptime."""
     sink = MagicMock()
     m = make_monitor(mock_config, mock_channels, sink=sink)
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "NaN"})
+    await m._handle_update({"pv": TS1_PV, "value": "60.0"})
+    await m._handle_update({"pv": TS1_PV, "value": "NaN"})
     sink.update_beam_state.assert_called_with("TS1", 60.0, "unknown")
 
 
@@ -115,15 +116,15 @@ async def test_unreadable_beam_current_shows_as_unknown(mock_config, mock_channe
 
 def test_get_power_label(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels)
-    assert m._get_power_label(-5, "TS1") == "off"
-    assert m._get_power_label(0, "TS1") == "off"
-    assert m._get_power_label(20, "TS1") == "low"
-    assert m._get_power_label(75, "TS1") == "medium"
-    assert m._get_power_label(150, "TS1") == "high"
-    assert m._get_power_label(0, "TS2") == "off"
-    assert m._get_power_label(5, "TS2") == "low"
-    assert m._get_power_label(15, "TS2") == "medium"
-    assert m._get_power_label(30, "TS2") == "high"
+    assert m._get_power_label(-5, TS1) == "off"
+    assert m._get_power_label(0, TS1) == "off"
+    assert m._get_power_label(20, TS1) == "low"
+    assert m._get_power_label(75, TS1) == "medium"
+    assert m._get_power_label(150, TS1) == "high"
+    assert m._get_power_label(0, TS2) == "off"
+    assert m._get_power_label(5, TS2) == "low"
+    assert m._get_power_label(15, TS2) == "medium"
+    assert m._get_power_label(30, TS2) == "high"
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +136,7 @@ async def test_handle_update_beam_startup_sends_immediately(mock_config, mock_ch
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
 
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})
+    await m._handle_update({"pv": TS1_PV, "value": "10.0"})
 
     assert m.beams["TS1"].current == 10.0
     assert m.beams["TS1"].power == "low"
@@ -149,10 +150,10 @@ async def test_handle_update_beam_no_change_no_broadcast(mock_config, mock_chann
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
 
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})
+    await m._handle_update({"pv": TS1_PV, "value": "10.0"})
     beam_channel.broadcast.reset_mock()
 
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "45.0"})
+    await m._handle_update({"pv": TS1_PV, "value": "45.0"})
     await asyncio.sleep(SETTLE)
 
     assert m.beams["TS1"].current == 45.0
@@ -165,10 +166,10 @@ async def test_handle_update_beam_change_is_debounced(mock_config, mock_channels
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
 
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})  # startup
+    await m._handle_update({"pv": TS1_PV, "value": "10.0"})  # startup
     beam_channel.broadcast.reset_mock()
 
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})
+    await m._handle_update({"pv": TS1_PV, "value": "60.0"})
     assert m.beams["TS1"].power == "medium"  # state updates immediately
     beam_channel.broadcast.assert_not_called()  # but no card yet — still pending
 
@@ -185,11 +186,11 @@ async def test_handle_update_beam_flapping_sends_nothing(mock_config, mock_chann
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
 
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})  # startup
+    await m._handle_update({"pv": TS1_PV, "value": "10.0"})  # startup
     beam_channel.broadcast.reset_mock()
 
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})  # -> medium
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})  # -> low again
+    await m._handle_update({"pv": TS1_PV, "value": "60.0"})  # -> medium
+    await m._handle_update({"pv": TS1_PV, "value": "10.0"})  # -> low again
     await asyncio.sleep(SETTLE)
 
     beam_channel.broadcast.assert_not_called()
@@ -201,15 +202,15 @@ async def test_handle_update_beam_trip_notes_other_targets(mock_config, mock_cha
     m = make_monitor(mock_config, mock_channels)
 
     # Startup — get all three targets to a non-zero state first.
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})
-    await m._handle_update({"pv": mock_config.ts2_beam_current_pv, "value": "20.0"})
-    await m._handle_update({"pv": mock_config.muon_beam_current_pv, "value": "3.0"})
+    await m._handle_update({"pv": TS1_PV, "value": "60.0"})
+    await m._handle_update({"pv": TS2_PV, "value": "20.0"})
+    await m._handle_update({"pv": MUONS_PV, "value": "3.0"})
     beam_channel.broadcast.reset_mock()
 
     # All three trip off within the same window.
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "0.0"})
-    await m._handle_update({"pv": mock_config.ts2_beam_current_pv, "value": "0.0"})
-    await m._handle_update({"pv": mock_config.muon_beam_current_pv, "value": "0.0"})
+    await m._handle_update({"pv": TS1_PV, "value": "0.0"})
+    await m._handle_update({"pv": TS2_PV, "value": "0.0"})
+    await m._handle_update({"pv": MUONS_PV, "value": "0.0"})
     await asyncio.sleep(SETTLE)
 
     assert beam_channel.broadcast.call_count == 3
@@ -223,10 +224,10 @@ async def test_change_aggregator_cancel_all_stops_pending_flush(mock_config, moc
     beam_channel, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
 
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})  # startup
+    await m._handle_update({"pv": TS1_PV, "value": "10.0"})  # startup
     beam_channel.broadcast.reset_mock()
 
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})  # pending
+    await m._handle_update({"pv": TS1_PV, "value": "60.0"})  # pending
     m.change_aggregator.cancel_all()
     await asyncio.sleep(SETTLE)
 
@@ -238,16 +239,16 @@ async def test_change_aggregator_logs_flush_failure_and_keeps_working(mock_confi
     """A failure while sending one change is logged, and later changes still flush."""
     beam_channel, _ = mock_channels
     m = make_monitor(mock_config, mock_channels)
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})  # startup
+    await m._handle_update({"pv": TS1_PV, "value": "10.0"})  # startup
     beam_channel.broadcast.reset_mock()
 
     with patch("isis_monitor.beam.beam_change", side_effect=RuntimeError("boom")):
-        await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})
+        await m._handle_update({"pv": TS1_PV, "value": "60.0"})
         await asyncio.sleep(SETTLE)
     assert "TS1: failed to send the beam change" in caplog.text
     assert "boom" in caplog.text
 
-    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "150.0"})
+    await m._handle_update({"pv": TS1_PV, "value": "150.0"})
     await wait_until(lambda: beam_channel.broadcast.call_count == 1)
 
 
@@ -725,15 +726,15 @@ def ws_monitor(mock_config, mock_channels, url, sink=None, reconnect_interval=60
 
 async def test_run_loop_subscribes_and_dispatches_updates(mock_config, mock_channels):
     sink = MagicMock()
-    update = {"type": "update", "pv": mock_config.ts1_beam_current_pv, "value": 150.0}
+    update = {"type": "update", "pv": TS1_PV, "value": 150.0}
     async with FakePVWS([update]) as server:
         m = ws_monitor(mock_config, mock_channels, server.url, sink=sink)
         async with running(m):
             await wait_until(lambda: sink.update_beam_state.called)
 
     assert set(server.subscriptions[0]["pvs"]) == {
-        mock_config.ts1_beam_current_pv, mock_config.ts2_beam_current_pv,
-        mock_config.muon_beam_current_pv, PEARL_UAMPS, PEARL_TITLE,
+        TS1_PV, TS2_PV,
+        MUONS_PV, PEARL_UAMPS, PEARL_TITLE,
         "IN:PEARL:DAE:RUNSTATE_STR", "IN:PEARL:DAE:RUNNUMBER", "IN:PEARL:DAE:_RBNUMBER",
     }
     sink.update_beam_state.assert_called_with("TS1", 150.0, "high")
@@ -743,7 +744,7 @@ async def test_run_loop_subscribes_and_dispatches_updates(mock_config, mock_chan
 async def test_run_loop_survives_malformed_messages(mock_config, mock_channels, caplog):
     """Bad frames and handler errors are logged and skipped, not a reconnect."""
     sink = MagicMock()
-    good = {"type": "update", "pv": mock_config.ts2_beam_current_pv, "value": 40.0}
+    good = {"type": "update", "pv": TS2_PV, "value": 40.0}
     boom = {"type": "update", "pv": PEARL_UAMPS, "value": 2.0}
     async with FakePVWS(["not json", "[1, 2]", {"type": "other"}, boom, good]) as server:
         m = ws_monitor(mock_config, mock_channels, server.url, sink=sink)
@@ -778,7 +779,7 @@ async def test_reconnect_repopulates_beam_states_marked_unknown(mock_config, moc
     beam_channel, _ = mock_channels
     state = DaemonState()
     events = state.subscribe()
-    update = {"type": "update", "pv": mock_config.ts1_beam_current_pv, "value": 150.0}
+    update = {"type": "update", "pv": TS1_PV, "value": 150.0}
     powers = []
 
     def ts1_powers():
@@ -834,7 +835,7 @@ async def test_run_cancels_promptly_and_cancels_pending_debounce(mock_config, mo
         task = asyncio.create_task(m.run())
         await asyncio.wait_for(server.connected.wait(), 2)
         now = datetime.now(timezone.utc)
-        m.change_aggregator.queue_change(_PendingChange(BEAM_TARGETS[0], "high", 150, now, "off", 0, 140, now))
+        m.change_aggregator.queue_change(_PendingChange(DEFAULT_BEAMS[0], "high", 150, now, "off", 0, 140, now))
         pending_task = m.change_aggregator._pending["TS1"].task
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -1114,7 +1115,7 @@ async def test_dropped_flicker_does_not_reset_time_in_state(mock_config, mock_ch
     off: the off card must say it was high for ~10h, not since the flicker."""
     beam_channel, _ = mock_channels
     m = make_monitor(mock_config, mock_channels)
-    pv = mock_config.ts1_beam_current_pv
+    pv = TS1_PV
     await m._handle_update({"pv": pv, "value": 150.0})  # startup: high
     ten_hours_ago = datetime.now(timezone.utc) - timedelta(hours=10)
     m.beams["TS1"].since = ten_hours_ago

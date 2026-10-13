@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from isis_monitor.config import CHANNEL_LABELS, InstrumentConfig
+from isis_monitor.config import BEAM_NAMES, InstrumentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +59,10 @@ class DaemonState:
         instruments: Sequence[InstrumentConfig] = (),
     ):
         self.beam_states: Dict[str, Dict[str, object]] = {
-            beam: {"current": 0.0, "power": "unknown"} for beam in CHANNEL_LABELS
+            beam: {"current": 0.0, "power": "unknown"} for beam in BEAM_NAMES
         }
         self.history: Dict[str, Deque[Tuple[datetime, float, str]]] = {
-            beam: deque(maxlen=history_maxlen) for beam in CHANNEL_LABELS
+            beam: deque(maxlen=history_maxlen) for beam in BEAM_NAMES
         }
         self.mcr_news = MCR_NEWS_PLACEHOLDER
         self.logs: Deque[str] = deque(maxlen=logs_maxlen)
@@ -283,7 +283,7 @@ class DaemonState:
             logger.warning("Corrupt daemon state snapshot, starting fresh.")
             return
         beam_states = snap.get("beam_states", {})
-        for beam in CHANNEL_LABELS:
+        for beam in BEAM_NAMES:
             if beam in beam_states:
                 # The power is left "unknown" until the beam feed connects:
                 # the saved one may be long out of date.

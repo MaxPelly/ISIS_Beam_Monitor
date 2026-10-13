@@ -15,7 +15,7 @@ SETTINGS = {
         {"name": "WISH", "notify_counts": "50", "beam_target": "TS2", "channel": "experiment"},
     ],
 }
-TARGETS = ["TS1", "TS2", "Muon"]
+TARGETS = ["TS1", "TS2", "Muons"]
 MODES = ["experiment", "instrument"]
 
 
@@ -67,19 +67,19 @@ async def test_enter_keeps_current_value():
 
 async def test_edit_instrument_reprompts_for_invalid_beam_target():
     """Beam targets are case-insensitive and stored canonically."""
-    result, term = await edit("7", "", "75", "Muons", "muon", "", "s", "y")
+    result, term = await edit("7", "", "75", "Muon2", "muons", "", "s", "y")
     assert result["instruments"][1] == {
-        "name": "WISH", "notify_counts": "75", "beam_target": "Muon", "channel": "experiment",
+        "name": "WISH", "notify_counts": "75", "beam_target": "Muons", "channel": "experiment",
     }
-    assert "Beam target must be one of TS1, TS2, Muon." in term.text
+    assert "Beam target must be one of TS1, TS2, Muons." in term.text
 
 
 async def test_add_instrument_upper_cases_name():
-    result, term = await edit("a", "emu", "10", "Muon", "", "s", "y")
+    result, term = await edit("a", "emu", "10", "Muons", "", "s", "y")
     assert result["instruments"][-1] == {
-        "name": "EMU", "notify_counts": "10", "beam_target": "Muon", "channel": "experiment",
+        "name": "EMU", "notify_counts": "10", "beam_target": "Muons", "channel": "experiment",
     }
-    assert "+ EMU (notify_counts=10, beam_target=Muon, channel=experiment)" in term.text
+    assert "+ EMU (notify_counts=10, beam_target=Muons, channel=experiment)" in term.text
 
 
 async def test_delete_instrument_needs_confirmation():

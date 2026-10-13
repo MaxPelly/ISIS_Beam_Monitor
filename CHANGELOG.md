@@ -8,6 +8,8 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+- Each beam target is configured in its own optional section, `[BEAM:TS1]`, `[BEAM:TS2]` or `[BEAM:Muons]`, with `pv` and `boundaries`; boundaries must be finite and in increasing order. These replace `[PVS] ts1_beam_current_pv`, `ts2_beam_current_pv` and `muon_beam_current_pv` and the `[BEAM_BOUNDARIES]` section, which are now ignored. Beam target names are case-insensitive and "Muon" still works, but the muon target is called "Muons" everywhere, so its beam cards are now titled "Muons …" rather than "Muon …", and the config editor writes `beam_target = Muons`.
+
 - Each notifier (each Teams webhook, and the push site) has its own queue, so a slow or failing one no longer delays the others. One push notifier serves all three channels, so the push feed keeps the order notifications were sent in, and push retries match Teams'.
 
 - Only the daemon logs, to stderr (so journald under systemd) and, if `[LOGGING] file` is set, to a rotating file (5 MB × 3). `monitor.log` is no longer written by default. The TUI logs nothing and `stop` only prints warnings, so neither touches the daemon's log. `[LOGGING] log_file` and `log_level` are now `file` and `level`; `log_max_bytes` and `log_backup_count` are gone.

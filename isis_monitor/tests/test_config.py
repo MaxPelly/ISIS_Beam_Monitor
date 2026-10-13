@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from isis_monitor.config import (
     load_config, ConfigError, ConfigChangedError, AppConfig, InstrumentConfig, read_config,
-    editable_settings, update_config_file, read_push_secret, _PATH_FIELDS,
+    editable_settings, update_config_file, read_push_secret, _PATH_FIELDS, BeamTargetConfig, DEFAULT_BEAMS,
 )
 
 
@@ -111,15 +111,18 @@ summary_time = 07:30
     assert config.mcr_page_url == "https://example.com/mcr"
 
 
-def test_load_config_instrument_target_must_be_a_state_key(tmp_path):
-    """A typo like the display label "Muons" instead of the state_key "Muon"
-    must be rejected at load time rather than silently degrading to
+@pytest.mark.parametrize("given, target", [("TS1", "TS1"), ("ts2", "TS2"), ("Muon", "Muons"), ("MUONS", "Muons")])
+def test_beam_targets_are_case_insensitive_and_stored_canonically(tmp_path, given, target):
+    config = load_config(_write(tmp_path, f"[PVS]\ninstrument_target = {given}\n"
+                                          f"[INSTRUMENT:PEARL]\nnotify_counts = 5\nbeam_target = {given}\n"))
+    assert config.instrument_target == config.instruments[0].beam_target == target
+
+
+def test_load_config_instrument_target_must_be_a_beam(tmp_path):
+    """A typo must be rejected at load time rather than silently degrading to
     "unknown" in every run-card fact."""
-    for target in ("TS1", "TS2", "Muon"):
-        config = load_config(_write(tmp_path, f"[PVS]\ninstrument_target = {target}\n"))
-        assert config.instrument_target == target
-    with pytest.raises(ConfigError, match="instrument_target"):
-        load_config(_write(tmp_path, "[PVS]\ninstrument_target = Muons\n"))
+    with pytest.raises(ConfigError, match="instrument_target must be one of TS1, TS2, Muons"):
+        load_config(_write(tmp_path, "[PVS]\ninstrument_target = TS3\n"))
 
 
 def test_load_config_defaults_match_dataclass_defaults(tmp_path):
@@ -143,8 +146,14 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     ("[TIMEOUTS_INTERVALS]\nmcr_poll_interval = soon\n", r"\[TIMEOUTS_INTERVALS\] mcr_poll_interval"),
     ("[DAEMON]\nretention_days = 1.5\n", r"\[DAEMON\] retention_days"),
     (NOTIF + "debounce_seconds = soon\n", r"\[NOTIFICATIONS\] debounce_seconds"),
-    ("[BEAM_BOUNDARIES]\nts1_boundaries = 0, a, 2\n", r"\[BEAM_BOUNDARIES\] ts1_boundaries"),
-    ("[BEAM_BOUNDARIES]\nts1_boundaries = 0.0, 50.0\n", "exactly 3"),
+    # [BEAM:*] sections
+    ("[BEAM:TS1]\nboundaries = 0, a, 2\n", r"\[BEAM:TS1\] boundaries could not convert"),
+    ("[BEAM:TS1]\nboundaries = 0.0, 50.0\n", "exactly 3"),
+    ("[BEAM:TS1]\nboundaries = 0, 60, 50\n", "in increasing order"),
+    ("[BEAM:TS1]\nboundaries = 0, 50, inf\n", "must be finite"),
+    ("[BEAM:TS3]\npv = X\n", r"\[BEAM:TS3\] must name a beam target: TS1, TS2, Muons"),
+    ("[BEAM:Muon]\n[BEAM:muons]\n", "Beam target Muons is configured more than once"),
+    ("[BEAM:TS2]\npv = AC:TS1:BEAM:CURR\n", r"\[BEAM:TS2\] PV AC:TS1:BEAM:CURR is already used by the TS1 beam"),
     ("[INSTRUMENT:WISH]\n[INSTRUMENT:WISH]\n", "Could not parse"),  # duplicate section
     # Out-of-range numbers
     ("[TUI_CLIENT]\nreconnect_initial = 0\nreconnect_max = 5\n", "positive"),
@@ -171,13 +180,13 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     (PEARL + "notify_counts = 130, 5\n", "a number or 'auto, <number>'"),
     (PEARL + "notify_counts = auto, lots\n", r"\[INSTRUMENT:PEARL\] notify_counts"),
     (PEARL + "notify_counts = auto, 0\n", "must be a positive number"),
-    (PEARL + "notify_counts = 5\nbeam_target = Muons\n", "beam_target must be one of"),
+    (PEARL + "notify_counts = 5\nbeam_target = Muon2\n", "beam_target must be one of"),
     (PEARL + "notify_counts = 5\nchannel = teams\n",
      r"\[INSTRUMENT:PEARL\] channel must be one of experiment, instrument"),
     (PEARL + "notify_counts = 5\n[INSTRUMENT:pearl]\nnotify_counts = 5\n", "defined more than once"),
-    ("[PVS]\nts1_beam_current_pv = IN:PEARL:DAE:TOTALUAMPS\n" + PEARL + "notify_counts = 5\n",
+    ("[BEAM:TS1]\npv = IN:PEARL:DAE:TOTALUAMPS\n" + PEARL + "notify_counts = 5\n",
      "already used by the TS1 beam"),
-    ("[PVS]\nts2_beam_current_pv = IN:PEARL:DAE:WDTITLE\n" + PEARL + "notify_counts = 5\n",
+    ("[beam:ts2]\npv = IN:PEARL:DAE:WDTITLE\n" + PEARL + "notify_counts = 5\n",
      r"^\[INSTRUMENT:PEARL\] PV IN:PEARL:DAE:WDTITLE is already used by the TS2 beam"),
     # [NOTIFICATIONS], caught at load time so a bad edit can't leave the daemon failing on restart
     (NOTIF + "timezone = Nowhere/City\n", "not a known timezone"),
@@ -218,10 +227,14 @@ def test_load_config_resolves_relative_paths_against_the_config_dir(tmp_path):
     assert config.push_secret_file == str(tmp_path / "push.secret")
 
 
-def test_load_config_custom_boundaries(tmp_path):
-    config = load_config(_write(tmp_path, "[BEAM_BOUNDARIES]\nts2_boundaries = 1, 2.5 , 3\n"))
-    assert config.ts2_boundaries == (1.0, 2.5, 3.0)
-    assert config.ts1_boundaries == (0.0, 50.0, 140.0)
+def test_beam_sections_override_the_defaults(tmp_path, caplog):
+    config = load_config(_write(tmp_path, "[BEAM:ts2]\nboundaries = 1, 2.5 , 2.5\n[BEAM:Muon]\npv = X:MU\ncolour = red\n"))
+    assert config.beams == (
+        DEFAULT_BEAMS[0],
+        BeamTargetConfig("TS2", DEFAULT_BEAMS[1].pv, (1.0, 2.5, 2.5)),
+        BeamTargetConfig("Muons", "X:MU", DEFAULT_BEAMS[2].boundaries),
+    )
+    assert "[BEAM:Muon] ignoring unknown key(s): colour" in caplog.text
 
 
 def test_instrument_sections(tmp_path):

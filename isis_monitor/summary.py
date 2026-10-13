@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Deque, Dict, List, Optional, Tuple
 
-from isis_monitor.config import TARGET_LABELS, AppConfig
+from isis_monitor.config import AppConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.messages import daily_summary, get_timezone, sparkline_chars
 from isis_monitor.notifiers import NotificationChannel
@@ -98,11 +98,10 @@ def _downsample(values: List[float], n: int) -> List[float]:
 
 
 def _instruments_by_channel(state: DaemonState) -> Dict[str, List[str]]:
-    """Instrument names grouped by the channel label (e.g. "Muons") of their
-    beam target (e.g. "Muon")."""
+    """Instrument names grouped by their beam target (e.g. "Muons")."""
     grouped: Dict[str, List[str]] = {}
     for name, info in state.instruments.items():
-        grouped.setdefault(TARGET_LABELS.get(str(info["beam_target"]), ""), []).append(name)
+        grouped.setdefault(str(info["beam_target"]), []).append(name)
     return grouped
 
 

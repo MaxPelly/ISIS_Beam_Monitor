@@ -8,19 +8,18 @@ import re
 import shutil
 import stat
 import tempfile
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("isis_monitor.config")
 
-# The single source of truth for the three beam targets: each one's state key
-# (used in config, e.g. beam_target, and in messages) and its channel label
-# (used by the sink, TUI and notification routing).
-TARGET_LABELS = {"TS1": "TS1", "TS2": "TS2", "Muon": "Muons"}
-BEAM_TARGET_KEYS = tuple(TARGET_LABELS)
-CHANNEL_LABELS = tuple(TARGET_LABELS.values())  # "TS1", "TS2", "Muons"
+# The three beam targets, by the one name used everywhere: config, state,
+# cards, push topics and the Teams channel.
+BEAM_NAMES = ("TS1", "TS2", "Muons")
+_BEAM_ALIASES = {"ts1": "TS1", "ts2": "TS2", "muon": "Muons", "muons": "Muons"}
+BEAM_SECTION_PREFIX = "BEAM:"
 
 # Teams payload channel for an instrument's run cards: "experiment" sends the
 # experiment NotificationChannel's name ("Experiment Updates"), "instrument"
@@ -60,6 +59,29 @@ MAX_HISTORY_SAMPLES = 100_000
 _INSTRUMENT_NAME_RE = re.compile(r"[A-Z0-9_-]+")
 
 
+def beam_name(value: str) -> Optional[str]:
+    """The beam target a config value names (any case; "Muon" too), or None."""
+    return _BEAM_ALIASES.get(value.strip().lower())
+
+
+@dataclass(frozen=True)
+class BeamTargetConfig:
+    """One beam target, from a `[BEAM:<NAME>]` section."""
+    name: str  # one of BEAM_NAMES
+    pv: str  # its beam current, in µA
+    # Power cutoffs in µA: off at or below the first; low below the second;
+    # medium below the third; else high.
+    boundaries: Tuple[float, float, float]
+
+
+DEFAULT_BEAMS = (
+    BeamTargetConfig("TS1", "AC:TS1:BEAM:CURR", (0.0, 50.0, 140.0)),
+    BeamTargetConfig("TS2", "AC:TS2:BEAM:CURR", (0.0, 10.0, 30.0)),
+    BeamTargetConfig("Muons", "AC:MUON:BEAM:CURR", (0.0, 2.0, 5.0)),
+)
+_BEAM_KEYS = ("pv", "boundaries")
+
+
 class ConfigError(Exception):
     """Raised when the configuration file is missing or contains invalid values."""
 
@@ -78,7 +100,7 @@ class InstrumentConfig:
     """One monitored instrument, from an `[INSTRUMENT:<NAME>]` section."""
     name: str
     notify_counts: float  # total µA·h collected at which "run about to finish" is sent
-    beam_target: str  # which beam target's state to report in run cards
+    beam_target: str  # which beam target's state to report in run cards; one of BEAM_NAMES
     channel: str = "experiment"  # one of CHANNEL_MODES
     # "notify_counts = auto, N": each run's target comes from the experiment's
     # recent run totals, with notify_counts (N) used until there are enough.
@@ -125,16 +147,10 @@ class AppConfig:
     push_timeout: float = _ini("PUSH", 2.0, "timeout")
     push_secret: bytes = field(default=b"", repr=False)  # set by the daemon from read_push_secret()
 
-    ts1_beam_current_pv: str = _ini("PVS", "AC:TS1:BEAM:CURR")
-    ts2_beam_current_pv: str = _ini("PVS", "AC:TS2:BEAM:CURR")
-    muon_beam_current_pv: str = _ini("PVS", "AC:MUON:BEAM:CURR")
     # The default beam_target for instrument sections that don't set one
     instrument_target: str = _ini("PVS", "TS1")
-
-    # off / low / medium cutoffs in uA
-    ts1_boundaries: tuple = _ini("BEAM_BOUNDARIES", (0.0, 50.0, 140.0))
-    ts2_boundaries: tuple = _ini("BEAM_BOUNDARIES", (0.0, 10.0, 30.0))
-    muon_boundaries: tuple = _ini("BEAM_BOUNDARIES", (0.0, 2.0, 5.0))
+    # From the [BEAM:<NAME>] sections, in BEAM_NAMES order
+    beams: Tuple[BeamTargetConfig, ...] = DEFAULT_BEAMS
 
     mcr_poll_interval: float = _ini("TIMEOUTS_INTERVALS", 60.0)
     beam_reconnect_interval: float = _ini("TIMEOUTS_INTERVALS", 5.0)
@@ -172,19 +188,52 @@ class AppConfig:
     instruments: List[InstrumentConfig] = field(default_factory=list)
 
 
-def _parse_boundaries(raw: str) -> tuple:
+def _parse_boundaries(raw: str) -> Tuple[float, float, float]:
     result = tuple(float(x.strip()) for x in raw.split(","))
     if len(result) != 3:
         raise ValueError(f"must have exactly 3 comma-separated values, got {len(result)}")
+    if not all(math.isfinite(x) for x in result) or list(result) != sorted(result):
+        raise ValueError("must be finite and in increasing order (equal values are allowed)")
     return result
 
 
 def _read_value(parser: configparser.ConfigParser, section: str, key: str, kind: type):
     if kind is str:
         return parser.get(section, key)
-    if kind is tuple:
-        return _parse_boundaries(parser.get(section, key))
     return {int: parser.getint, float: parser.getfloat, bool: parser.getboolean}[kind](section, key)
+
+
+def _unknown_keys(parser: configparser.ConfigParser, section: str, known) -> None:
+    # options() also lists any [DEFAULT] keys, which aren't this section's fault.
+    unknown = set(parser.options(section)) - set(known) - set(parser.defaults())
+    if unknown:
+        logger.warning(f"[{section}] ignoring unknown key(s): {', '.join(sorted(unknown))}")
+
+
+def _read_beams(parser: configparser.ConfigParser) -> Tuple[BeamTargetConfig, ...]:
+    """DEFAULT_BEAMS, with any [BEAM:<NAME>] section's settings applied."""
+    beams = {b.name: b for b in DEFAULT_BEAMS}
+    seen = set()
+    for section in parser.sections():
+        if not section.upper().startswith(BEAM_SECTION_PREFIX):
+            continue
+        name = beam_name(section[len(BEAM_SECTION_PREFIX):])
+        if name is None:
+            raise ConfigError(f"[{section}] must name a beam target: {', '.join(BEAM_NAMES)}")
+        if name in seen:
+            raise ConfigError(f"Beam target {name} is configured more than once")
+        seen.add(name)
+        _unknown_keys(parser, section, _BEAM_KEYS)
+        changes = {}
+        if pv := parser.get(section, "pv", fallback="").strip():
+            changes["pv"] = pv
+        if raw := parser.get(section, "boundaries", fallback="").strip():
+            try:
+                changes["boundaries"] = _parse_boundaries(raw)
+            except ValueError as exc:
+                raise ConfigError(f"[{section}] boundaries {exc}") from exc
+        beams[name] = replace(beams[name], **changes)
+    return tuple(beams[name] for name in BEAM_NAMES)
 
 
 def _read_instruments(
@@ -204,10 +253,7 @@ def _read_instruments(
             raise ConfigError(
                 f"[{section}] instrument name may only contain letters, digits, '_' and '-'"
             )
-        # options() also lists any [DEFAULT] keys, which aren't this section's fault.
-        unknown = set(parser.options(section)) - set(_INSTRUMENT_KEYS) - set(parser.defaults())
-        if unknown:
-            logger.warning(f"[{section}] ignoring unknown key(s): {', '.join(sorted(unknown))}")
+        _unknown_keys(parser, section, _INSTRUMENT_KEYS)
         raw_counts = parser.get(section, "notify_counts", fallback="").strip()
         if not raw_counts:
             raise ConfigError(f"[{section}] notify_counts is required")
@@ -219,7 +265,8 @@ def _read_instruments(
             notify_counts = float(fallback if auto_counts else raw_counts)
         except ValueError as exc:
             raise ConfigError(f"[{section}] notify_counts: {exc}") from exc
-        beam_target = parser.get(section, "beam_target", fallback="").strip() or config.instrument_target
+        raw_target = parser.get(section, "beam_target", fallback="").strip()
+        beam_target = (beam_name(raw_target) or raw_target) if raw_target else config.instrument_target
         channel = parser.get(section, "channel", fallback="").strip().lower() or "experiment"
         instruments.append(InstrumentConfig(
             name, notify_counts, beam_target, channel=channel, auto_counts=auto_counts, section=section
@@ -259,17 +306,17 @@ def _check_choice(section: str, key: str, value: str, choices) -> None:
 
 def _validate_instruments(config: AppConfig) -> None:
     names = set()
-    pv_owners = {
-        config.ts1_beam_current_pv: "the TS1 beam",
-        config.ts2_beam_current_pv: "the TS2 beam",
-        config.muon_beam_current_pv: "the Muon beam",
-    }
+    pv_owners = {}
+    for beam in config.beams:
+        if beam.pv in pv_owners:
+            raise ConfigError(f"[{BEAM_SECTION_PREFIX}{beam.name}] PV {beam.pv} is already used by {pv_owners[beam.pv]}")
+        pv_owners[beam.pv] = f"the {beam.name} beam"
     for inst in config.instruments:
         section = inst.section or f"{INSTRUMENT_SECTION_PREFIX}{inst.name}"
         if inst.name in names:
             raise ConfigError(f"Instrument {inst.name} is defined more than once")
         names.add(inst.name)
-        _check_choice(section, "beam_target", inst.beam_target, BEAM_TARGET_KEYS)
+        _check_choice(section, "beam_target", inst.beam_target, BEAM_NAMES)
         _check_choice(section, "channel", inst.channel, CHANNEL_MODES)
         # Also rejects nan and inf, which would never be reached.
         if not (math.isfinite(inst.notify_counts) and inst.notify_counts > 0):
@@ -289,7 +336,7 @@ def _validate(config: AppConfig, config_path: Path) -> None:
             "isis_websocket_url is empty — BeamMonitor will not run. "
             "Please set [DATA] isis_websocket_url in your config file."
         )
-    _check_choice("PVS", "instrument_target", config.instrument_target, BEAM_TARGET_KEYS)
+    _check_choice("PVS", "instrument_target", config.instrument_target, BEAM_NAMES)
     try:
         hour, minute = (int(x) for x in config.summary_time.split(":"))
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
@@ -383,7 +430,9 @@ def parse_config(parser: configparser.ConfigParser, config_path: Path) -> AppCon
         path = values.get(name, getattr(AppConfig, name))
         if path:
             values[name] = str(config_path.absolute().parent / path)  # an absolute path is kept as is
-    config = AppConfig(**values)
+    if "instrument_target" in values:
+        values["instrument_target"] = beam_name(values["instrument_target"]) or values["instrument_target"]
+    config = AppConfig(**values, beams=_read_beams(parser))
     config.instruments = _read_instruments(parser, config)
     _validate(config, config_path)
     return config

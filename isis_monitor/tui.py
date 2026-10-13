@@ -12,7 +12,7 @@ from rich.text import Text
 from rich.table import Table
 
 from isis_monitor import __version__
-from isis_monitor.config import CHANNEL_LABELS, TARGET_LABELS
+from isis_monitor.config import BEAM_NAMES
 from isis_monitor.messages import sparkline_chars
 
 
@@ -92,7 +92,7 @@ class RichTUI:
         self.sample_interval = sample_interval
 
         self.beam_states: dict[str, dict] = {
-            beam: {"current": 0.0, "power": "unknown"} for beam in CHANNEL_LABELS
+            beam: {"current": 0.0, "power": "unknown"} for beam in BEAM_NAMES
         }
         # Per-target rolling history: deque of (datetime, current_μA, power_state)
         self._history: dict[str, Deque[Tuple[datetime, float, str]]] = {
@@ -327,7 +327,7 @@ class RichTUI:
     def _target_text(self, info: dict) -> Text:
         """An instrument's beam target, coloured by that beam's power."""
         target = str(info.get("beam_target", ""))
-        beam = self.beam_states.get(TARGET_LABELS.get(target, target), {})
+        beam = self.beam_states.get(target, {})
         return Text(target, style=_get_state_colour(beam.get("power", "unknown")))
 
     def _update_instruments_panel(self):
