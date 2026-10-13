@@ -741,7 +741,7 @@ async def test_run_loop_subscribes_and_dispatches_updates(mock_config, mock_chan
     assert set(server.subscriptions[0]["pvs"]) == {
         "CS:INSTLIST", TS1_PV, TS2_PV,
         MUONS_PV, PEARL_UAMPS, PEARL_TITLE,
-        "IN:PEARL:DAE:RUNSTATE_STR", "IN:PEARL:DAE:RUNNUMBER", "IN:PEARL:DAE:_RBNUMBER",
+        "IN:PEARL:DAE:RUNSTATE_STR", "IN:PEARL:DAE:RUNNUMBER", "IN:PEARL:DAE:_RBNUMBER", "IN:PEARL:DAE:STARTTIME",
     }
     sink.update_beam_state.assert_called_with("TS1", 150.0, "high")
     sink.update_health.assert_any_call("beam", "connected")
@@ -1043,7 +1043,8 @@ async def test_run_loop_subscribes_to_every_instruments_pvs(mock_config, mock_ch
     # counts, so a run changed while disconnected is started by its title.
     for name in ("PEARL", "WISH"):
         assert [pv for pv in pvs if pv.startswith(f"IN:{name}:")] == [
-            f"IN:{name}:DAE:{pv}" for pv in ("_RBNUMBER", "RUNNUMBER", "WDTITLE", "TOTALUAMPS", "RUNSTATE_STR")
+            f"IN:{name}:DAE:{pv}" for pv in ("_RBNUMBER", "RUNNUMBER", "WDTITLE", "TOTALUAMPS", "RUNSTATE_STR",
+                                              "STARTTIME")
         ]
 
 
@@ -1641,7 +1642,8 @@ async def test_instlist_sets_the_beam_target_and_resubscribes_a_new_prefix(mock_
 
     assert tracker(m).beam_target == "Muons"
     assert m.instrument_views()["PEARL"]["beam_target"] == "Muons"
-    old = [f"IN:PEARL:DAE:{pv}" for pv in ("_RBNUMBER", "RUNNUMBER", "WDTITLE", "TOTALUAMPS", "RUNSTATE_STR")]
+    old = [f"IN:PEARL:DAE:{pv}"
+           for pv in ("_RBNUMBER", "RUNNUMBER", "WDTITLE", "TOTALUAMPS", "RUNSTATE_STR", "STARTTIME")]
     new = [pv.replace("IN:PEARL:", "IN:PEARL_5B:") for pv in old]
     assert [json.loads(c.args[0]) for c in m._current_ws.send.await_args_list] == [
         {"type": "clear", "pvs": old}, {"type": "subscribe", "pvs": new},

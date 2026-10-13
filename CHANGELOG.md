@@ -8,6 +8,8 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+- Run detection by run number runs in shadow alongside the current title and counts heuristics: it sends nothing, and logs what it would do with a `[shadow]` prefix, for comparing the two before it takes over. Each instrument's `DAE:STARTTIME` is now subscribed to as well.
+
 - Each instrument's saved state has a new layout, kept by its tracker alone, and each run completion now records its run number. The first start after upgrading ignores the old instrument entries and run completions (one warning each), so the current experiment's progress, the auto-target history and the current run's start are forgotten, and the next daily summary under-reports runs.
 
 ## [1.2.0] - 2026-10-13

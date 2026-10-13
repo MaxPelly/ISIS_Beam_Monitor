@@ -2,7 +2,6 @@
 import base64
 import logging
 import math
-import statistics
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -15,6 +14,7 @@ from isis_monitor.messages import (
     strip_controls,
 )
 from isis_monitor.notifiers import NotificationChannel
+from isis_monitor.runs import AUTO_HISTORY, AUTO_MIN_RUNS, RunTracker, auto_target, pv_handlers as run_pv_handlers
 
 logger = logging.getLogger(__name__)
 
@@ -46,14 +46,6 @@ RESET_RETITLE_WINDOW = timedelta(minutes=2)
 # A run started this soon before an RB number change is taken to be the new
 # experiment's: PVWS sends the PVs of an automated run's start in no fixed order.
 NEW_EXPERIMENT_RUN_WINDOW = timedelta(seconds=30)
-# notify_counts = auto: a run's target is the median of the experiment's last
-# AUTO_RUNS run totals, leaving out very short ones (e.g. a mistaken setup),
-# once AUTO_MIN_RUNS are left; AUTO_HISTORY totals are kept to allow for them.
-AUTO_HISTORY = 7
-AUTO_RUNS = 5
-AUTO_MIN_RUNS = 3
-AUTO_SHORT_UAH = 1.0  # µA·h; a run below this, or AUTO_SHORT_FRACTION of
-AUTO_SHORT_FRACTION = 0.25  # the median of all kept totals, is "very short"
 
 
 def _fit_rate(samples: Sequence[Tuple[datetime, float]]) -> float:
@@ -71,18 +63,6 @@ def _fit_rate(samples: Sequence[Tuple[datetime, float]]) -> float:
         return 0.0
     numer = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
     return numer / denom
-
-
-def auto_target(totals: Sequence[float], fallback: float) -> Tuple[float, int]:
-    """The target for a run from recent run totals (oldest first), and how
-    many runs it came from: 0 means there weren't enough, so it's `fallback`."""
-    if not totals:
-        return fallback, 0
-    floor = max(AUTO_SHORT_UAH, AUTO_SHORT_FRACTION * statistics.median(totals))
-    kept = [t for t in totals if t >= floor][-AUTO_RUNS:]
-    if len(kept) < AUTO_MIN_RUNS:
-        return fallback, 0
-    return round(statistics.median(kept), 1), len(kept)
 
 
 # Bumped when to_snapshot()'s layout changes; other entries are ignored.
@@ -176,7 +156,7 @@ class InstrumentTracker:
         sink: Optional[DaemonState] = None,
         default_target: str = "TS1",
     ):
-        self.instrument = instrument
+        self._instrument = instrument
         self.default_target = default_target
         self.beam_target = instrument.beam_target or default_target
         self._station_warned = False
@@ -186,6 +166,19 @@ class InstrumentTracker:
         self.finish_warning_minutes = finish_warning_minutes
         self.sink = sink
         self.state = InstrumentState(run_target=instrument.notify_counts)
+        # Run detection by run number, in shadow: it only logs its decisions
+        # (with "[shadow]") for comparing with this tracker's cards, until it
+        # replaces the title and counts heuristics.
+        self.runs = RunTracker(instrument, log_prefix="[shadow] ")
+
+    @property
+    def instrument(self) -> InstrumentConfig:
+        return self._instrument
+
+    @instrument.setter
+    def instrument(self, instrument: InstrumentConfig) -> None:
+        """E.g. with a new PV prefix from CS:INSTLIST, for the shadow too."""
+        self._instrument = self.runs.instrument = instrument
 
     def set_station(self, station: Optional[str]) -> None:
         """The instrument's target station from CS:INSTLIST, or None if it
@@ -219,13 +212,26 @@ class InstrumentTracker:
         changed while disconnected is reported under its new title rather than
         started by its counts reset; the server may still reorder them."""
         inst = self.instrument
-        return {
+        handlers = {
             inst.rb_number_pv: on_field("text", self.handle_rb_number),
             inst.run_number_pv: on_field("text", lambda text, _now: self.handle_run_number(text)),
             inst.run_name_pv: on_field("b64byt", self.handle_run_name),
             inst.counts_pv: on_field("value", self.handle_counts),
             inst.run_state_pv: on_field("text", lambda text, _now: self.handle_run_state(text)),
         }
+        shadow = run_pv_handlers(self.runs)
+        return {pv: self._with_shadow(handlers.get(pv), shadow[pv]) for pv in shadow}
+
+    def _with_shadow(self, handler: Optional[PVHandler], shadow: Callable[[dict, datetime], None]) -> PVHandler:
+        """`handler`, after the shadow's own; a failure in the shadow is only logged."""
+        async def both(update: dict, time_now: datetime) -> None:
+            try:
+                shadow(update, time_now)
+            except Exception:
+                logger.exception(f"[shadow] {self.instrument.name}: failed to handle {update.get('pv')}")
+            if handler:
+                await handler(update, time_now)
+        return both
 
     def handle_run_state(self, text: Any) -> None:
         self.state.run_state = strip_controls(str(text)).strip().upper()
@@ -434,6 +440,7 @@ class InstrumentTracker:
             "exp_partial": s.exp_partial,
             "exp_runs": s.exp_runs,
             "exp_uah": s.exp_uah,
+            "shadow": self.runs.to_snapshot(),
         }
 
     def view(self) -> dict:
@@ -481,10 +488,13 @@ class InstrumentTracker:
         self.state = state
         if not same_target:  # otherwise the run keeps the target it started with
             self._set_target()
+        if "shadow" in saved:
+            self.runs.from_snapshot(saved["shadow"], same_target)
 
     def resubscribed(self) -> None:
         """PVWS is about to re-send every value, which may have changed unseen."""
         self.state.rb_resync = True
+        self.runs.resubscribed(datetime.now(timezone.utc))
 
     def reset_stall_clock(self) -> None:
         """While counts can't be judged (e.g. PVWS is down, or the run paused).

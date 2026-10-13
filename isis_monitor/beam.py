@@ -364,6 +364,8 @@ class BeamMonitor:
             await asyncio.gather(self._run_loop(), self._collection_check_loop())
         finally:
             self.change_aggregator.cancel_all()
+            for tracker in self.instruments.values():
+                tracker.runs.cancel()
 
     def _set_health(self, status: str) -> None:
         if self.sink:

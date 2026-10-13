@@ -197,7 +197,8 @@ class DaemonState:
             "mcr_news": self.mcr_news,
             "instruments": self.instruments(),
             "run_completions": [
-                [ts.isoformat(), name, number, uah] for ts, name, number, uah in self.run_completions if ts >= cutoff
+                [ts.isoformat(), name, number, uah]
+                for ts, name, number, uah in self.run_completions if ts >= cutoff
             ],
             "instlist": instlist.to_snapshot(self.instlist),
         }
@@ -237,7 +238,8 @@ class DaemonState:
                 }
         self.mcr_news = str(snap.get("mcr_news", self.mcr_news))
         saved = snap.get("instruments")
-        self.saved_instruments = {k: v for k, v in saved.items() if k in self.instrument_names} if isinstance(saved, dict) else {}
+        saved = saved if isinstance(saved, dict) else {}
+        self.saved_instruments = {k: v for k, v in saved.items() if k in self.instrument_names}
         self._restore_run_completions(snap.get("run_completions"))
         self.instlist = instlist.from_snapshot(snap.get("instlist"))
 
