@@ -210,4 +210,4 @@ async def daily_summary_loop(
             # last_sent_date is still set in memory, so it isn't resent today.
             logger.exception("Failed to save daily summary state")
 
-    logger.warning("Daily summary loop quit")
+    logger.info("Daily summary loop quit")

@@ -314,7 +314,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             for task in pending:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-        logger.warning("Shutting down daemon")
+        logger.info("Shutting down daemon")
         state.update_health("daemon", "stopping")
         await ipc_server.stop()
         snap = json.dumps(state.snapshot())
