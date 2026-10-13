@@ -66,6 +66,7 @@ class DaemonState:
             beam: deque(maxlen=history_maxlen) for beam in BEAM_NAMES
         }
         self.mcr_news = MCR_NEWS_PLACEHOLDER
+        self.mcr_news_at: Optional[datetime] = None  # when this run of the daemon last saw it change
         self.logs: Deque[str] = deque(maxlen=logs_maxlen)
         self.instrument_names = frozenset(instrument_names)
         # Each instrument tracker's live view (its snapshot plus its effective
@@ -160,7 +161,7 @@ class DaemonState:
                 samples.popleft()
 
     def update_mcr_news(self, news: str) -> None:
-        self.mcr_news = news
+        self.mcr_news, self.mcr_news_at = news, datetime.now(timezone.utc)
         self._publish("mcr", {"news": news})
 
     def update_health(self, component: str, status: str) -> None:

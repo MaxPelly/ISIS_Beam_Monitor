@@ -451,8 +451,10 @@ class InstrumentTracker:
             return None
 
     def view(self) -> dict:
-        """The snapshot plus what clients show: the effective beam target."""
-        return {**self.to_snapshot(), "beam_target": self.beam_target}
+        """The snapshot plus what clients show: the effective beam target, and
+        the DAE's run number and state."""
+        return {**self.to_snapshot(), "beam_target": self.beam_target,
+                "run_number": self.state.run_number, "run_state": self.state.run_state}
 
     def from_snapshot(self, saved: object) -> None:
         """Restore state saved by to_snapshot() after a restart; a malformed or

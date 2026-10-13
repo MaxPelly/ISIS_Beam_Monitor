@@ -460,7 +460,7 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
 
     assert snap["mcr_news"] == "old news"
     assert mcr_cls.call_args.kwargs["old_news"] == "old news"
-    assert snap["instruments"] == {"PEARL": {**saved, "beam_target": "TS1"}}
+    assert snap["instruments"] == {"PEARL": {**saved, "beam_target": "TS1", "run_number": "", "run_state": ""}}
     assert history["TS2"][0]["current"] == 7.0
     assert set(reconnect) == {"beam", "mcr"}
 
