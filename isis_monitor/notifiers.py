@@ -279,6 +279,20 @@ class TeamsNotifier(HTTPNotifier):
             }],
         }
 
+def signed_json(payload: dict, secret: bytes) -> dict:
+    """session.post() keyword arguments sending `payload` as JSON signed for
+    the push site: X-Timestamp (Unix seconds) and X-Signature, the hex
+    HMAC-SHA256 of "<timestamp>.<body>" under the shared secret."""
+    body = json.dumps(payload, ensure_ascii=False).encode()
+    timestamp = str(int(time.time()))
+    signature = hmac.new(secret, timestamp.encode() + b"." + body, hashlib.sha256).hexdigest()
+    return {"data": body, "headers": {
+        "Content-Type": "application/json",
+        "X-Timestamp": timestamp,
+        "X-Signature": signature,
+    }}
+
+
 class WebhookNotifier(HTTPNotifier):
     """POSTs notifications as signed JSON, e.g. to the optional push site.
 
@@ -311,14 +325,7 @@ class WebhookNotifier(HTTPNotifier):
         }
 
     def _request_kwargs(self, payload: dict) -> dict:
-        body = json.dumps(payload, ensure_ascii=False).encode()
-        timestamp = str(int(time.time()))
-        signature = hmac.new(self.secret, timestamp.encode() + b"." + body, hashlib.sha256).hexdigest()
-        return {"data": body, "headers": {
-            "Content-Type": "application/json",
-            "X-Timestamp": timestamp,
-            "X-Signature": signature,
-        }}
+        return signed_json(payload, self.secret)
 
 
 class DummyNotifier(Notifier):

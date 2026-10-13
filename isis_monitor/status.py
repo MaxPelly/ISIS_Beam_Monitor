@@ -5,13 +5,21 @@ status.py for the payload's layout (version 1). Beams and instruments with
 no live reading are sent as unknown, never as zero, so a feed outage doesn't
 look like the beam going off.
 """
+import asyncio
+import contextlib
+import logging
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
+
+import aiohttp
 
 from isis_monitor import __version__
 from isis_monitor.config import BEAM_NAMES
 from isis_monitor.daemon_state import MCR_NEWS_PLACEHOLDER, DaemonState
+from isis_monitor.notifiers import signed_json
+
+logger = logging.getLogger(__name__)
 
 HISTORY = timedelta(hours=24)
 HISTORY_POINTS = 144  # 10-minute bins
@@ -72,10 +80,55 @@ def build(state: DaemonState, since: Dict[str, Optional[datetime]], interval_s: 
         })
     news = "" if state.mcr_news == MCR_NEWS_PLACEHOLDER else state.mcr_news
     return {
-        "v": 1, "kind": "status", "generated_at": _iso(now), "interval_s": interval_s,
+        # To the millisecond: the site only keeps a status newer than the last.
+        "v": 1, "kind": "status", "generated_at": now.astimezone(timezone.utc).isoformat(timespec="milliseconds"),
+        "interval_s": interval_s,
         "monitor_version": __version__,
         "health": dict(state.health),
         "beams": beams,
         "instruments": [_instrument(name, view) for name, view in state.instruments().items()],
         "mcr": {"news": news, "seen_at": _iso(state.mcr_news_at)},
     }
+
+
+class StatusPublisher:
+    """POSTs the status to the push site (`url` + "/status", e.g.
+    .../ingest/status) every `interval` seconds, and soon after a
+    significant change (poke()), but at most once per DEBOUNCE. Nothing
+    queues: each send builds the latest status, and a failed one is only
+    logged, since the next replaces it."""
+    DEBOUNCE = 5.0
+
+    def __init__(self, url: str, secret: bytes, build: Callable[[], dict], interval: float,
+                 session: aiohttp.ClientSession, timeout: float = 2.0):
+        self.url = url.rstrip("/") + "/status"
+        self.secret, self.build, self.interval = secret, build, interval
+        self.session, self.timeout = session, timeout
+        self._changed = asyncio.Event()
+
+    def poke(self) -> None:
+        self._changed.set()
+
+    async def run(self) -> None:
+        while True:
+            await self._send()
+            await asyncio.sleep(self.DEBOUNCE)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._changed.wait(), max(self.interval - self.DEBOUNCE, 0))
+            self._changed.clear()
+
+    async def _send(self) -> None:
+        try:
+            status = self.build()
+        except Exception:  # a bug: logged, and the next send tries again
+            logger.exception("Failed to build the status")
+            return
+        try:
+            async with self.session.post(
+                self.url, timeout=aiohttp.ClientTimeout(total=self.timeout), allow_redirects=False,
+                **signed_json(status, self.secret),
+            ) as resp:
+                if resp.status not in (204, 409):  # 409: an older one, e.g. after a clock step
+                    logger.debug(f"Push site didn't take the status: HTTP {resp.status}")
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            logger.debug(f"Failed to send the status: {exc!r}")

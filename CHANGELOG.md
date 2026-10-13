@@ -8,6 +8,8 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+- With `[PUSH] url` set, the daemon also sends its status (beams with their last 24h, each instrument's run, MCR news, health) to the push site's `/ingest/status` every `sample_interval` and soon after a significant change, for the site's Status page (push site 1.1.0 or later; an older site just refuses it).
+
 ## [1.3.0rc1] - 2026-10-13
 
 A release candidate for comparing the new run detection with the current one live. Includes push site v1.0.3 (unchanged).

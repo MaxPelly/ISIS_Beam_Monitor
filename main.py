@@ -35,6 +35,7 @@ from isis_monitor.config import (
     update_config_file,
 )
 from isis_monitor.daemon_state import MCR_NEWS_PLACEHOLDER, DaemonState
+from isis_monitor.status import StatusPublisher, build as build_status
 from isis_monitor.ipc import IPCClient, IPCServer
 from isis_monitor.mcr import MCRNewsMonitor
 from isis_monitor.messages import Notification, set_timezone
@@ -323,14 +324,24 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             request_restart(f"Config file {args.config} updated over IPC")
             return {"restarting": True}
 
+    loops = [beam_monitor.run, mcr_monitor.run]  # each run until stop_event
+    if config.push_url and not args.dummy:
+        publisher = StatusPublisher(
+            config.push_url, config.push_secret,
+            lambda: build_status(state, {name: b.since for name, b in beam_monitor.beams.items()},
+                                 config.sample_interval),
+            config.sample_interval, session, config.push_timeout,
+        )
+        state.on_change = publisher.poke
+        loops.append(publisher.run)
+
     ipc_server = IPCServer(Path(config.daemon_socket_path), state, command_handler, config_handler)
     tasks: list = []
     try:
         await ipc_server.start()
         state.update_health("daemon", "running")
         tasks = [asyncio.ensure_future(coro) for coro in (
-            run_until_stopped(beam_monitor.run(), stop_event),
-            run_until_stopped(mcr_monitor.run(), stop_event),
+            *(run_until_stopped(run(), stop_event) for run in loops),
             state_persistence_loop(config, state, store, stop_event),
             daily_summary_loop(config, state, store, beam_channel, stop_event),
         )]

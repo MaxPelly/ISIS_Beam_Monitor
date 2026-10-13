@@ -75,3 +75,110 @@ def test_a_long_status_stays_well_under_the_push_sites_limit():
         for minutes in range(0, 24 * 60, 1):
             state.history[name].append((NOW - timedelta(minutes=minutes), 123.456, "medium"))
     assert len(json.dumps(build(state, {}, 60, NOW), ensure_ascii=False).encode()) < 48 * 1024
+
+
+# ---------------------------------------------------------------------------
+# StatusPublisher
+# ---------------------------------------------------------------------------
+
+import asyncio  # noqa: E402
+import contextlib  # noqa: E402
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+from unittest.mock import MagicMock, patch  # noqa: E402
+
+import aiohttp  # noqa: E402
+import pytest  # noqa: E402
+from aiohttp import web  # noqa: E402
+from aiohttp.test_utils import TestServer  # noqa: E402
+
+from isis_monitor.status import StatusPublisher  # noqa: E402
+from isis_monitor.tests.helpers import wait_until  # noqa: E402
+
+SECRET = b"s" * 32
+
+
+@contextlib.asynccontextmanager
+async def receiver(status=204):
+    """A push site stand-in recording each verified status it's sent."""
+    received = []
+
+    async def ingest_status(request):
+        body = await request.read()
+        signed = request.headers["X-Timestamp"].encode() + b"." + body
+        assert request.headers["X-Signature"] == hmac.new(SECRET, signed, hashlib.sha256).hexdigest()
+        received.append(json.loads(body))
+        return web.Response(status=status)
+    app = web.Application()
+    app.router.add_post("/ingest/status", ingest_status)
+    async with TestServer(app) as server:
+        server.received = received
+        yield server
+
+
+@contextlib.asynccontextmanager
+async def publishing(url, interval=3600.0, build=lambda: {"n": 1}, debounce=0.05):
+    async with aiohttp.ClientSession() as session:
+        publisher = StatusPublisher(url, SECRET, build, interval, session, timeout=1)
+        with patch.object(StatusPublisher, "DEBOUNCE", debounce):
+            task = asyncio.create_task(publisher.run())
+            try:
+                yield publisher
+            finally:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+
+async def test_the_status_is_sent_signed_at_start_and_every_interval():
+    async with receiver() as server:
+        async with publishing(str(server.make_url("/ingest")), interval=0.1):
+            await wait_until(lambda: len(server.received) >= 3)
+    assert server.received[0] == {"n": 1}
+
+
+async def test_a_change_sends_soon_but_at_most_once_per_debounce():
+    async with receiver() as server:
+        async with publishing(str(server.make_url("/ingest/")), debounce=0.2) as publisher:
+            await wait_until(lambda: len(server.received) == 1)  # at start
+            for _ in range(5):
+                publisher.poke()
+            await wait_until(lambda: len(server.received) == 2)
+            await asyncio.sleep(0.3)
+            assert len(server.received) == 2  # the pokes were one send
+
+
+async def test_a_receiver_that_is_down_or_refuses_doesnt_stop_publishing(caplog):
+    caplog.set_level("DEBUG")
+    async with publishing("http://127.0.0.1:9/ingest", interval=0.05):
+        await wait_until(lambda: caplog.text.count("Failed to send the status") >= 2)
+    async with receiver(status=404) as server:  # an older push site, without /ingest/status
+        async with publishing(str(server.make_url("/ingest")), interval=0.05):
+            await wait_until(lambda: len(server.received) >= 2)
+    assert "didn't take the status: HTTP 404" in caplog.text
+
+
+async def test_a_failing_build_is_logged_and_retried(caplog):
+    build = MagicMock(side_effect=[RuntimeError("bug"), {"n": 2}])
+    async with receiver() as server:
+        async with publishing(str(server.make_url("/ingest")), interval=0.05, build=build):
+            await wait_until(lambda: server.received)
+    assert "Failed to build the status" in caplog.text and server.received[0] == {"n": 2}
+
+
+def test_significant_changes_poke_the_publisher():
+    state = DaemonState(instrument_names=["PEARL"])
+    state.on_change = poke = MagicMock()
+    state.update_beam_state("TS1", 150.0, "high")
+    state.update_beam_state("TS1", 151.0, "high")  # the same power: no
+    state.update_mcr_news("x")
+    state.update_health("beam", "connected")
+    state.update_health("beam", "connected")  # no change: no
+    state.record_run_completed("PEARL", NOW, "1", 5.0)
+    state.record_run_completed("MERLIN", NOW, "1", 5.0)  # not configured: no
+    assert poke.call_count == 4
+
+
+@pytest.mark.parametrize("url", ["http://127.0.0.1:8765/ingest", "http://127.0.0.1:8765/ingest/"])
+def test_the_status_goes_to_the_ingest_url_plus_status(url):
+    assert StatusPublisher(url, SECRET, dict, 60, MagicMock()).url == "http://127.0.0.1:8765/ingest/status"
