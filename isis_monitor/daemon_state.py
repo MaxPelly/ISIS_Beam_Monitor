@@ -254,7 +254,9 @@ class DaemonState:
                 text, name, number, uah = entry
                 ts = datetime.fromisoformat(_aware_iso(text))
                 (uah,) = _finite_floats([uah])
-                wanted = name in self.instrument_names and isinstance(number, str) and ts >= cutoff
+                if not isinstance(number, str):
+                    raise TypeError("run number isn't text")
+                wanted = name in self.instrument_names and ts >= cutoff
             except (TypeError, ValueError):  # includes an unhashable name, or an older 3-item entry
                 skipped += 1
                 continue

@@ -155,6 +155,8 @@ class RunTracker:
         and no counts are credited to a run."""
         self._suspend()
         self._seen_number = self._seen_state = False
+        # What was seen before may have changed unseen.
+        self.run_state, self.counts, self.start_text, self._start_text_fresh = "", None, None, False
         self._replay_deadline = now + REPLAY_TIMEOUT
         self.rb_resync = True
         self._schedule(REPLAY_TIMEOUT)
@@ -168,6 +170,10 @@ class RunTracker:
         if self.replaying and self._seen_number and self._seen_state:
             self.replaying = False
             run = self.run
+            if run and run.number == self.run_number:  # what was re-sent meanwhile is this run's
+                run.title = self.title or run.title
+                if self.counts is not None and self.credited():
+                    run.last_counts = self.counts
             # A STARTTIME that changed under the same number while replaying is a re-begin.
             if run and run.number == self.run_number and run.start_text and self.start_text \
                     and self.start_text != run.start_text:
@@ -188,8 +194,8 @@ class RunTracker:
                     # It ended unseen. Its counts are final once the DAE is
                     # between runs (they only reset at BEGIN); otherwise the
                     # last ones credited may be short.
-                    final = self.run_state in IDLE_STATES and self.counts is not None \
-                        and self.counts >= run.last_counts
+                    final = (_follows(old, number) and self.run_state in IDLE_STATES
+                             and self.counts is not None and self.counts >= run.last_counts)
                     if final:
                         run.last_counts = self.counts
                     self._complete(now, final_known=final)
@@ -220,8 +226,8 @@ class RunTracker:
         """The decoded WDTITLE. It names the run under its number, and may
         change several times before BEGIN; it never starts a run."""
         self.title = title
-        if self.run and self.run.number == self.run_number:
-            self.run.title = title
+        if not self.replaying and self.run and self.run.number == self.run_number:
+            self.run.title = title  # while replaying, it may be the next run's: see _seen
 
     def credited(self) -> bool:
         """Whether counts now belong to the run (see on_counts)."""
@@ -238,6 +244,7 @@ class RunTracker:
         except (TypeError, ValueError):
             return False
         if not math.isfinite(counts):
+            self.counts = None  # the IOC is down; they may move on unseen
             return False
         self.counts = counts
         if not self.credited():
@@ -331,6 +338,8 @@ class RunTracker:
         elif now - self._pending[1] >= SETTLE:
             self._pending = None
             self._start(now)
+        else:  # e.g. a timer that fired early: wait out the rest
+            self._schedule(SETTLE - (now - self._pending[1]))
 
     def _start(self, now: datetime) -> None:
         previous = self.run
@@ -347,8 +356,8 @@ class RunTracker:
             last_counts=self.counts if self.counts is not None and self.run_state in CREDITED_STATES else -1.0,
         )
         silent = previous is None and not self.restored and not self._seen_idle
-        if previous and not (previous.final_known and _follows(previous.number, self.run_number)):
-            previous = None  # runs were missed
+        if previous and not _follows(previous.number, self.run_number):
+            previous = None  # runs were missed (its final_known says whether its total is)
         logger.info(f"{self._log}: run {self.run_number} began{' (adopted)' if silent else ''}: {self.title!r}")
         if self.listener:
             self.listener.run_started(self.run, previous, silent)
@@ -359,6 +368,7 @@ class RunTracker:
         if run.exp_gen == self.exp_gen and run.last_counts > 0:
             self.exp_runs += 1
             self.exp_uah += run.last_counts
+            self.exp_partial = self.exp_partial or not final_known  # so its totals are "at least"
             if self.instrument.auto_counts and final_known:
                 self.run_totals.append(run.last_counts)
         counts = f"{run.last_counts:.1f} µA·h" if run.last_counts >= 0 else "no counts read"
@@ -485,6 +495,8 @@ def pv_handlers(tracker: "RunTracker") -> dict:
         return handler
 
     def title(b64: Any, now: datetime) -> None:
+        if pv_text(b64) is None:  # NaN: the IOC is down
+            return
         try:
             text = strip_controls(base64.b64decode(str(b64)).decode(errors="replace"))  # e.g. NUL padding
         except ValueError:

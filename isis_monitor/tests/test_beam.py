@@ -1706,3 +1706,30 @@ async def test_a_new_instlist_is_saved_for_the_next_start(mock_config, mock_chan
     restored = DaemonState()
     restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
     assert restored.instlist == {"PEARL": ("IN:PEARL:", "TS1")}
+
+
+# ---------------------------------------------------------------------------
+# The shadow RunTracker (1.3.0rc1)
+# ---------------------------------------------------------------------------
+
+async def test_a_failing_shadow_never_reaches_the_live_path(mock_config, mock_channels, caplog):
+    with patch("isis_monitor.runs.RunTracker.on_counts", side_effect=RuntimeError("shadow bug")):
+        m = make_monitor(mock_config, mock_channels)  # its handlers are bound now
+    tracker(m).runs.to_snapshot = MagicMock(side_effect=RuntimeError("shadow bug"))
+    tracker(m).runs.resubscribed = MagicMock(side_effect=RuntimeError("shadow bug"))
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 12.0})
+    tracker(m).resubscribed()
+    assert tracker(m).state.current_counts == 12.0  # the live tracker still had it
+    assert tracker(m).to_snapshot()["shadow"] is None
+    assert caplog.text.count("[shadow] PEARL: failed") == 3
+
+
+async def test_the_shadow_state_is_saved_with_the_tracker(mock_config, mock_channels):
+    m = make_monitor(mock_config, mock_channels)
+    for update in ({"pv": "IN:PEARL:DAE:RUNNUMBER", "text": "00010"}, {"pv": "IN:PEARL:DAE:RUNSTATE_STR", "text": "SETUP"},
+                   {"pv": "IN:PEARL:DAE:_RBNUMBER", "text": "123"}):
+        await m._handle_update(update)
+    restored = make_monitor(mock_config, mock_channels)
+    restored.restore_instruments(json.loads(json.dumps(m.instrument_views())))
+    assert tracker(restored).runs.to_snapshot() == tracker(m).runs.to_snapshot()
+    assert tracker(restored).runs.restored and tracker(restored).runs.rb == "123"

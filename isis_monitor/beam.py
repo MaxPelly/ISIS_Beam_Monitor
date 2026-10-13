@@ -222,7 +222,8 @@ class BeamMonitor:
                 logger.info(f"{name}: its PVs start {prefix}, from CS:INSTLIST")
                 old += tracker.pv_handlers()
                 tracker.instrument = replace(tracker.instrument, pv_prefix=prefix)
-                tracker.resubscribed()  # the new PVs' values come in as on a reconnect
+                if self._current_ws is not None:  # otherwise the connection will resubscribe it
+                    tracker.resubscribed()  # the new PVs' values come in as on a reconnect
                 new += tracker.pv_handlers()
         return old, new
 

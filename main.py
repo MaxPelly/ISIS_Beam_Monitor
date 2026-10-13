@@ -446,7 +446,10 @@ async def _refresh_instruments(client: IPCClient, tui: RichTUI) -> None:
     """Instruments aren't sent as events, so re-read them every INSTRUMENT_REFRESH."""
     while True:
         await asyncio.sleep(INSTRUMENT_REFRESH)
-        resp = await client.request({"method": "get_snapshot"}, timeout=IPC_REQUEST_TIMEOUT)
+        try:
+            resp = await client.request({"method": "get_snapshot"}, timeout=IPC_REQUEST_TIMEOUT)
+        except (OSError, ValueError, RuntimeError):  # the connection's gone; the loop reconnects
+            return
         if resp.get("ok") and isinstance(resp.get("snapshot", {}).get("instruments"), dict):
             tui.set_instruments(resp["snapshot"]["instruments"])
 

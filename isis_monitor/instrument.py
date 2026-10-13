@@ -440,8 +440,15 @@ class InstrumentTracker:
             "exp_partial": s.exp_partial,
             "exp_runs": s.exp_runs,
             "exp_uah": s.exp_uah,
-            "shadow": self.runs.to_snapshot(),
+            "shadow": self._shadow_snapshot(),
         }
+
+    def _shadow_snapshot(self) -> Optional[dict]:
+        try:
+            return self.runs.to_snapshot()
+        except Exception:  # never let the shadow stop the state being saved
+            logger.exception(f"[shadow] {self.instrument.name}: failed to save its state")
+            return None
 
     def view(self) -> dict:
         """The snapshot plus what clients show: the effective beam target."""
@@ -494,7 +501,10 @@ class InstrumentTracker:
     def resubscribed(self) -> None:
         """PVWS is about to re-send every value, which may have changed unseen."""
         self.state.rb_resync = True
-        self.runs.resubscribed(datetime.now(timezone.utc))
+        try:
+            self.runs.resubscribed(datetime.now(timezone.utc))
+        except Exception:
+            logger.exception(f"[shadow] {self.instrument.name}: failed to resubscribe")
 
     def reset_stall_clock(self) -> None:
         """While counts can't be judged (e.g. PVWS is down, or the run paused).
