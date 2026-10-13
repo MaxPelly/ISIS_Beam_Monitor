@@ -460,8 +460,10 @@ class InstrumentTracker:
         """The snapshot plus what clients show: the effective beam target, and
         the DAE's run number and state."""
         # The run number and state as the shadow sees them: "" while unknown, e.g. its IOC is down.
+        number = self.runs.run_number
         return {**self.to_snapshot(), "beam_target": self.beam_target,
-                "run_number": self.runs.run_number, "run_state": self.runs.run_state}
+                "run_number": number.lstrip("0") or number,  # "00127920" -> "127920", as the cards show it
+                "run_state": self.runs.run_state}
 
     def from_snapshot(self, saved: object) -> None:
         """Restore state saved by to_snapshot() after a restart; a malformed or

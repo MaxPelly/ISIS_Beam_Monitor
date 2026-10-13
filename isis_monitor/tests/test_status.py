@@ -48,7 +48,7 @@ def test_history_is_24h_in_10_minute_bins_on_fixed_boundaries():
 def test_instruments_come_from_the_trackers():
     pearl = tracker(auto_counts=True)
     pearl.state.run_name, pearl.state.current_counts, pearl.state.rb_number = "x" * 300, 65.256, "2610403"
-    pearl.runs.run_number, pearl.runs.run_state = "127921", "RUNNING"
+    pearl.runs.run_number, pearl.runs.run_state = "00127921", "RUNNING"  # as the PV pads it
     wish = tracker("WISH")
     (p, w) = build(state_with(pearl, wish), {}, 60, NOW)["instruments"]
     assert p == {"name": "PEARL", "beam": "TS1", "run_number": "127921", "run_state": "RUNNING",
