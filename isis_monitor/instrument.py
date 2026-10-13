@@ -5,7 +5,7 @@ import math
 import statistics
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Deque, Dict, Optional, Sequence, Tuple
 
 from isis_monitor.config import InstrumentConfig
@@ -83,6 +83,36 @@ def auto_target(totals: Sequence[float], fallback: float) -> Tuple[float, int]:
     if len(kept) < AUTO_MIN_RUNS:
         return fallback, 0
     return round(statistics.median(kept), 1), len(kept)
+
+
+# Bumped when to_snapshot()'s layout changes; other entries are ignored.
+SNAPSHOT_FORMAT = 2
+
+
+def _typed(saved: dict, key: str, kind: type):
+    """saved[key] if it's a `kind` (ints count as floats); raises otherwise."""
+    value = saved[key]
+    if kind is float and isinstance(value, int) and not isinstance(value, bool):
+        value = float(value)
+    if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
+        raise TypeError(f"{key} isn't a {kind.__name__}")
+    if kind is float and not math.isfinite(value):
+        raise ValueError(f"{key} isn't finite")
+    return value
+
+
+def _finite(values: list) -> list:
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in values):
+        raise ValueError("run_totals must be finite numbers")
+    return [float(v) for v in values]
+
+
+def _aware(text: object) -> Optional[datetime]:
+    """A saved ISO timestamp (UTC if it has no zone), or None."""
+    if text is None:
+        return None
+    ts = datetime.fromisoformat(text)  # raises TypeError or ValueError if it isn't one
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
 
 
 def _is_blank(value: Any) -> bool:
@@ -167,8 +197,6 @@ class InstrumentTracker:
             logger.warning(f"{self.instrument.name}: CS:INSTLIST doesn't put it on TS1, TS2 or MUON; using "
                            f"{self.default_target} ([PVS] instrument_target) unless its beam_target is set")
         self.beam_target = station or self.default_target
-        if self.sink:
-            self.sink.update_beam_target(self.instrument.name, self.beam_target)
 
     def _beam_state(self) -> str:
         return self.beam_power(self.beam_target)
@@ -184,21 +212,6 @@ class InstrumentTracker:
                 source = f"the last {runs} runs" if runs else f"the fallback, until {AUTO_MIN_RUNS} runs are seen"
                 logger.info(f"{inst.name} auto target {target:g} µA·h, from {source}")
         self.state.run_target, self.state.auto_runs = target, runs
-        self._save_target()
-
-    def _save_target(self) -> None:
-        if self.sink:
-            self.sink.update_target(
-                self.instrument.name, self.state.run_target, self.state.auto_runs, list(self.state.run_totals)
-            )
-
-    def _save_experiment(self) -> None:
-        if self.sink:
-            s = self.state
-            self.sink.update_experiment(
-                self.instrument.name, s.rb_number, s.run_rb, s.exp_since, s.exp_partial, s.exp_runs,
-                s.exp_uah,
-            )
 
     def pv_handlers(self) -> Dict[str, PVHandler]:
         """This instrument's PVs, each with its update handler. RB numbers come
@@ -259,9 +272,7 @@ class InstrumentTracker:
         state.exp_since, state.exp_runs, state.exp_uah = time_now, 0, 0.0
         if new_first_run:  # its target is the new experiment's too: (auto's) fallback
             self._set_target()
-        else:  # the run in progress keeps its target; the next is the new experiment's
-            self._save_target()
-        self._save_experiment()
+        # Otherwise the run in progress keeps its target; the next is the new experiment's.
         if notification:
             logger.info(f"Experiment finished: {notification.to_summary()}")
             self.experiment_channel.broadcast(notification)
@@ -292,9 +303,6 @@ class InstrumentTracker:
         self.state.counts_reset_at = None
         if not retitled:
             self.state.run_started_at = time_now
-        if self.sink:
-            self.sink.update_run_name(self.instrument.name, name)
-        self._save_progress()
 
     async def _start_run(self, name: str, time_now: datetime, from_title: bool) -> None:
         """Send the new-run card for `name`, reporting on the run just ended."""
@@ -320,17 +328,10 @@ class InstrumentTracker:
         self.state.stall_warned = False
 
         if self.sink:
-            self.sink.record_run_completed(self.instrument.name, time_now, max(prev_counts, 0.0))
-        # Saved before any await, so a snapshot can't pair the new
-        # completion with the old run (which a restart would re-report).
+            self.sink.record_run_completed(self.instrument.name, time_now, "", max(prev_counts, 0.0))
         self.state.run_name = name
         self.state.run_started_at = time_now
         self._set_target()
-        self._save_experiment()
-        if self.sink:
-            self.sink.update_run_name(self.instrument.name, name)
-            self.sink.update_counts(self.instrument.name, 0)
-        self._save_progress()
 
         if not self.instrument.auto_counts:
             target_note = ""
@@ -364,7 +365,6 @@ class InstrumentTracker:
             if abs(total_collected - stale) <= 1:
                 return
             self.state.stale_counts = -1.0
-            self._save_progress()
         elif (
             # Counts only fall when the DAE resets them for a new run, which is
             # the only sign of one whose title is unchanged (e.g. "Hidden").
@@ -378,9 +378,6 @@ class InstrumentTracker:
         samples = self.state.collected_samples
         samples.append((time_now, total_collected))
         self._prune_collected_samples(time_now)
-
-        if self.sink:
-            self.sink.update_counts(self.instrument.name, total_collected)
 
         counts_target = self.state.run_target
         if self.state.end_notified:
@@ -414,41 +411,76 @@ class InstrumentTracker:
             logger.info(f"Run finishing: {notification.to_summary()}")
             self.experiment_channel.broadcast(notification)
             self.state.end_notified = True
-            self._save_progress()
 
-    def _save_progress(self) -> None:
-        if self.sink:
-            self.sink.update_run_progress(
-                self.instrument.name, self.state.run_started_at, self.state.end_notified,
-                self.state.stale_counts,
-            )
+    def to_snapshot(self) -> dict:
+        """What a restart needs to carry on: the run in progress (so its clock
+        and finishing card aren't reset), the experiment and the run history."""
+        s = self.state
+        return {
+            "format": SNAPSHOT_FORMAT,
+            "notify_counts": self.instrument.notify_counts,
+            "auto": self.instrument.auto_counts,
+            "run_name": s.run_name,
+            "run_started_at": s.run_started_at.isoformat() if s.run_started_at else None,
+            "counts": s.current_counts,
+            "end_notified": s.end_notified,
+            "stale_counts": s.stale_counts,
+            "target": s.run_target,
+            "auto_runs": s.auto_runs,
+            "run_totals": list(s.run_totals),
+            "rb_number": s.rb_number,
+            "run_rb": s.run_rb,
+            "exp_since": s.exp_since.isoformat() if s.exp_since else None,
+            "exp_partial": s.exp_partial,
+            "exp_runs": s.exp_runs,
+            "exp_uah": s.exp_uah,
+        }
 
-    def restore(self, saved: dict) -> None:
-        """Seed state from a DaemonState snapshot entry after a restart. PVWS
-        re-sends the same run title on connect, which then changes nothing."""
-        if self.instrument.auto_counts:  # a fixed target's old totals would be stale by the time auto is on
-            self.state.run_totals.extend(saved.get("run_totals", ()))
-        self.state.rb_number = str(saved.get("rb_number", ""))
-        self.state.run_rb = str(saved.get("run_rb", ""))
-        since = saved.get("exp_since")
-        self.state.exp_since = datetime.fromisoformat(since) if since else None
-        self.state.exp_partial = bool(saved.get("exp_partial", True))
-        self.state.exp_runs = int(saved.get("exp_runs", 0))
-        self.state.exp_uah = float(saved.get("exp_uah", 0.0))
-        if saved.get("target") is None:  # DaemonState drops it if notify_counts has changed
-            self._set_target()
-        else:  # the run keeps the target it started with, even if its history has since been cleared
-            self.state.run_target = float(saved["target"])
-            self.state.auto_runs = int(saved.get("auto_runs", 0))
-            self._save_target()
-        if not saved.get("run_name") or not saved.get("run_started_at"):
+    def view(self) -> dict:
+        """The snapshot plus what clients show: the effective beam target."""
+        return {**self.to_snapshot(), "beam_target": self.beam_target}
+
+    def from_snapshot(self, saved: object) -> None:
+        """Restore state saved by to_snapshot() after a restart; a malformed or
+        older-format entry is logged and ignored. PVWS re-sends the same run
+        title on connect, which then changes nothing."""
+        name = self.instrument.name
+        if not isinstance(saved, dict) or saved.get("format") != SNAPSHOT_FORMAT:
+            logger.warning(f"{name}: ignoring saved state from an older version")
             return
-        self.state.run_name = strip_controls(str(saved["run_name"]))  # as handle_run_name stores it
-        self.state.run_started_at = datetime.fromisoformat(saved["run_started_at"])
-        self.state.current_counts = float(saved.get("counts", -1.0))
-        # DaemonState has already cleared this if notify_counts has changed.
-        self.state.end_notified = bool(saved.get("end_notified", False))
-        self.state.stale_counts = float(saved.get("stale_counts", -1.0))
+        try:
+            state = InstrumentState(
+                run_name=strip_controls(_typed(saved, "run_name", str)),
+                run_started_at=_aware(saved.get("run_started_at")),
+                current_counts=_typed(saved, "counts", float),
+                end_notified=_typed(saved, "end_notified", bool),
+                stale_counts=_typed(saved, "stale_counts", float),
+                run_target=_typed(saved, "target", float),
+                auto_runs=_typed(saved, "auto_runs", int),
+                run_totals=deque(_finite(_typed(saved, "run_totals", list)), maxlen=AUTO_HISTORY),
+                rb_number=_typed(saved, "rb_number", str),
+                run_rb=_typed(saved, "run_rb", str),
+                exp_since=_aware(saved.get("exp_since")),
+                exp_partial=_typed(saved, "exp_partial", bool),
+                exp_runs=_typed(saved, "exp_runs", int),
+                exp_uah=_typed(saved, "exp_uah", float),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning(f"{name}: ignoring malformed saved state ({exc})")
+            return
+        if not state.run_started_at:
+            state.run_name = ""
+        # A finishing card sent for, or a target from, another notify_counts
+        # (changed by the config save behind this restart) doesn't cover the
+        # new one, which may still be ahead.
+        same_target = (saved.get("notify_counts") == self.instrument.notify_counts
+                       and saved.get("auto") == self.instrument.auto_counts)
+        if not self.instrument.auto_counts:  # a fixed target's history would be stale by the time auto is on
+            state.run_totals.clear()
+        state.end_notified = state.end_notified and same_target
+        self.state = state
+        if not same_target:  # otherwise the run keeps the target it started with
+            self._set_target()
 
     def resubscribed(self) -> None:
         """PVWS is about to re-send every value, which may have changed unseen."""

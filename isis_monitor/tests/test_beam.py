@@ -38,6 +38,17 @@ def _seed_collected_baseline(m, now, value):
     _check_collection_progress has something to compare the current reading to."""
     tracker(m).state.collected_samples.append((now - STALL_CHECK_WINDOW - timedelta(seconds=30), value))
 
+def saved(m, **changes):
+    """The monitor's tracker's to_snapshot(), with `changes`, as a restart would read it."""
+    return {**json.loads(json.dumps(tracker(m).to_snapshot())), **changes}
+
+
+def restarted(old, new):
+    """`new` (a fresh monitor) restored from `old`'s instrument state, through
+    JSON like the daemon's snapshot."""
+    new.restore_instruments(json.loads(json.dumps(old.instrument_views())))
+    return new
+
 DEBOUNCE_SECONDS = 0.05
 SETTLE = DEBOUNCE_SECONDS * 3  # wait comfortably past the debounce window in tests
 
@@ -373,8 +384,7 @@ async def test_old_total_resent_before_begin_doesnt_start_another_run(mock_confi
     """Title first, then BEGIN resets the counts: a reconnect or restart in between
     brings the old total back, and neither it nor BEGIN's reset is a new run."""
     _, exp_channel = mock_channels
-    sink = DaemonState(instruments=mock_config.instruments)
-    m = make_monitor(mock_config, mock_channels, counts_target=100, sink=sink)
+    m = make_monitor(mock_config, mock_channels, counts_target=100)
     t0 = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
     await tracker(m).handle_run_name(title("Run 1")["b64byt"], t0)
     await tracker(m).handle_counts(300.0, t0 + timedelta(hours=1))
@@ -382,10 +392,7 @@ async def test_old_total_resent_before_begin_doesnt_start_another_run(mock_confi
         await tracker(m).handle_run_name(title(name)["b64byt"], t0 + timedelta(hours=2))
     exp_channel.broadcast.reset_mock()  # Run 1's finishing card and Run 2's new-run card(s)
     if restart:
-        sink, saved = DaemonState(instruments=mock_config.instruments), sink
-        sink.restore_from_snapshot_json(json.dumps(saved.snapshot()))
-        m = make_monitor(mock_config, mock_channels, counts_target=100, sink=sink)
-        m.restore_instruments(sink.instruments)
+        m = restarted(m, make_monitor(mock_config, mock_channels, counts_target=100))
 
     later = t0 + timedelta(hours=2, minutes=10)
     await tracker(m).handle_run_name(title("Run 2")["b64byt"], later)  # re-sent on (re)connect
@@ -493,17 +500,15 @@ async def test_finish_warning_minutes_zero_only_sends_at_the_target(mock_config,
 
 
 async def test_handle_update_counts_malformed(mock_config, mock_channels):
-    sink = MagicMock()
-    m = make_monitor(mock_config, mock_channels, counts_target=100, sink=sink)
+    m = make_monitor(mock_config, mock_channels, counts_target=100)
 
     await m._handle_update({"pv": PEARL_UAMPS, "value": "bad_format"})
     await m._handle_update({"pv": PEARL_UAMPS, "value": float("inf")})
     await m._handle_update({"pv": PEARL_UAMPS, "value": "NaN"})
     await m._handle_update({"pv": PEARL_UAMPS, "text": "50/90"})  # old dashboard format: not routed
     assert tracker(m).state.current_counts == -1.0  # unchanged, no crash
-    sink.update_counts.assert_not_called()
     await m._handle_update({"pv": PEARL_UAMPS, "value": 42.0})
-    sink.update_counts.assert_called_once_with("PEARL", 42.0)
+    assert tracker(m).to_snapshot()["counts"] == 42.0
 
 
 async def test_handle_update_counts_zero_is_a_real_reading(mock_config, mock_channels):
@@ -1093,8 +1098,7 @@ async def test_repeated_run_title_after_reconnect_keeps_the_run_start_time(mock_
     """PVWS re-sends the current title on every reconnect; the next new-run
     card must still report the whole previous run's duration."""
     _, exp_channel = mock_channels
-    sink = MagicMock()
-    m = make_monitor(mock_config, mock_channels, sink=sink)
+    m = make_monitor(mock_config, mock_channels)
     run_1 = title("Run 1")
     await m._handle_update(run_1)
     started = tracker(m).state.run_started_at
@@ -1102,7 +1106,6 @@ async def test_repeated_run_title_after_reconnect_keeps_the_run_start_time(mock_
 
     await m._handle_update(run_1)  # reconnect re-sends it
     assert tracker(m).state.run_started_at == started - timedelta(hours=6)
-    sink.update_run_name.assert_called_once()
 
     await m._handle_update(title("Run 2"))
     card = exp_channel.broadcast.call_args[0][0]
@@ -1154,12 +1157,10 @@ async def test_restored_run_is_not_reset_or_renotified_after_a_restart(mock_conf
     """After a restart (e.g. a TUI config save) PVWS re-sends the same title and
     TOTALUAMPS; neither a new-run card nor a second finishing card is sent."""
     _, exp_channel = mock_channels
-    sink = MagicMock()
-    m = make_monitor(mock_config, mock_channels, counts_target=100, sink=sink)
+    m = make_monitor(mock_config, mock_channels, counts_target=100)
     started = datetime.now(timezone.utc) - timedelta(hours=3)
-    m.restore_instruments({"PEARL": {
-        "run_name": "Run 1", "run_started_at": started.isoformat(), "counts": 120.0, "end_notified": True,
-    }, "MERLIN": {"run_name": "x", "run_started_at": started.isoformat()}})
+    pearl = saved(m, run_name="Run 1", run_started_at=started.isoformat(), counts=120.0, end_notified=True)
+    m.restore_instruments({"PEARL": pearl, "MERLIN": {**pearl, "run_name": "x"}})
 
     await m._handle_update(title("Run 1"))
     await m._handle_update({"pv": PEARL_UAMPS, "value": 121.0})
@@ -1170,25 +1171,31 @@ async def test_restored_run_is_not_reset_or_renotified_after_a_restart(mock_conf
     await m._handle_update(title("Run 2"))
     card = exp_channel.broadcast.call_args[0][0]
     assert dict(card.facts)["Duration"].startswith("3h")
-    sink.update_run_progress.assert_called_with("PEARL", ANY, False, 121.0)
+    snap = tracker(m).to_snapshot()
+    assert (snap["run_name"], snap["end_notified"], snap["stale_counts"]) == ("Run 2", False, 121.0)
 
 
 async def test_restore_ignores_entries_without_a_run(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels)
-    m.restore_instruments({"PEARL": {"run_name": "", "run_started_at": None, "counts": 5.0}})
-    assert tracker(m).state.run_name == "" and tracker(m).state.current_counts == -1.0
+    m.restore_instruments({"PEARL": saved(m, run_name="Run 1", run_started_at=None, rb_number="A")})
+    assert tracker(m).state.run_name == "" and tracker(m).state.run_started_at is None
+    assert tracker(m).state.rb_number == "A"  # the rest is restored
 
 
-async def test_finishing_card_state_is_saved_to_the_sink(mock_config, mock_channels):
-    sink = MagicMock()
-    m = make_monitor(mock_config, mock_channels, counts_target=100, sink=sink)
+async def test_finishing_card_state_is_in_the_snapshot(mock_config, mock_channels):
+    m = make_monitor(mock_config, mock_channels, counts_target=100)
     tracker(m).state.run_name = "Run 1"
     tracker(m).state.run_started_at = started = datetime.now(timezone.utc)
+
+    def progress():
+        snap = tracker(m).to_snapshot()
+        return snap["run_started_at"], snap["end_notified"], snap["stale_counts"]
+
     await m._handle_update({"pv": PEARL_UAMPS, "value": 110.0})
-    sink.update_run_progress.assert_called_with("PEARL", started, True, -1.0)
+    assert progress() == (started.isoformat(), True, -1.0)
     await m._handle_update({"pv": PEARL_UAMPS, "value": 10.0})  # reset by a new run
     assert tracker(m).state.end_notified is False
-    sink.update_run_progress.assert_called_with("PEARL", tracker(m).state.run_started_at, False, -1.0)
+    assert progress() == (tracker(m).state.run_started_at.isoformat(), False, -1.0)
 
 
 
@@ -1201,12 +1208,10 @@ async def test_finishing_card_after_restart_depends_on_the_threshold_it_was_sent
     card for a changed target is still due."""
     _, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels, counts_target=100)
-    state = DaemonState(instruments=[i for i in m.config.instruments])
-    state.restore_from_snapshot_json(json.dumps({"instruments": {"PEARL": {
-        "run_name": "Run 1", "run_started_at": datetime.now(timezone.utc).isoformat(),
-        "counts": 101.0, "end_notified": True, "notify_counts": saved_target,
-    }}}))
-    m.restore_instruments(state.instruments)
+    m.restore_instruments({"PEARL": saved(
+        m, run_name="Run 1", run_started_at=datetime.now(timezone.utc).isoformat(),
+        counts=101.0, end_notified=True, notify_counts=saved_target,
+    )})
     assert tracker(m).state.end_notified is not renotified
     await m._handle_update({"pv": PEARL_UAMPS, "value": 102.0})
     assert exp_channel.broadcast.called is renotified
@@ -1236,8 +1241,7 @@ async def _finish_runs(m, *totals):
 
 async def test_auto_target_comes_from_recent_runs_once_there_are_enough(mock_config, mock_channels):
     _, exp_channel = mock_channels
-    sink = MagicMock()
-    m = auto_monitor(replace(mock_config, finish_warning_minutes=0), mock_channels, sink=sink)
+    m = auto_monitor(replace(mock_config, finish_warning_minutes=0), mock_channels)
     await _finish_runs(m, 60.0, 5.0, 62.0)  # the short run (a mistaken setup) doesn't count
     assert tracker(m).state.run_target == 100.0  # the fallback, so far
 
@@ -1245,7 +1249,8 @@ async def test_auto_target_comes_from_recent_runs_once_there_are_enough(mock_con
     assert tracker(m).state.run_target == 60.0
     assert dict(exp_channel.broadcast.call_args[0][0].facts)["Target"] == "60 µA·h (auto, from 3 runs)"
     exp_channel.broadcast.reset_mock()  # the new-run cards
-    sink.update_target.assert_called_with("PEARL", 60.0, 3, [60.0, 5.0, 62.0, 58.0])
+    snap = tracker(m).to_snapshot()
+    assert (snap["target"], snap["auto_runs"], snap["run_totals"]) == (60.0, 3, [60.0, 5.0, 62.0, 58.0])
     await m._handle_update({"pv": PEARL_UAMPS, "value": 59.0})
     exp_channel.broadcast.assert_not_called()
     await m._handle_update({"pv": PEARL_UAMPS, "value": 60.5})
@@ -1269,19 +1274,19 @@ async def test_finishing_and_stall_cards_name_the_run_number(mock_config, mock_c
 
 async def test_fixed_target_ignores_run_totals(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels, counts_target=100)
-    m.restore_instruments({"PEARL": {"run_totals": [50.0, 52.0, 48.0]}})
+    m.restore_instruments({"PEARL": saved(m, run_totals=[50.0, 52.0, 48.0])})
     tracker(m).state.run_name = "Run 0"
     tracker(m).state.run_started_at = datetime.now(timezone.utc)
     await _finish_runs(m, 60.0, 61.0, 62.0)
     assert tracker(m).state.run_target == 100.0 and not tracker(m).state.run_totals
 
 
-async def test_restored_run_totals_set_the_auto_target(mock_config, mock_channels):
-    sink = MagicMock()
-    m = auto_monitor(mock_config, mock_channels, sink=sink)
-    m.restore_instruments({"PEARL": {"run_totals": [50.0, 52.0, 48.0], "rb_number": "1", "run_rb": "1"}})
-    assert tracker(m).state.run_target == 50.0
-    sink.update_target.assert_called_with("PEARL", 50.0, 3, [50.0, 52.0, 48.0])
+async def test_restored_run_totals_set_the_next_auto_target(mock_config, mock_channels):
+    m = auto_monitor(mock_config, mock_channels)
+    m.restore_instruments({"PEARL": saved(m, run_totals=[50.0, 52.0, 48.0], rb_number="1", run_rb="1")})
+    assert tracker(m).state.run_target == 100.0  # the run in progress keeps the target it started with
+    await _finish_runs(m, 49.0)
+    assert (tracker(m).state.run_target, tracker(m).state.auto_runs) == (49.5, 4)
 
 
 PEARL_RB = "IN:PEARL:DAE:_RBNUMBER"
@@ -1294,7 +1299,6 @@ def rb(number):
 async def test_rb_change_mid_run_keeps_that_runs_target_through_a_restart(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = auto_monitor(mock_config, mock_channels, fallback=30)
-    tracker(m).sink = state = DaemonState(instruments=[tracker(m).instrument])
     await m._handle_update(rb("A"))
     await _finish_runs(m, 100.0, 100.0, 100.0)
     await m._handle_update({"pv": PEARL_UAMPS, "value": 40.0})
@@ -1305,10 +1309,7 @@ async def test_rb_change_mid_run_keeps_that_runs_target_through_a_restart(mock_c
     assert tracker(m).state.run_target == 100.0
     exp_channel.broadcast.assert_not_called()
 
-    restored = DaemonState(instruments=[tracker(m).instrument])
-    restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
-    m2 = auto_monitor(mock_config, mock_channels, fallback=30)
-    m2.restore_instruments(restored.instruments)
+    m2 = restarted(m, auto_monitor(mock_config, mock_channels, fallback=30))
     assert (tracker(m2).state.run_target, tracker(m2).state.auto_runs) == (100.0, 3)
     await _finish_runs(m2, 101.0)  # A's last run ends: B's first run starts on the fallback
     assert tracker(m2).state.run_target == 30.0 and not tracker(m2).state.run_totals
@@ -1318,14 +1319,10 @@ async def test_rb_change_mid_run_keeps_that_runs_target_through_a_restart(mock_c
 
 async def test_first_rb_number_mid_run_keeps_that_runs_target_through_a_restart(mock_config, mock_channels):
     m = auto_monitor(mock_config, mock_channels, fallback=30)
-    tracker(m).sink = state = DaemonState(instruments=[tracker(m).instrument])
     await _finish_runs(m, 100.0, 100.0, 100.0)
     await m._handle_update({"pv": PEARL_UAMPS, "value": 40.0})
     await m._handle_update(rb("A"))
-    restored = DaemonState(instruments=[tracker(m).instrument])
-    restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
-    m2 = auto_monitor(mock_config, mock_channels, fallback=30)
-    m2.restore_instruments(restored.instruments)
+    m2 = restarted(m, auto_monitor(mock_config, mock_channels, fallback=30))
     assert (tracker(m2).state.run_target, tracker(m2).state.auto_runs) == (100.0, 3)
 
 
@@ -1459,7 +1456,6 @@ async def test_rb_number_back_from_zero_doesnt_count_the_last_run_again(mock_con
 async def test_experiment_progress_survives_a_restart(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels)
-    tracker(m).sink = state = DaemonState(instruments=[tracker(m).instrument])
     tracker(m).state.run_name = "Run 0"
     tracker(m).state.run_started_at = now = datetime.now(timezone.utc)
     await tracker(m).handle_rb_number("A", now)
@@ -1467,11 +1463,8 @@ async def test_experiment_progress_survives_a_restart(mock_config, mock_channels
     tracker(m).state.run_started_at = now - timedelta(hours=1)
     await tracker(m).handle_rb_number("B", now)
     await _finish_runs(m, 40.0, 50.0)  # the 40 run began before B
-    restored = DaemonState(instruments=[tracker(m).instrument])
-    restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
     for resent in ("B", "C"):  # PVWS re-sends B on connect; or, it changed while the daemon was down
-        m2 = make_monitor(mock_config, mock_channels)
-        m2.restore_instruments(restored.instruments)
+        m2 = restarted(m, make_monitor(mock_config, mock_channels))
         await tracker(m2).handle_rb_number(resent, now + timedelta(hours=1))
         await tracker(m2).handle_rb_number("C", now + timedelta(hours=1))
         facts = dict(_experiment_cards(exp_channel)[-1].facts)
@@ -1517,15 +1510,15 @@ async def test_new_run_is_saved_before_its_cards(mock_config, mock_channels):
     _, exp_channel = mock_channels
     sink = MagicMock()
     order = []
-    sink.update_run_name.side_effect = lambda *a: order.append("saved")
-    exp_channel.broadcast.side_effect = lambda n: order.append(n.title)
+    sink.record_run_completed.side_effect = lambda *a: order.append("completed")
     m = make_monitor(mock_config, mock_channels, sink=sink)
+    exp_channel.broadcast.side_effect = lambda n: order.append((n.title, tracker(m).to_snapshot()["run_name"]))
     tracker(m).state.run_name = "Run 24"
     tracker(m).state.run_started_at = datetime.now(timezone.utc)
     tracker(m).state.current_counts = 42.0
     await m._handle_update(title("Run 25"))
-    assert order == ["saved", "PEARL: New run started"]
-    sink.record_run_completed.assert_called_once_with("PEARL", ANY, 42.0)  # with Run 24's µA·h
+    assert order == ["completed", ("PEARL: New run started", "Run 25")]
+    sink.record_run_completed.assert_called_once_with("PEARL", ANY, "", 42.0)  # with Run 24's µA·h
 
 
 
@@ -1561,8 +1554,62 @@ async def test_run_title_control_characters_are_stripped(mock_config, mock_chann
 
 def test_restored_run_name_is_cleaned_like_a_live_one(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels)
-    m.restore_instruments({"PEARL": {"run_name": "Run 1\x00", "run_started_at": "2026-01-01T00:00:00+00:00"}})
+    m.restore_instruments({"PEARL": saved(m, run_name="Run 1\x00", run_started_at="2026-01-01T00:00:00+00:00")})
     assert tracker(m).state.run_name == "Run 1"
+
+
+async def test_instrument_state_round_trips_through_its_snapshot(mock_config, mock_channels):
+    m = auto_monitor(mock_config, mock_channels)
+    await m._handle_update(rb("2610028"))
+    await _finish_runs(m, 60.0, 61.0, 62.0)
+    await m._handle_update({"pv": PEARL_UAMPS, "value": 70.0})
+    m2 = restarted(m, auto_monitor(mock_config, mock_channels))
+    assert tracker(m2).to_snapshot() == tracker(m).to_snapshot()
+    assert tracker(m2).state.run_totals == tracker(m).state.run_totals  # [60, 61, 62]
+    assert m2.instrument_views()["PEARL"]["beam_target"] == "TS1"
+
+
+@pytest.mark.parametrize("changes", [
+    {"counts": None}, {"run_totals": "12"}, {"run_totals": [1.0, "x"]}, {"run_totals": [float("nan")]},
+    {"run_started_at": "yesterday"}, {"end_notified": "yes"}, {"exp_runs": True}, {"exp_uah": float("inf")},
+])
+def test_a_malformed_saved_entry_is_ignored_whole(mock_config, mock_channels, caplog, changes):
+    m = make_monitor(mock_config, mock_channels)
+    fresh = tracker(m).to_snapshot()
+    good = {"run_name": "Run 4", "run_started_at": "2026-01-01T00:00:00+00:00", "rb_number": "A"}
+    m.restore_instruments({"PEARL": saved(m, **{**good, **changes})})
+    assert tracker(m).to_snapshot() == fresh  # nothing partially applied
+    assert "PEARL: ignoring malformed saved state" in caplog.text
+
+
+@pytest.mark.parametrize("entry", [
+    "junk", {}, {"format": 1, "run_name": "Run 4", "counts": 3.0},
+    # DaemonState's layout before trackers saved their own state
+    {"run_name": "Run 4", "counts": 3.0, "notify_counts": 100.0, "run_started_at": "2026-01-01T00:00:00+00:00",
+     "end_notified": False, "stale_counts": -1.0, "run_totals": [], "target": 100.0, "auto_runs": 0, "auto": False},
+])
+def test_an_older_saved_entry_is_ignored(mock_config, mock_channels, caplog, entry):
+    m = make_monitor(mock_config, mock_channels)
+    fresh = tracker(m).to_snapshot()
+    m.restore_instruments({"PEARL": entry})
+    assert tracker(m).to_snapshot() == fresh
+    assert "PEARL: ignoring saved state from an older version" in caplog.text
+
+
+def test_saved_times_without_a_timezone_are_utc(mock_config, mock_channels):
+    m = make_monitor(mock_config, mock_channels)
+    m.restore_instruments({"PEARL": saved(m, run_name="Run 1", run_started_at="2026-09-27T08:00:00",
+                                          exp_since="2026-09-26T08:00:00")})
+    assert tracker(m).state.run_started_at == datetime(2026, 9, 27, 8, 0, tzinfo=timezone.utc)
+    assert tracker(m).state.exp_since == datetime(2026, 9, 26, 8, 0, tzinfo=timezone.utc)
+
+
+def test_finishing_card_is_due_again_after_switching_to_auto(mock_config, mock_channels):
+    fixed = make_monitor(mock_config, mock_channels, counts_target=50)
+    m = auto_monitor(mock_config, mock_channels, fallback=50)
+    m.restore_instruments({"PEARL": saved(fixed, run_name="Run 1", run_started_at="2026-09-27T08:00:00+00:00",
+                                          end_notified=True)})
+    assert tracker(m).state.run_name == "Run 1" and tracker(m).state.end_notified is False
 
 
 # ---------------------------------------------------------------------------
@@ -1584,8 +1631,7 @@ def listed_monitor(mock_config, mock_channels, sink=None, **instrument):
 
 
 async def test_instlist_sets_the_beam_target_and_resubscribes_a_new_prefix(mock_config, mock_channels):
-    sink = MagicMock()
-    m = listed_monitor(mock_config, mock_channels, sink=sink)
+    m = listed_monitor(mock_config, mock_channels)
     assert tracker(m).beam_target == "TS2"  # [PVS] instrument_target until the list comes
     m._current_ws = AsyncMock()
     tracker(m).state.rb_resync = False
@@ -1594,7 +1640,7 @@ async def test_instlist_sets_the_beam_target_and_resubscribes_a_new_prefix(mock_
     assert tracker(m).state.rb_resync  # an RB number from the new PVs wasn't watched changing
 
     assert tracker(m).beam_target == "Muons"
-    sink.update_beam_target.assert_called_with("PEARL", "Muons")
+    assert m.instrument_views()["PEARL"]["beam_target"] == "Muons"
     old = [f"IN:PEARL:DAE:{pv}" for pv in ("_RBNUMBER", "RUNNUMBER", "WDTITLE", "TOTALUAMPS", "RUNSTATE_STR")]
     new = [pv.replace("IN:PEARL:", "IN:PEARL_5B:") for pv in old]
     assert [json.loads(c.args[0]) for c in m._current_ws.send.await_args_list] == [
@@ -1632,7 +1678,7 @@ async def test_an_unlisted_instrument_keeps_its_pvs_with_one_warning(mock_config
 
 
 async def test_an_unreadable_instlist_changes_nothing(mock_config, mock_channels):
-    state = DaemonState(instruments=[InstrumentConfig("PEARL", 100.0)])
+    state = DaemonState(instrument_names=["PEARL"])
     state.instlist = {"PEARL": ("IN:PEARL:", "TS1")}
     m = listed_monitor(mock_config, mock_channels, sink=state)
     await m._handle_update({"pv": "CS:INSTLIST", "b64byt": "!!!"})
@@ -1641,18 +1687,18 @@ async def test_an_unreadable_instlist_changes_nothing(mock_config, mock_channels
 
 
 async def test_the_cached_instlist_is_used_from_the_first_connection(mock_config, mock_channels):
-    state = DaemonState(instruments=[InstrumentConfig("PEARL", 100.0)])
+    state = DaemonState(instrument_names=["PEARL"])
     state.instlist = {"PEARL": ("IN:PEARL_5B:", "Muons")}
     async with FakePVWS([]) as server:
         m = listed_monitor(replace(mock_config, isis_websocket_url=server.url), mock_channels, sink=state)
         async with running(m):
             await wait_until(lambda: server.subscriptions)
     assert "IN:PEARL_5B:DAE:TOTALUAMPS" in server.subscriptions[0]["pvs"]
-    assert state.instruments["PEARL"]["beam_target"] == "Muons"
+    assert m.instrument_views()["PEARL"]["beam_target"] == "Muons"
 
 
 async def test_a_new_instlist_is_saved_for_the_next_start(mock_config, mock_channels):
-    state = DaemonState(instruments=[InstrumentConfig("PEARL", 100.0)])
+    state = DaemonState(instrument_names=["PEARL"])
     m = listed_monitor(mock_config, mock_channels, sink=state)
     await m._handle_update(instlist(("PEARL", "IN:PEARL:", "TS1")))
     restored = DaemonState()

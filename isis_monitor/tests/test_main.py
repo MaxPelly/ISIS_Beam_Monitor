@@ -18,10 +18,11 @@ import main
 from isis_monitor import messages
 from isis_monitor.config import DEFAULT_BEAMS, AppConfig, InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
+from isis_monitor.instrument import InstrumentTracker
 from isis_monitor.ipc import IPCClient
 from isis_monitor.notifiers import DummyNotifier, TeamsNotifier, WebhookNotifier
 from isis_monitor.storage import SQLiteStateStore
-from isis_monitor.tests.helpers import FakePVWS, never_answers, serving, wait_until
+from isis_monitor.tests.helpers import FakePVWS, fake_channel, never_answers, serving, wait_until
 from main import SingleInstanceLock, StateLogHandler
 
 
@@ -185,6 +186,12 @@ async def test_install_signal_handlers_sets_stop_event():
 # ---------------------------------------------------------------------------
 # build_channels
 # ---------------------------------------------------------------------------
+
+def _saved_instrument(inst: InstrumentConfig, **changes) -> dict:
+    """A snapshot entry for `inst`, as its tracker saves one, with `changes`."""
+    tracker = InstrumentTracker(inst, fake_channel(), lambda _target: "unknown", stall_minutes=10)
+    return {**json.loads(json.dumps(tracker.to_snapshot())), **changes}
+
 
 def _config(tmp_path, **overrides) -> AppConfig:
     return replace(
@@ -434,12 +441,14 @@ async def test_run_daemon_closes_each_notifier_once_then_the_session(tmp_path):
 async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
     ts = datetime.now(timezone.utc) - timedelta(minutes=5)
     store = SQLiteStateStore(tmp_path / "state.db")
+    pearl = InstrumentConfig("PEARL", 130.0, "TS1")
+    saved = _saved_instrument(pearl, run_name="Run 30", run_started_at=ts.isoformat(), counts=12.5, rb_number="A")
     store.write_samples([(ts, "TS2", 7.0, "low")])
-    store.upsert_snapshot("daemon_state", json.dumps({"mcr_news": "old news", "instruments": {"PEARL": {"run_name": "Run 30"}}}))
+    store.upsert_snapshot("daemon_state", json.dumps({"mcr_news": "old news", "instruments": {"PEARL": saved}}))
     store.commit()
     store.close()
 
-    config = _config(tmp_path, instruments=[InstrumentConfig("PEARL", 130.0, "TS1")])
+    config = _config(tmp_path, instruments=[pearl])
     with patch("main.MCRNewsMonitor", wraps=main.MCRNewsMonitor) as mcr_cls:
         async with daemon(config):
             client = IPCClient(config.daemon_socket_path)
@@ -451,7 +460,7 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
 
     assert snap["mcr_news"] == "old news"
     assert mcr_cls.call_args.kwargs["old_news"] == "old news"
-    assert snap["instruments"]["PEARL"]["run_name"] == "Run 30"
+    assert snap["instruments"] == {"PEARL": {**saved, "beam_target": "TS1"}}
     assert history["TS2"][0]["current"] == 7.0
     assert set(reconnect) == {"beam", "mcr"}
 
@@ -470,20 +479,33 @@ def test_apply_event_to_tui_dispatches_each_event_type():
         {"event": "sample", "payload": {"beam": "TS2", "timestamp": ts.isoformat(), "current": 1, "power": "off"}},
         {"event": "sample", "payload": {"beam": "TS2"}},  # no timestamp: ignored
         {"event": "health", "payload": {"component": "beam", "status": "connected"}},
-        {"event": "run", "payload": {"instrument": "WISH", "run_name": "Run 9"}},
-        {"event": "counts", "payload": {"instrument": "WISH", "counts": 12}},
-        {"event": "target", "payload": {"instrument": "WISH", "target": 98.5, "auto_runs": 3}},
     ]:
         main._apply_event_to_tui(tui, message)
-
-    assert tui.update_instrument.call_args_list == [
-        call("WISH", run_name="Run 9"), call("WISH", counts=12.0), call("WISH", target=98.5, auto_runs=3),
-    ]
 
     tui.update_beam_state.assert_called_once_with("TS1", 5.0, "low")
     tui.update_mcr_news.assert_called_once_with("hi")
     tui.add_history_sample.assert_called_once_with("TS2", ts, 1.0, "off")
     assert tui.update_log.call_args_list == [call("line"), call("Health: beam -> connected")]
+
+
+async def test_refresh_instruments_rereads_them_from_the_snapshot():
+    """Instruments aren't sent as events; replies without them are skipped."""
+    instruments = {"PEARL": {"run_name": "Run 9"}}
+    replies = [{"ok": False}, {"ok": True, "snapshot": {"instruments": "junk"}},
+               {"ok": True, "snapshot": {"instruments": instruments}}]
+    client, tui = MagicMock(), MagicMock()
+    client.request = AsyncMock(side_effect=lambda *a, **kw: replies.pop(0) if len(replies) > 1 else replies[0])
+    with patch("main.INSTRUMENT_REFRESH", 0.01):
+        task = asyncio.create_task(main._refresh_instruments(client, tui))
+        try:
+            await wait_until(lambda: tui.set_instruments.call_count >= 2)
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+    tui.set_instruments.assert_called_with(instruments)
+    assert client.request.await_args_list[0] == call({"method": "get_snapshot"}, timeout=main.IPC_REQUEST_TIMEOUT)
+    assert client.request.await_count == tui.set_instruments.call_count + 2  # the bad replies weren't applied
 
 
 async def test_tui_connection_loop_syncs_streams_and_reconnects(tmp_path):
@@ -1022,13 +1044,14 @@ async def test_run_daemon_stops_other_loops_when_one_crashes(tmp_path):
 async def test_run_daemon_seeds_trackers_from_the_restored_snapshot(tmp_path):
     started = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     store = SQLiteStateStore(tmp_path / "state.db")
-    store.upsert_snapshot("daemon_state", json.dumps({"instruments": {"PEARL": {
-        "run_name": "Run 9", "run_started_at": started, "counts": 150.0, "end_notified": True,
-    }}}))
+    pearl = InstrumentConfig("PEARL", 130.0, "TS1")
+    store.upsert_snapshot("daemon_state", json.dumps({"instruments": {"PEARL": _saved_instrument(
+        pearl, run_name="Run 9", run_started_at=started, counts=150.0, end_notified=True,
+    )}}))
     store.commit()
     store.close()
 
-    config = _config(tmp_path, instruments=[InstrumentConfig("PEARL", 130.0, "TS1")])
+    config = _config(tmp_path, instruments=[pearl])
     seeded = {}
     real_restore = main.BeamMonitor.restore_instruments
 

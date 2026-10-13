@@ -7,10 +7,10 @@ import math
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Deque, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Deque, Dict, Iterable, List, Optional, Tuple
 
 from isis_monitor import instlist
-from isis_monitor.config import BEAM_NAMES, InstrumentConfig
+from isis_monitor.config import BEAM_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ class DaemonState:
         self,
         history_maxlen: int = 10_080,
         logs_maxlen: int = 200,
-        instruments: Sequence[InstrumentConfig] = (),
+        instrument_names: Iterable[str] = (),
     ):
         self.beam_states: Dict[str, Dict[str, object]] = {
             beam: {"current": 0.0, "power": "unknown"} for beam in BEAM_NAMES
@@ -67,35 +67,15 @@ class DaemonState:
         }
         self.mcr_news = MCR_NEWS_PLACEHOLDER
         self.logs: Deque[str] = deque(maxlen=logs_maxlen)
-        # notify_counts and auto come from the config, for clients to display,
-        # and are checked on restore; beam_target is the tracker's (see
-        # update_beam_target). target is the current run's (see InstrumentTracker).
-        self.instruments: Dict[str, Dict[str, object]] = {
-            inst.name: {
-                "run_name": "",
-                "counts": -1.0,
-                # Tracker state restored into BeamMonitor after a restart, so a
-                # run's clock and "about to finish" card aren't reset by it.
-                "run_started_at": None,  # ISO timestamp
-                "end_notified": False,
-                "stale_counts": -1.0,
-                "run_totals": [],  # completed runs' µA·h, for auto targets
-                # The current experiment, for InstrumentTracker's summary card
-                "rb_number": "",
-                "run_rb": "",
-                "exp_since": None,  # ISO timestamp
-                "exp_partial": True,
-                "exp_runs": 0,
-                "exp_uah": 0.0,
-                "target": inst.notify_counts,
-                "auto_runs": 0,  # how many runs an auto target came from; 0 = the fallback
-                "notify_counts": inst.notify_counts,
-                "auto": inst.auto_counts,
-                "beam_target": inst.beam_target,
-            }
-            for inst in instruments
-        }
-        self.run_completions: Deque[Tuple[datetime, str, float]] = deque(maxlen=2000)  # (time, instrument, µA·h)
+        self.instrument_names = frozenset(instrument_names)
+        # Each instrument tracker's live view (its snapshot plus its effective
+        # beam target), set by run_daemon once BeamMonitor exists; the trackers
+        # are the only record of their state.
+        self.instruments: Callable[[], Dict[str, dict]] = dict
+        # Their entries from the restored snapshot, for BeamMonitor.restore_instruments
+        self.saved_instruments: Dict[str, object] = {}
+        # (time, instrument, run number, µA·h)
+        self.run_completions: Deque[Tuple[datetime, str, str, float]] = deque(maxlen=2000)
         # The last good CS:INSTLIST, so a restart starts with the right PV prefixes
         self.instlist: instlist.Instruments = {}
         self.health: Dict[str, str] = {
@@ -183,52 +163,6 @@ class DaemonState:
         self.mcr_news = news
         self._publish("mcr", {"news": news})
 
-    def update_run_name(self, instrument: str, run_name: str) -> None:
-        if instrument not in self.instruments:
-            return
-        self.instruments[instrument]["run_name"] = run_name
-        self._publish("run", {"instrument": instrument, "run_name": run_name})
-
-    def update_run_progress(
-        self, instrument: str, run_started_at: Optional[datetime], end_notified: bool,
-        stale_counts: float,
-    ) -> None:
-        if instrument not in self.instruments:
-            return
-        self.instruments[instrument]["run_started_at"] = run_started_at.isoformat() if run_started_at else None
-        self.instruments[instrument]["end_notified"] = bool(end_notified)
-        self.instruments[instrument]["stale_counts"] = float(stale_counts)
-
-    def update_counts(self, instrument: str, counts: float) -> None:
-        if instrument not in self.instruments:
-            return
-        self.instruments[instrument]["counts"] = float(counts)
-        self._publish("counts", {"instrument": instrument, "counts": counts})
-
-    def update_target(self, instrument: str, target: float, auto_runs: int, run_totals: List[float]) -> None:
-        """The current run's target, and the run history it came from."""
-        if instrument not in self.instruments:
-            return
-        self.instruments[instrument].update(target=float(target), auto_runs=int(auto_runs), run_totals=run_totals)
-        self._publish("target", {"instrument": instrument, "target": target, "auto_runs": auto_runs})
-
-    def update_beam_target(self, instrument: str, beam: str) -> None:
-        """The beam target the instrument's tracker reports on, e.g. from CS:INSTLIST."""
-        if instrument in self.instruments and self.instruments[instrument]["beam_target"] != beam:
-            self.instruments[instrument]["beam_target"] = beam
-            self._publish("beam_target", {"instrument": instrument, "beam_target": beam})
-
-    def update_experiment(
-        self, instrument: str, rb_number: str, run_rb: str, since: Optional[datetime],
-        partial: bool, runs: int, uah: float,
-    ) -> None:
-        """Saved, not published: only restored into the tracker."""
-        if instrument in self.instruments:
-            self.instruments[instrument].update(
-                rb_number=rb_number, run_rb=run_rb, exp_since=since.isoformat() if since else None,
-                exp_partial=bool(partial), exp_runs=int(runs), exp_uah=float(uah),
-            )
-
     def update_health(self, component: str, status: str) -> None:
         # Monitors re-report the same status on every successful poll; only
         # actual transitions are worth an event to every subscriber.
@@ -242,15 +176,15 @@ class DaemonState:
             for beam, beam_state in self.beam_states.items():
                 self.update_beam_state(beam, float(beam_state["current"]), "unknown")
 
-    def record_run_completed(self, instrument: str, ts: datetime, uah: float) -> None:
+    def record_run_completed(self, instrument: str, ts: datetime, run_number: str, uah: float) -> None:
         """Record a completed run and the µA·h it collected (ignored for an unknown instrument)."""
-        if instrument in self.instruments:
-            self.run_completions.append((ts, instrument, uah))
+        if instrument in self.instrument_names:
+            self.run_completions.append((ts, instrument, run_number, uah))
 
     def runs_completed_since(self, since: datetime, instruments: Iterable[str]) -> Dict[str, Tuple[int, float]]:
         """Each of `instruments`' runs completed at or after `since`, and their µA·h."""
         totals = {name: (0, 0.0) for name in instruments}
-        for ts, name, uah in self.run_completions:
+        for ts, name, _number, uah in self.run_completions:
             if ts >= since and name in totals:
                 runs, total = totals[name]
                 totals[name] = (runs + 1, total + uah)
@@ -261,9 +195,9 @@ class DaemonState:
         return {
             "beam_states": {beam: dict(state) for beam, state in self.beam_states.items()},
             "mcr_news": self.mcr_news,
-            "instruments": {name: dict(info) for name, info in self.instruments.items()},
+            "instruments": self.instruments(),
             "run_completions": [
-                [ts.isoformat(), name, uah] for ts, name, uah in self.run_completions if ts >= cutoff
+                [ts.isoformat(), name, number, uah] for ts, name, number, uah in self.run_completions if ts >= cutoff
             ],
             "instlist": instlist.to_snapshot(self.instlist),
         }
@@ -302,53 +236,10 @@ class DaemonState:
                     "power": "unknown",
                 }
         self.mcr_news = str(snap.get("mcr_news", self.mcr_news))
-        self._restore_instruments(snap)
+        saved = snap.get("instruments")
+        self.saved_instruments = {k: v for k, v in saved.items() if k in self.instrument_names} if isinstance(saved, dict) else {}
         self._restore_run_completions(snap.get("run_completions"))
         self.instlist = instlist.from_snapshot(snap.get("instlist"))
-
-    def _restore_instruments(self, snap: dict) -> None:
-        """Restore run state for instruments still in the config; instruments
-        that have since been removed are dropped."""
-        saved = snap.get("instruments")
-        if not isinstance(saved, dict):
-            return
-        for name, info in saved.items():
-            if name not in self.instruments or not isinstance(info, dict):
-                continue
-            current = self.instruments[name]
-            try:
-                started, exp_since = info.get("run_started_at"), info.get("exp_since")
-                # A finishing card sent for, or a target from, another
-                # notify_counts (changed by the config save behind this
-                # restart) doesn't cover the new one, which may still be ahead.
-                same_target = (
-                    float(info.get("notify_counts", current["notify_counts"])) == current["notify_counts"]
-                    and info.get("auto", False) == current["auto"]
-                )
-                restored = {
-                    "run_name": str(info.get("run_name", current["run_name"])),
-                    "counts": float(info.get("counts", current["counts"])),
-                    # Validated here (raises ValueError) but kept as ISO text.
-                    "run_started_at": _aware_iso(started) if started else None,
-                    "end_notified": bool(info.get("end_notified", False)) and same_target,
-                    "stale_counts": float(info.get("stale_counts", -1.0)),
-                    "run_totals": _finite_floats(info.get("run_totals", [])),
-                    "rb_number": str(info.get("rb_number", "")),
-                    "run_rb": str(info.get("run_rb", "")),
-                    "exp_since": _aware_iso(exp_since) if exp_since else None,
-                    "exp_partial": bool(info.get("exp_partial", True)),
-                    "exp_runs": int(info.get("exp_runs", 0)),
-                    "exp_uah": float(info.get("exp_uah", 0.0)),
-                }
-                # None has the tracker work the target out again (see InstrumentTracker.restore).
-                restored.update(
-                    target=float(info["target"]) if same_target and "target" in info else None,
-                    auto_runs=int(info.get("auto_runs", 0)),
-                )
-            except (TypeError, ValueError):
-                logger.warning(f"Skipping malformed snapshot state for instrument {name}")
-                continue
-            current.update(restored)
 
     def _restore_run_completions(self, saved: object) -> None:
         """Restore recent completions of instruments still in the config."""
@@ -358,14 +249,14 @@ class DaemonState:
         skipped = 0
         for entry in saved:
             try:
-                text, name, uah = entry
+                text, name, number, uah = entry
                 ts = datetime.fromisoformat(_aware_iso(text))
                 (uah,) = _finite_floats([uah])
-                wanted = name in self.instruments and ts >= cutoff
-            except (TypeError, ValueError):  # includes an unhashable name
+                wanted = name in self.instrument_names and isinstance(number, str) and ts >= cutoff
+            except (TypeError, ValueError):  # includes an unhashable name, or an older 3-item entry
                 skipped += 1
                 continue
             if wanted:
-                self.run_completions.append((ts, name, uah))
+                self.run_completions.append((ts, name, number, uah))
         if skipped:
             logger.warning(f"Skipped {skipped} malformed run completion(s) in snapshot")

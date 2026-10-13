@@ -100,7 +100,7 @@ def _downsample(values: List[float], n: int) -> List[float]:
 def _instruments_by_channel(state: DaemonState) -> Dict[str, List[str]]:
     """Instrument names grouped by their beam target (e.g. "Muons")."""
     grouped: Dict[str, List[str]] = {}
-    for name, info in state.instruments.items():
+    for name, info in state.instruments().items():
         grouped.setdefault(str(info["beam_target"]), []).append(name)
     return grouped
 

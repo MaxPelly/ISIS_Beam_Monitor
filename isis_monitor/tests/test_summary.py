@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from isis_monitor.config import AppConfig, InstrumentConfig
+from isis_monitor.config import AppConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.messages import get_timezone
 from isis_monitor.tests.helpers import fake_channel
@@ -178,15 +178,13 @@ async def test_daily_summary_tolerates_a_corrupt_last_sent_date(store):
 
 
 async def test_daily_summary_counts_runs_only_on_instruments_using_that_target(store):
-    state = DaemonState(instruments=[
-        InstrumentConfig("PEARL", 130.0, "TS1"),
-        InstrumentConfig("EMU", 10.0, "Muons"),
-    ])
+    state = DaemonState(instrument_names=["PEARL", "EMU"])
+    state.instruments = lambda: {"PEARL": {"beam_target": "TS1"}, "EMU": {"beam_target": "Muons"}}  # trackers' views
     now = datetime.now(timezone.utc)
-    state.record_run_completed("PEARL", now, 60.0)
-    state.record_run_completed("PEARL", now, 70.0)
-    state.record_run_completed("EMU", now, 5.0)
-    state.record_run_completed("EMU", now - timedelta(hours=30), 5.0)  # outside the window
+    state.record_run_completed("PEARL", now, "1", 60.0)
+    state.record_run_completed("PEARL", now, "2", 70.0)
+    state.record_run_completed("EMU", now, "3", 5.0)
+    state.record_run_completed("EMU", now - timedelta(hours=30), "4", 5.0)  # outside the window
     channel = await run_summary(store, state)
     cards = {c.args[0].beam: dict(c.args[0].facts) for c in channel.broadcast.call_args_list}
     assert {beam: facts["Runs in last 24h"] for beam, facts in cards.items()} == {"TS1": "2", "TS2": "0", "Muons": "1"}

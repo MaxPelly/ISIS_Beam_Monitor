@@ -8,6 +8,8 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+- Each instrument's saved state has a new layout, kept by its tracker alone, and each run completion now records its run number. The first start after upgrading ignores the old instrument entries and run completions (one warning each), so the current experiment's progress, the auto-target history and the current run's start are forgotten, and the next daily summary under-reports runs.
+
 ## [1.2.0] - 2026-10-13
 
 Includes push site v1.0.3 (unchanged).

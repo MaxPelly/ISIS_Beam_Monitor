@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import fcntl
 import json
 import logging
@@ -50,6 +51,7 @@ LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 # Set in the environment of a daemon that re-exec'd itself (see restart_process).
 RESTARTED_ENV = "ISIS_MONITOR_RESTARTED"
 LOOP_STOP_TIMEOUT = 5.0  # seconds run_daemon's loops get to exit after stop_event
+INSTRUMENT_REFRESH = 2.0  # seconds between the TUI's re-reads of instrument state
 CLOSE_TIMEOUT = 5.0  # seconds the notifiers get to send what's queued, on shutdown
 IPC_REQUEST_TIMEOUT = 10.0  # for the TUI's sync and `stop`; a stuck daemon mustn't hang them
 
@@ -232,7 +234,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
     samples_for_retention = int(86400 * config.retention_days / config.sample_interval)
     state = DaemonState(
         history_maxlen=max(config.history_maxlen, samples_for_retention),
-        instruments=config.instruments,
+        instrument_names=[inst.name for inst in config.instruments],
     )  # health starts as "starting"
 
     def _init_db():
@@ -265,7 +267,8 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
         exp_channel,
         sink=state,
     )
-    beam_monitor.restore_instruments(state.instruments)
+    beam_monitor.restore_instruments(state.saved_instruments)
+    state.instruments = beam_monitor.instrument_views
     mcr_monitor = MCRNewsMonitor(
         config, mcr_channel, args.notify_current, sink=state,
         old_news=None if state.mcr_news == MCR_NEWS_PLACEHOLDER else state.mcr_news,
@@ -410,17 +413,6 @@ def _apply_event_to_tui(tui: RichTUI, message: dict) -> None:
             float(payload.get("current", 0.0)),
             str(payload.get("power", "unknown")),
         )
-    elif ev == "run":
-        tui.update_instrument(str(payload.get("instrument", "")), run_name=str(payload.get("run_name", "")))
-    elif ev == "counts":
-        tui.update_instrument(str(payload.get("instrument", "")), counts=float(payload.get("counts", -1.0)))
-    elif ev == "target":
-        tui.update_instrument(
-            str(payload.get("instrument", "")),
-            target=float(payload.get("target", 0.0)), auto_runs=int(payload.get("auto_runs", 0)),
-        )
-    elif ev == "beam_target":
-        tui.update_instrument(str(payload.get("instrument", "")), beam_target=str(payload.get("beam_target", "")))
     elif ev == "health":
         tui.update_log(f"Health: {payload.get('component', '')} -> {payload.get('status', '')}")
 
@@ -450,12 +442,22 @@ async def _sync_tui(client: IPCClient, tui: RichTUI, history_limit: int) -> None
         tui.update_log("Subscribed to daemon updates.")
 
 
+async def _refresh_instruments(client: IPCClient, tui: RichTUI) -> None:
+    """Instruments aren't sent as events, so re-read them every INSTRUMENT_REFRESH."""
+    while True:
+        await asyncio.sleep(INSTRUMENT_REFRESH)
+        resp = await client.request({"method": "get_snapshot"}, timeout=IPC_REQUEST_TIMEOUT)
+        if resp.get("ok") and isinstance(resp.get("snapshot", {}).get("instruments"), dict):
+            tui.set_instruments(resp["snapshot"]["instruments"])
+
+
 async def tui_connection_loop(config, tui: RichTUI, on_client: Callable[[Optional[IPCClient]], None]) -> None:
     """Keep `tui` attached to the daemon, reconnecting with backoff, until cancelled.
 
     `on_client` is told the live client (or None) so key presses can send commands.
     """
     backoff = config.tui_reconnect_initial
+    refresh: Optional[asyncio.Task] = None
     while True:
         client = IPCClient(Path(config.daemon_socket_path))
         try:
@@ -465,12 +467,18 @@ async def tui_connection_loop(config, tui: RichTUI, on_client: Callable[[Optiona
             await _sync_tui(client, tui, config.history_maxlen)
             backoff = config.tui_reconnect_initial
             on_client(client)
+            refresh = asyncio.create_task(_refresh_instruments(client, tui))
             async for message in client.iter_events():
                 _apply_event_to_tui(tui, message)
         except (OSError, ValueError) as exc:
             tui.update_connection_state("disconnected")
             tui.update_log(f"Daemon connection lost: {exc}")
         finally:
+            if refresh is not None:
+                refresh.cancel()
+                with contextlib.suppress(asyncio.CancelledError, OSError, ValueError):
+                    await refresh
+            refresh = None
             on_client(None)
             await client.close()
         await asyncio.sleep(backoff)

@@ -192,9 +192,6 @@ class BeamMonitor:
         self._unlisted_warned: set = set()
         # Start with the PV prefixes and stations last seen, until CS:INSTLIST comes.
         self.apply_instlist(sink.instlist if sink else {})
-        for tracker in self.instruments.values():
-            if sink:
-                sink.update_beam_target(tracker.instrument.name, tracker.beam_target)
         self._build_routes()
 
     def _build_routes(self) -> None:
@@ -309,11 +306,15 @@ class BeamMonitor:
         if handler := self.routes.get(message.get("pv")):
             await handler(message, datetime.now(timezone.utc))
 
-    def restore_instruments(self, saved: Dict[str, dict]) -> None:
-        """Seed each tracker from DaemonState's restored per-instrument state."""
+    def restore_instruments(self, saved: Dict[str, object]) -> None:
+        """Seed each tracker from its entry in the restored snapshot."""
         for name, tracker in self.instruments.items():
             if name in saved:
-                tracker.restore(saved[name])
+                tracker.from_snapshot(saved[name])
+
+    def instrument_views(self) -> Dict[str, dict]:
+        """Each instrument's live state, for the snapshot and clients."""
+        return {name: tracker.view() for name, tracker in self.instruments.items()}
 
     def _beam_power(self, target: str) -> str:
         beam_state = self.beams.get(target)
