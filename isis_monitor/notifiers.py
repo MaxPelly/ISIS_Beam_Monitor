@@ -172,14 +172,6 @@ class TeamsNotifier(HTTPNotifier):
             {"type": "TextBlock", "text": _no_links(notification.text), "wrap": True},
         ]
 
-        if notification.flavour:
-            body.append({
-                "type": "TextBlock",
-                "text": f"_{_no_links(notification.flavour)}_",
-                "isSubtle": True,
-                "wrap": True,
-            })
-
         if notification.facts:
             body.append({
                 "type": "FactSet",
@@ -254,7 +246,6 @@ class WebhookNotifier(HTTPNotifier):
             "severity": n.severity.value,
             "emoji": n.emoji,
             "facts": [list(fact) for fact in n.facts],
-            "flavour": n.flavour,
             "url": n.url,
             "url_label": n.url_label,
             "timestamp": n.timestamp.astimezone(timezone.utc).isoformat() if n.timestamp else None,

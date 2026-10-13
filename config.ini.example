@@ -106,9 +106,6 @@ notify_counts = 130
 # muon_boundaries = 0.0, 2.0, 5.0
 
 [NOTIFICATIONS]
-# Adds optional personality lines to notification cards (off by default —
-# emoji and severity colours are always shown regardless of this setting).
-# fun_mode = false
 # Timezone for card timestamps and for summary_time.
 # timezone = Europe/London
 # How long a beam state change must persist before a card is sent, in

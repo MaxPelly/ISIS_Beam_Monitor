@@ -73,7 +73,6 @@ class DaemonState:
             inst.name: {
                 "run_name": "",
                 "counts": -1.0,
-                "total_runs": 0,
                 # Tracker state restored into BeamMonitor after a restart, so a
                 # run's clock and "about to finish" card aren't reset by it.
                 "run_started_at": None,  # ISO timestamp
@@ -234,14 +233,10 @@ class DaemonState:
             for beam, beam_state in self.beam_states.items():
                 self.update_beam_state(beam, float(beam_state["current"]), "unknown")
 
-    def record_run_completed(self, instrument: str, ts: datetime, uah: float) -> int:
-        """Record a completed run and the µA·h it collected, and return the
-        instrument's new all-time total, or 0 for an unknown instrument."""
-        if instrument not in self.instruments:
-            return 0
-        self.run_completions.append((ts, instrument, uah))
-        self.instruments[instrument]["total_runs"] += 1
-        return self.instruments[instrument]["total_runs"]
+    def record_run_completed(self, instrument: str, ts: datetime, uah: float) -> None:
+        """Record a completed run and the µA·h it collected (ignored for an unknown instrument)."""
+        if instrument in self.instruments:
+            self.run_completions.append((ts, instrument, uah))
 
     def runs_completed_since(self, since: datetime, instruments: Iterable[str]) -> Dict[str, Tuple[int, float]]:
         """Each of `instruments`' runs completed at or after `since`, and their µA·h."""
@@ -322,7 +317,6 @@ class DaemonState:
                 restored = {
                     "run_name": str(info.get("run_name", current["run_name"])),
                     "counts": float(info.get("counts", current["counts"])),
-                    "total_runs": int(info.get("total_runs", current["total_runs"])),
                     # Validated here (raises ValueError) but kept as ISO text.
                     "run_started_at": _aware_iso(started) if started else None,
                     "end_notified": bool(info.get("end_notified", False)) and same_target,

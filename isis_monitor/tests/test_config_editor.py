@@ -7,7 +7,7 @@ from isis_monitor.config_editor import describe_changes, edit_settings, render_m
 
 SETTINGS = {
     "notifications": {
-        "fun_mode": "false", "timezone": "Europe/London", "debounce_seconds": "20",
+        "timezone": "Europe/London", "debounce_seconds": "20",
         "stall_minutes": "15", "finish_warning_minutes": "15", "summary_time": "08:00",
     },
     "instruments": [
@@ -47,16 +47,16 @@ async def edit(*lines):
 
 def test_render_menu_numbers_settings_then_instruments():
     menu = render_menu(SETTINGS)
-    assert " 1) fun_mode" in menu and " 6) summary_time" in menu
-    assert " 7) PEARL    notify at 130 µA·h on TS1 · Teams channel: Experiment Updates" in menu
-    assert " 8) WISH" in menu
+    assert " 1) timezone" in menu and " 5) summary_time" in menu
+    assert " 6) PEARL    notify at 130 µA·h on TS1 · Teams channel: Experiment Updates" in menu
+    assert " 7) WISH" in menu
 
 
 async def test_edit_notification_and_save():
-    result, term = await edit("1", "true", "s", "y")
-    assert result["notifications"]["fun_mode"] == "true"
-    assert "fun_mode: false → true" in term.text
-    assert "fun_mode [false]: " in term.prompts
+    result, term = await edit("1", "UTC", "s", "y")
+    assert result["notifications"]["timezone"] == "UTC"
+    assert "timezone: Europe/London → UTC" in term.text
+    assert "timezone [Europe/London]: " in term.prompts
 
 
 async def test_enter_keeps_current_value():
@@ -67,7 +67,7 @@ async def test_enter_keeps_current_value():
 
 async def test_edit_instrument_reprompts_for_invalid_beam_target():
     """Beam targets are case-insensitive and stored canonically."""
-    result, term = await edit("8", "", "75", "Muons", "muon", "", "s", "y")
+    result, term = await edit("7", "", "75", "Muons", "muon", "", "s", "y")
     assert result["instruments"][1] == {
         "name": "WISH", "notify_counts": "75", "beam_target": "Muon", "channel": "experiment",
     }
@@ -83,19 +83,19 @@ async def test_add_instrument_upper_cases_name():
 
 
 async def test_delete_instrument_needs_confirmation():
-    result, term = await edit("d 7", "n", "d 7", "y", "s", "y")
+    result, term = await edit("d 6", "n", "d 6", "y", "s", "y")
     assert [i["name"] for i in result["instruments"]] == ["WISH"]
     assert "  - PEARL" in term.text
 
 
 async def test_cannot_delete_last_instrument_or_a_missing_one():
-    result, term = await edit("d 7", "y", "d 7", "d 10", "q")
+    result, term = await edit("d 6", "y", "d 6", "d 10", "q")
     assert "At least one instrument is required." in term.text
     assert "No instrument with that number." in term.text
 
 
 async def test_declining_save_or_discard_returns_to_menu():
-    result, term = await edit("1", "true", "s", "n", "q", "n", "q", "y")
+    result, term = await edit("1", "UTC", "s", "n", "q", "n", "q", "y")
     assert result is None
     assert term.prompts.count("Discard your changes? [y/N]: ") == 2
 
@@ -129,11 +129,11 @@ def daemon(*update_replies):
 
 async def test_run_config_editor_saves_with_revision():
     request = daemon({"ok": True, "restarting": True})
-    term = Terminal("1", "true", "s", "y", "")
+    term = Terminal("1", "UTC", "s", "y", "")
     await run_config_editor(request, term.read_line, term.write)
     update = request.await_args_list[1].args[0]
     assert (update["method"], update["revision"]) == ("update_config", "rev1")
-    assert update["settings"]["notifications"]["fun_mode"] == "true"
+    assert update["settings"]["notifications"]["timezone"] == "UTC"
     assert "daemon is restarting" in term.text
 
 
@@ -142,8 +142,8 @@ async def test_run_config_editor_lets_user_fix_invalid_config():
         {"ok": False, "error": "invalid_config", "detail": "[INSTRUMENT:WISH] notify_counts must be a positive number"},
         {"ok": True, "restarting": True},
     )
-    term = Terminal("8", "", "0", "", "", "s", "y",   # rejected by the daemon
-                    "8", "", "5", "", "", "s", "y",   # fixed; earlier edit still in place
+    term = Terminal("7", "", "0", "", "", "s", "y",   # rejected by the daemon
+                    "7", "", "5", "", "", "s", "y",   # fixed; earlier edit still in place
                     "")
     await run_config_editor(request, term.read_line, term.write)
     assert "Save failed (invalid_config): [INSTRUMENT:WISH] notify_counts" in term.text
@@ -152,7 +152,7 @@ async def test_run_config_editor_lets_user_fix_invalid_config():
 
 async def test_run_config_editor_stops_on_config_changed():
     request = daemon({"ok": False, "error": "config_changed", "detail": "reload and try again"})
-    term = Terminal("1", "true", "s", "y", "")
+    term = Terminal("1", "UTC", "s", "y", "")
     await run_config_editor(request, term.read_line, term.write)
     assert "Save failed (config_changed): reload and try again" in term.text
     assert request.await_count == 2
@@ -183,12 +183,12 @@ async def test_run_config_editor_keeps_edits_when_connection_is_lost_on_save():
         ConnectionError("daemon went away"),
         {"ok": True, "restarting": True},
     ])
-    term = Terminal("1", "true", "s", "y",  # fails: connection lost
+    term = Terminal("1", "UTC", "s", "y",  # fails: connection lost
                     "s", "y", "")           # saved again after reconnecting
     await run_config_editor(request, term.read_line, term.write)
     assert "Save failed: daemon went away. Your changes are kept" in term.text
     retry = request.await_args_list[2].args[0]
-    assert (retry["revision"], retry["settings"]["notifications"]["fun_mode"]) == ("r", "true")
+    assert (retry["revision"], retry["settings"]["notifications"]["timezone"]) == ("r", "UTC")
 
 
 async def test_blank_name_cancels_adding_an_instrument():
@@ -199,13 +199,13 @@ async def test_blank_name_cancels_adding_an_instrument():
 
 
 async def test_closed_input_with_changes_says_they_were_discarded():
-    result, term = await edit("1", "true")
+    result, term = await edit("1", "UTC")
     assert result is None
     assert "Input closed; your changes were discarded." in term.text
 
 
 async def test_teams_channel_prompt_validates_and_shows_in_menu():
-    result, term = await edit("7", "", "", "", "teams", "Instrument", "s", "y")
+    result, term = await edit("6", "", "", "", "teams", "Instrument", "s", "y")
     assert result["instruments"][0]["channel"] == "instrument"
     assert "Teams channel must be one of experiment, instrument." in term.text
     assert "Teams channel (experiment/instrument) [experiment]: " in term.prompts

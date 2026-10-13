@@ -6,7 +6,6 @@ from websockets.datastructures import Headers
 from websockets.exceptions import InvalidStatus
 from websockets.http11 import Response
 import base64
-import random
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
@@ -67,12 +66,12 @@ def stall_monitor(mock_config, mock_channels, run_name="Run 1"):
     return m
 
 
-def make_monitor(mock_config, mock_channels, counts_target=100, rng=None, sink=None):
+def make_monitor(mock_config, mock_channels, counts_target=100, sink=None):
     beam_channel, exp_channel = mock_channels
     instruments = [replace(i, notify_counts=counts_target) for i in mock_config.instruments]
     return BeamMonitor(
         replace(mock_config, instruments=instruments, debounce_seconds=DEBOUNCE_SECONDS),
-        beam_channel, exp_channel, rng=rng, sink=sink,
+        beam_channel, exp_channel, sink=sink,
     )
 
 
@@ -252,23 +251,6 @@ async def test_change_aggregator_logs_flush_failure_and_keeps_working(mock_confi
     await wait_until(lambda: beam_channel.broadcast.call_count == 1)
 
 
-@pytest.mark.parametrize("fun_mode", [False, True])
-async def test_handle_update_beam_flavour_only_in_fun_mode(mock_config, mock_channels, fun_mode):
-    """Flavour lines appear only with fun_mode on. fun_mode defaults to False,
-    and then no flavour is added even with an rng available."""
-    config = replace(mock_config, fun_mode=True) if fun_mode else mock_config
-    beam_channel, exp_channel = mock_channels
-    m = make_monitor(config, mock_channels, rng=random.Random(1))
-
-    await m._handle_update({"pv": config.ts1_beam_current_pv, "value": "10.0"})  # startup
-    assert (beam_channel.broadcast.call_args[0][0].flavour != "") is fun_mode
-    beam_channel.broadcast.reset_mock()
-
-    await m._handle_update({"pv": config.ts1_beam_current_pv, "value": "60.0"})
-    await asyncio.sleep(SETTLE)
-    assert (beam_channel.broadcast.call_args[0][0].flavour != "") is fun_mode
-
-
 # ---------------------------------------------------------------------------
 # _handle_update — run-name (b64byt) arm
 # ---------------------------------------------------------------------------
@@ -338,23 +320,6 @@ async def test_handle_update_run_name_nan_ignored(mock_config, mock_channels):
     await m._handle_update({"pv": PEARL_TITLE, "b64byt": "nan"})
     assert tracker(m).state.run_name == ""
     exp_channel.broadcast.assert_not_called()
-
-
-@pytest.mark.parametrize("fun_mode, total", [
-    (True, 0),  # the sink's total for an unknown instrument: 0 % 25 == 0 isn't a milestone
-    (False, 25),
-])
-async def test_handle_update_run_name_change_no_milestone(mock_config, mock_channels, fun_mode, total):
-    _, exp_channel = mock_channels
-    sink = MagicMock()
-    sink.record_run_completed.return_value = total
-    m = make_monitor(replace(mock_config, fun_mode=fun_mode), mock_channels, sink=sink)
-    tracker(m).state.run_name = "Run 24"
-    tracker(m).state.run_started_at = datetime.now(timezone.utc)
-
-    await m._handle_update(title("Run 25"))
-
-    exp_channel.broadcast.assert_called_once()  # only the "new run" card
 
 
 # ---------------------------------------------------------------------------
@@ -1110,10 +1075,8 @@ async def test_one_instruments_failed_stall_check_does_not_skip_others(mock_conf
 async def test_run_cards_use_the_instruments_channel_setting(mock_config, mock_channels, mode, expected):
     """Blank is filled with "Experiment Updates" by the experiment channel on broadcast."""
     _, exp_channel = mock_channels
-    config = replace(mock_config, fun_mode=True, stall_minutes=0.01,
-                     instruments=[replace(mock_config.instruments[0], channel=mode)])
+    config = replace(mock_config, stall_minutes=0.01, instruments=[replace(mock_config.instruments[0], channel=mode)])
     sink = MagicMock()
-    sink.record_run_completed.return_value = 25
     m = make_monitor(config, mock_channels, counts_target=130, sink=sink)
     m._current_ws = MagicMock()  # connected to PVWS
     t = tracker(m)
@@ -1131,7 +1094,7 @@ async def test_run_cards_use_the_instruments_channel_setting(mock_config, mock_c
 
     titles_channels = [(c.args[0].title, c.args[0].channel) for c in exp_channel.broadcast.call_args_list]
     assert [title for title, _ in titles_channels] == [
-        "PEARL: New run started", "PEARL: 25 runs completed", "PEARL: Data collection stalled",
+        "PEARL: New run started", "PEARL: Data collection stalled",
         "PEARL: Run about to finish",
     ]
     assert {channel for _, channel in titles_channels} == {expected}
@@ -1562,21 +1525,18 @@ async def test_new_rb_number_starts_a_new_run_history(mock_config, mock_channels
 
 
 async def test_new_run_is_saved_before_its_cards(mock_config, mock_channels):
-    """The new-run card (which shows the new run's target) and, every 25th
-    completed run with fun_mode on, a milestone card are sent once it's saved."""
-    fun_config = replace(mock_config, fun_mode=True)
+    """The new-run card, which shows the new run's target, is sent once it's saved."""
     _, exp_channel = mock_channels
     sink = MagicMock()
-    sink.record_run_completed.return_value = 25
     order = []
     sink.update_run_name.side_effect = lambda *a: order.append("saved")
     exp_channel.broadcast.side_effect = lambda n: order.append(n.title)
-    m = make_monitor(fun_config, mock_channels, sink=sink)
+    m = make_monitor(mock_config, mock_channels, sink=sink)
     tracker(m).state.run_name = "Run 24"
     tracker(m).state.run_started_at = datetime.now(timezone.utc)
     tracker(m).state.current_counts = 42.0
     await m._handle_update(title("Run 25"))
-    assert order == ["saved", "PEARL: New run started", "PEARL: 25 runs completed"]
+    assert order == ["saved", "PEARL: New run started"]
     sink.record_run_completed.assert_called_once_with("PEARL", ANY, 42.0)  # with Run 24's µA·h
 
 

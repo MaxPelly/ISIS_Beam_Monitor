@@ -1,13 +1,10 @@
 """Shared formatting helpers and structured notification builders."""
-import random
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
-
-from isis_monitor import flavour
 
 UK_TZ = ZoneInfo("Europe/London")
 _display_tz = UK_TZ
@@ -43,7 +40,6 @@ def fmt_duration(td: timedelta) -> str:
 
 _STATE_ORDER = {"off": 0, "low": 1, "medium": 2, "high": 3}
 
-# Always-on emoji — these carry information, so they show regardless of fun_mode.
 STATE_EMOJI = {"high": "🟢", "medium": "🟡", "low": "🟠", "off": "🔴"}
 RESTORED_EMOJI = "🎉"  # beam recovering from an outage of an hour or more
 NEW_RUN_EMOJI = "🚀"
@@ -68,7 +64,6 @@ class Notification:
     severity: Severity = Severity.INFO
     emoji: str = ""
     facts: List[Tuple[str, str]] = field(default_factory=list)
-    flavour: str = ""
     url: Optional[str] = None
     url_label: str = "Open"
     timestamp: Optional[datetime] = None
@@ -77,24 +72,23 @@ class Notification:
     topic: str = ""  # what it's about, for subscribers filtering it: a beam target's channel
                      # label, an instrument name, "MCR" or "Summary"
 
-    def _parts(self, with_flavour: bool) -> List[str]:
+    def _parts(self) -> List[str]:
         parts = [f"{self.emoji} {self.title}".strip(), self.text]
         parts.extend(f"{key}: {value}" for key, value in self.facts)
-        parts += [self.flavour if with_flavour else "", fmt_time(self.timestamp) if self.timestamp else ""]
+        parts.append(fmt_time(self.timestamp) if self.timestamp else "")
         return [part for part in parts if part]
 
     def to_plain_text(self) -> str:
         """Render as plain text, e.g. for log lines or the dummy notifier."""
-        return "\n".join(self._parts(with_flavour=True))
+        return "\n".join(self._parts())
 
     def to_summary(self) -> str:
         """Render as a single line for the Teams `summary` field.
 
         Text-only clients that can't show the Adaptive Card display this
         instead, so it carries the key details: title, text, facts and time.
-        Flavour is left out to keep it short.
         """
-        return " | ".join(" ".join(part.split()) for part in self._parts(with_flavour=False))
+        return " | ".join(" ".join(part.split()) for part in self._parts())
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +105,6 @@ def beam_change(
     time_in_prev_state: timedelta,
     time_now: datetime,
     trip_note: str = "",
-    rng: Optional[random.Random] = None,
     channel: str = "",
 ) -> Notification:
     """Build a card for a confirmed (debounced) beam state transition."""
@@ -129,7 +122,6 @@ def beam_change(
         and time_in_prev_state >= OUTAGE_RESTORE_THRESHOLD
     )
     emoji = RESTORED_EMOJI if restored else STATE_EMOJI[new_state]
-    transition = "restored" if restored else new_state
 
     text = f"{display_name} beam moved from {prev_state} to {new_state}."
     if trip_note:
@@ -148,7 +140,6 @@ def beam_change(
             ("% of high threshold", pct_of_high),
             (f"Was {prev_state} for", fmt_duration(time_in_prev_state)),
         ],
-        flavour=flavour.pick(transition, rng) if rng else "",
         timestamp=time_now,
         channel=channel,
         topic=channel,
@@ -160,14 +151,12 @@ def startup_status(
     state: str,
     beam_val: float,
     time_now: datetime,
-    rng: Optional[random.Random] = None,
     channel: str = "",
 ) -> Notification:
     return Notification(
         title=f"Monitor online: {display_name} is {state}",
         text=f"Current: {beam_val:.3f} uA",
         emoji="🛰️",
-        flavour=flavour.pick("startup", rng) if rng else "",
         timestamp=time_now,
         channel=channel,
         topic=channel,
@@ -183,7 +172,6 @@ def run_started(
     time_now: datetime,
     target: float,
     target_note: str = "",  # e.g. "auto, from 5 runs"
-    rng: Optional[random.Random] = None,
     channel: str = "",
 ) -> Notification:
     """Build a card for a new run starting — its target, and a report on the
@@ -203,7 +191,6 @@ def run_started(
             ("Final total collected", f"{prev_counts:.1f} µA·h" if prev_counts >= 0 else "unknown"),
             ("Target", f"{target:g} µA·h" + (f" ({target_note})" if target_note else "")),
         ],
-        flavour=flavour.pick("new_run", rng) if rng else "",
         timestamp=time_now,
         channel=channel,
         topic=instrument,
@@ -218,7 +205,6 @@ def run_finishing(
     rate_per_second: float,
     instrument_state: str,
     time_now: datetime,
-    rng: Optional[random.Random] = None,
     channel: str = "",
     auto: bool = False,  # counts_target came from recent runs (notify_counts = auto)
     run_number: str = "",
@@ -240,7 +226,6 @@ def run_finishing(
         text=run_name,
         emoji=FINISHING_EMOJI,
         facts=facts,
-        flavour=flavour.pick("finishing", rng) if rng else "",
         timestamp=time_now,
         channel=channel,
         topic=instrument,
@@ -302,7 +287,6 @@ def mcr_news(
     news_text: str,
     time_now: datetime,
     url: Optional[str] = None,
-    rng: Optional[random.Random] = None,
 ) -> Notification:
     severity, emoji = _mcr_severity_and_emoji(news_text)
     return Notification(
@@ -310,7 +294,6 @@ def mcr_news(
         text=news_text,
         severity=severity,
         emoji=emoji,
-        flavour=flavour.pick("mcr_news", rng) if rng else "",
         url=url,
         url_label="Open MCR news",
         timestamp=time_now,
@@ -326,13 +309,9 @@ def daily_summary(
     sparkline: str,
     instrument_runs: Dict[str, Tuple[int, float]],
     time_now: datetime,
-    is_new_record: bool = False,
-    fact_of_the_day: str = "",
     coverage_pct: float = 100.0,
 ) -> Notification:
     text = f"{display_name}: {uptime_pct:.0f}% uptime over the last 24h."
-    if is_new_record:
-        text = f"{text} 🏆 New record!"
 
     facts = [("Uptime", f"{uptime_pct:.0f}%")]
     # Uptime only covers the time the beam feed was connected; say so when
@@ -356,7 +335,6 @@ def daily_summary(
         severity=Severity.GOOD if uptime_pct >= 90 else Severity.INFO,
         emoji="📊",
         facts=facts,
-        flavour=fact_of_the_day,
         timestamp=time_now,
         channel=display_name,  # already the beam target's channel label (e.g. "TS1")
         topic="Summary",
@@ -380,25 +358,6 @@ def experiment_finished(
             ("Average run", f"{uah / runs:.1f} µA·h"),
             ("Duration", f"{at_least}{fmt_duration(duration)}"),
         ],
-        timestamp=time_now,
-        channel=channel,
-        topic=instrument,
-    )
-
-
-def run_milestone(
-    instrument: str,
-    run_count: int,
-    time_now: datetime,
-    rng: Optional[random.Random] = None,
-    channel: str = "",
-) -> Notification:
-    return Notification(
-        title=f"{instrument}: {run_count} runs completed",
-        text=f"That's {run_count} runs since records began.",
-        severity=Severity.GOOD,
-        emoji="🏆",
-        flavour=flavour.pick("milestone", rng) if rng else "",
         timestamp=time_now,
         channel=channel,
         topic=instrument,

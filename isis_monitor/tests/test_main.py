@@ -416,7 +416,7 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
     ts = datetime.now(timezone.utc) - timedelta(minutes=5)
     store = SQLiteStateStore(tmp_path / "state.db")
     store.write_samples([(ts, "TS2", 7.0, "low")])
-    store.upsert_snapshot("daemon_state", json.dumps({"mcr_news": "old news", "instruments": {"PEARL": {"total_runs": 30}}}))
+    store.upsert_snapshot("daemon_state", json.dumps({"mcr_news": "old news", "instruments": {"PEARL": {"run_name": "Run 30"}}}))
     store.commit()
     store.close()
 
@@ -432,7 +432,7 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
 
     assert snap["mcr_news"] == "old news"
     assert mcr_cls.call_args.kwargs["old_news"] == "old news"
-    assert snap["instruments"]["PEARL"]["total_runs"] == 30
+    assert snap["instruments"]["PEARL"]["run_name"] == "Run 30"
     assert history["TS2"][0]["current"] == 7.0
     assert set(reconnect) == {"beam", "mcr"}
 
@@ -693,10 +693,10 @@ async def test_daemon_rejects_update_based_on_stale_read(tmp_path):
         revision = await _revision(client)
         ini.write_text(ini.read_text() + "[INSTRUMENT:WISH]\nnotify_counts = 5\n")
         reply = await client.request({
-            "method": "update_config", "revision": revision, "settings": {"notifications": {"fun_mode": "true"}},
+            "method": "update_config", "revision": revision, "settings": {"notifications": {"debounce_seconds": "30"}},
         })
         assert (reply["ok"], reply["error"]) == (False, "config_changed")
-        assert "[INSTRUMENT:WISH]" in ini.read_text() and "fun_mode" not in ini.read_text()
+        assert "[INSTRUMENT:WISH]" in ini.read_text() and "debounce_seconds" not in ini.read_text()
         assert not task.done()
 
 
@@ -711,7 +711,7 @@ async def test_concurrent_updates_only_one_is_applied(tmp_path):
         try:
             results = await asyncio.gather(
                 client.request({"method": "update_config", "revision": revision,
-                                "settings": {"notifications": {"fun_mode": "true"}}}),
+                                "settings": {"notifications": {"debounce_seconds": "30"}}}),
                 other.request({"method": "update_config", "revision": revision,
                                "settings": {"notifications": {"summary_time": "09:30"}}}),
                 return_exceptions=True,
@@ -725,7 +725,7 @@ async def test_concurrent_updates_only_one_is_applied(tmp_path):
     assert len(winners) == 1
     assert isinstance(losers[0], ConnectionError) or losers[0]["error"] == "restart_pending"
     text = ini.read_text()
-    assert ("fun_mode = true" in text) != ("summary_time = 09:30" in text)
+    assert ("debounce_seconds = 30" in text) != ("summary_time = 09:30" in text)
 
 
 async def test_daemon_rejects_invalid_config_and_keeps_running(tmp_path):
@@ -753,11 +753,11 @@ async def test_daemon_update_config_writes_file_and_requests_restart(tmp_path):
         reply = await client.request({
             "method": "update_config",
             "revision": await _revision(client),
-            "settings": {"notifications": {"fun_mode": "true"}},
+            "settings": {"notifications": {"debounce_seconds": "30"}},
         })
         assert reply == {"ok": True, "restarting": True}
         assert await asyncio.wait_for(task, 5) is True
-    assert "fun_mode = true" in ini.read_text()
+    assert "debounce_seconds = 30" in ini.read_text()
 
 
 def test_main_restarts_after_lock_is_released(tmp_path, no_exec):
@@ -924,10 +924,10 @@ async def test_config_editor_saves_over_the_new_connection_after_reconnecting(tm
             await wait_until(lambda: SUBSCRIBED in tui.update_log.call_args_list)
             assert len(clients) == 2
 
-            for line in (b"1\n", b"true\n", b"s\n", b"y\n"):
+            for line in (b"1\n", b"UTC\n", b"s\n", b"y\n"):
                 os.write(keys, line)
                 await asyncio.sleep(0.05)
-            await wait_until(lambda: "fun_mode = true" in ini.read_text())
+            await wait_until(lambda: "timezone = UTC" in ini.read_text())
             os.write(keys, b"\n")  # "Press Enter to return"
             await wait_until(lambda: tui.start.call_count == 2)
             os.write(keys, b"q")
@@ -949,11 +949,11 @@ async def test_keys_typed_ahead_of_the_editor_are_passed_to_it(tmp_path, capsys)
         with tui_terminal() as (tui, keys, _termios, _tty):
             task = await start_tui(tui, _config(tmp_path), asyncio.Event())
             os.write(keys, b"c1\nx")  # one read: open editor, choose 1, then a partial line
-            await wait_until(lambda: "fun_mode [false]: " in capsys.readouterr().out)
-            os.write(keys, b"true\n")  # the hidden partial "x" was dropped
-            await wait_until(lambda: "  1) fun_mode                true" in capsys.readouterr().out)
-            os.write(keys, b"2\nUTC\n")  # several lines in one read are split up
-            await wait_until(lambda: "  2) timezone                UTC" in capsys.readouterr().out)
+            await wait_until(lambda: "timezone [Europe/London]: " in capsys.readouterr().out)
+            os.write(keys, b"UTC\n")  # the hidden partial "x" was dropped
+            await wait_until(lambda: "  1) timezone                UTC" in capsys.readouterr().out)
+            os.write(keys, b"2\n30\n")  # several lines in one read are split up
+            await wait_until(lambda: "  2) debounce_seconds        30" in capsys.readouterr().out)
             os.write(keys, b"q\n")
             await wait_until(lambda: "Discard your changes?" in capsys.readouterr().out)
             os.write(keys, b"y\n")

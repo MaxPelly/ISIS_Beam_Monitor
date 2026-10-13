@@ -87,9 +87,9 @@ def test_teams_card_breaks_markdown_links_in_remote_text():
     """A run title can't become a disguised link in the Experiment Updates channel."""
     evil = "[Session expired - sign in](https://evil.example)"
     payload = TeamsNotifier("http://x")._create_payload(
-        Notification(title=f"PEARL: {evil}", text=evil, flavour=evil, facts=[("Previous run", evil)]))
+        Notification(title=f"PEARL: {evil}", text=evil, facts=[("Previous run", evil)]))
     card = json.dumps(payload["attachments"][0]["content"]["body"])
-    assert "](" not in card and card.count("]\\u200b(") == 4
+    assert "](" not in card and card.count("]\\u200b(") == 3
     assert "](" not in payload["summary"]  # read by plain-text clients and flows
 
 
@@ -187,16 +187,14 @@ def test_create_payload_includes_facts():
     ]
 
 
-def test_create_payload_includes_flavour_and_timestamp_lines():
+def test_create_payload_ends_with_the_timestamp_and_version():
     notifier = TeamsNotifier("http://fake.webhook.url")
     ts = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
-    notification = Notification(title="Title", text="Text", flavour="Beam's back, baby.", timestamp=ts)
+    notification = Notification(title="Title", text="Text", timestamp=ts)
 
     payload = notifier._create_payload(notification)
 
     body = payload["attachments"][0]["content"]["body"]
-    texts = [item["text"] for item in body if "text" in item]
-    assert "_Beam's back, baby._" in texts
     assert body[-1]["isSubtle"] is True
     assert "Jan" in body[-1]["text"] and body[-1]["text"].endswith(f"ISIS Beam Monitor v{__version__}")
 

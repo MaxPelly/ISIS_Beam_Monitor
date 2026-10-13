@@ -31,7 +31,6 @@ INSTRUMENT_SECTION_PREFIX = "INSTRUMENT:"
 _INSTRUMENT_KEYS = ("notify_counts", "beam_target", "channel")
 # [NOTIFICATIONS] keys the TUI may edit, mapped to their AppConfig field.
 EDITABLE_NOTIFICATION_KEYS = {
-    "fun_mode": "fun_mode",
     "timezone": "notifications_timezone",
     "debounce_seconds": "debounce_seconds",
     "stall_minutes": "stall_minutes",
@@ -164,7 +163,6 @@ class AppConfig:
     log_max_bytes: int = _ini("LOGGING", 5_000_000)
     log_backup_count: int = _ini("LOGGING", 3)
 
-    fun_mode: bool = _ini("NOTIFICATIONS", False)
     notifications_timezone: str = _ini("NOTIFICATIONS", "Europe/London", "timezone")
     debounce_seconds: float = _ini("NOTIFICATIONS", 20.0)
     stall_minutes: float = _ini("NOTIFICATIONS", 15.0)

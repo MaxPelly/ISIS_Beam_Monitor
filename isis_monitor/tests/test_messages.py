@@ -1,4 +1,3 @@
-import random
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -15,7 +14,6 @@ from isis_monitor.messages import (
     get_timezone,
     mcr_news,
     run_finishing,
-    run_milestone,
     run_started,
     set_timezone,
     startup_status,
@@ -63,7 +61,6 @@ def test_to_plain_text_includes_all_parts():
         text="Current: 150.000 uA",
         emoji="🟢",
         facts=[("Previous", "medium")],
-        flavour="Off to the races.",
         timestamp=DT,
     )
 
@@ -72,7 +69,6 @@ def test_to_plain_text_includes_all_parts():
     assert "🟢 TS1 Beam is now high" in plain
     assert "Current: 150.000 uA" in plain
     assert "Previous: medium" in plain
-    assert "Off to the races." in plain
     assert "Wed 23 Sep 14:05" in plain
 
 
@@ -85,13 +81,12 @@ def test_to_plain_text_and_summary_omit_empty_optional_parts():
 # Notification.to_summary
 # ---------------------------------------------------------------------------
 
-def test_to_summary_is_one_line_with_details_but_no_flavour():
+def test_to_summary_is_one_line_with_details():
     notification = Notification(
         title="TS1 Beam is now high",
         text="Current: 150.000 uA\nfacility-wide trip",
         emoji="🟢",
         facts=[("Previous", "medium"), ("Was medium for", "3h 12m")],
-        flavour="Off to the races.",
         timestamp=DT,
     )
 
@@ -122,7 +117,6 @@ def test_beam_change_builder_going_up_is_good():
     ]
     assert n.timestamp == DT
     assert n.channel == "TS1"
-    assert n.flavour == ""  # no rng, no flavour
 
 
 @pytest.mark.parametrize("old, new, current, previous, severity, emoji", [
@@ -150,18 +144,6 @@ def test_beam_change_builder_zero_high_threshold_does_not_crash():
     assert ("% of high threshold", "n/a") in n.facts
 
 
-def test_beam_change_builder_with_rng_picks_deterministic_flavour():
-    n = beam_change(
-        "TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), DT, rng=random.Random(1),
-    )
-    assert n.flavour != ""
-    # Same seed picks the same line every time.
-    n2 = beam_change(
-        "TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), DT, rng=random.Random(1),
-    )
-    assert n.flavour == n2.flavour
-
-
 def test_beam_change_builder_includes_trip_note():
     n = beam_change(
         "TS1", "low", "off", 0.0, 20.0, 140.0, timedelta(minutes=10), DT,
@@ -175,7 +157,6 @@ def test_startup_status_builder():
     assert n.title == "Monitor online: TS1 is high"
     assert n.emoji == "🛰️"
     assert "150.000 uA" in n.text
-    assert n.flavour == ""
     assert n.channel == n.topic == "TS1"
 
 
@@ -186,7 +167,6 @@ def test_run_started_builder():
     assert n.text == "Run 12346"
     assert n.severity == Severity.INFO
     assert n.emoji == "🚀"
-    assert n.flavour == ""
     assert n.facts == [
         ("Previous run", "Run 12345"),
         ("Duration", "2h 0m"),
@@ -206,7 +186,6 @@ def test_run_finishing_builder():
     assert n.text == "Run 12345"
     assert n.severity == Severity.INFO
     assert n.emoji == "🏁"
-    assert n.flavour == ""
     assert n.facts == [
         ("Collected", "150.0 / 130 µA·h"),
         ("Rate", "1800.0 µA"),
@@ -227,7 +206,6 @@ def test_mcr_news_builder():
     assert n.text == "Machine update: nothing to report."
     assert n.severity == Severity.INFO
     assert n.emoji == "📰"
-    assert n.flavour == ""
     assert n.url is None
     n = mcr_news("Machine update.", DT, url="https://example.com/mcr")
     assert n.url == "https://example.com/mcr"
@@ -251,18 +229,6 @@ def test_mcr_news_builder_keywords(news, severity, emoji):
     assert (n.severity, n.emoji) == (severity, emoji)
 
 
-def test_builders_pick_flavour_when_rng_given():
-    rng = random.Random(1)
-    for n in (
-        startup_status("TS1", "high", 150.0, DT, rng=rng),
-        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, DT, 130.0, rng=rng),
-        run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", DT, rng=rng),
-        mcr_news("News", DT, rng=rng),
-        run_milestone("PEARL", 25, DT, rng=rng),
-    ):
-        assert n.flavour != "", n.title
-
-
 def test_collection_stalled_builder():
     n = collection_stalled("PEARL", "TS1", timedelta(minutes=17), DT)
     assert n.title == "PEARL: Data collection stalled"
@@ -279,7 +245,6 @@ def test_daily_summary_builder():
     assert n.title == "TS1 daily summary"
     assert n.severity == Severity.GOOD  # >= 90% uptime
     assert n.emoji == "📊"
-    assert "New record" not in n.text
     assert n.facts == [
         ("Uptime", "95%"),
         ("Trips", "2"),
@@ -303,24 +268,6 @@ def test_daily_summary_shows_data_coverage_only_when_samples_are_missing():
     assert facts[:2] == [("Uptime", "95%"), ("Data coverage", "62%")]
 
 
-def test_daily_summary_builder_new_record_note_and_fact_of_the_day():
-    n = daily_summary(
-        "TS1", 95.0, 0, timedelta(hours=10), "▇", {}, DT,
-        is_new_record=True, fact_of_the_day="Neutrons are neutral.",
-    )
-    assert "New record" in n.text
-    assert n.flavour == "Neutrons are neutral."
-
-
-def test_run_milestone_builder():
-    n = run_milestone("PEARL", 25, DT)
-    assert n.title == "PEARL: 25 runs completed"
-    assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
-    assert n.severity == Severity.GOOD
-    assert n.emoji == "🏆"
-    assert n.flavour == ""
-
-
 def test_no_builder_bakes_its_own_emoji_into_the_title():
     """`to_plain_text()` and the Teams card both prefix `emoji` onto `title` —
     a builder must never also embed that emoji inside the title text itself,
@@ -332,8 +279,7 @@ def test_no_builder_bakes_its_own_emoji_into_the_title():
         run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", DT),
         collection_stalled("PEARL", "TS1", timedelta(minutes=17), DT),
         mcr_news("Machine update.", DT),
-        daily_summary("TS1", 95.0, 0, timedelta(hours=10), "▇", {}, DT, is_new_record=True),
-        run_milestone("PEARL", 25, DT),
+        daily_summary("TS1", 95.0, 0, timedelta(hours=10), "▇", {}, DT),
     ]
     for n in notifications:
         if n.emoji:
@@ -348,6 +294,5 @@ def test_builders_set_topic():
         run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, DT, 130.0),
         run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", DT),
         collection_stalled("PEARL", "TS1", timedelta(minutes=17), DT),
-        run_milestone("PEARL", 25, DT, channel="PEARL"),
     ):
         assert n.topic == "PEARL", n.title

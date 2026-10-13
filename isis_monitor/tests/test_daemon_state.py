@@ -155,7 +155,7 @@ def test_run_name_and_counts_events():
     ]
     snap = state.snapshot()
     assert snap["instruments"]["WISH"] == {
-        "run_name": "Run 42", "counts": 12.5, "total_runs": 0, "notify_counts": 50.0, "beam_target": "TS2",
+        "run_name": "Run 42", "counts": 12.5, "notify_counts": 50.0, "beam_target": "TS2",
         "run_started_at": None, "end_notified": False, "stale_counts": -1.0,
         "run_totals": [], "rb_number": "", "run_rb": "",
         "exp_since": None, "exp_partial": True, "exp_runs": 0, "exp_uah": 0.0,
@@ -169,7 +169,8 @@ def test_updates_for_unknown_instrument_are_ignored():
     q = state.subscribe()
     state.update_run_name("MERLIN", "Run 1")
     state.update_counts("MERLIN", 1.0)
-    assert state.record_run_completed("MERLIN", datetime.now(timezone.utc), 10.0) == 0
+    state.record_run_completed("MERLIN", datetime.now(timezone.utc), 10.0)
+    assert not state.run_completions
     assert _drain(q) == []
     assert set(state.snapshot()["instruments"]) == {"PEARL", "WISH"}
 
@@ -205,13 +206,12 @@ def test_restore_from_snapshot():
     assert state.mcr_news == "Restored News"
 
 
-def test_record_run_completed_returns_per_instrument_total():
+def test_record_run_completed_ignores_unknown_instruments():
     state = DaemonState(instruments=INSTRUMENTS)
     now = datetime.now(timezone.utc)
-    assert state.record_run_completed("PEARL", now, 10.0) == 1
-    assert state.record_run_completed("PEARL", now, 10.0) == 2
-    assert state.record_run_completed("WISH", now, 10.0) == 1
-    assert state.instruments["PEARL"]["total_runs"] == 2
+    state.record_run_completed("PEARL", now, 10.0)
+    state.record_run_completed("MERLIN", now, 10.0)
+    assert [(name, uah) for _, name, uah in state.run_completions] == [("PEARL", 10.0)]
 
 
 def test_runs_completed_since_filters_by_window_and_instrument():
@@ -243,13 +243,13 @@ def test_instrument_state_persists_through_snapshot():
     ])
     restored.restore_from_snapshot_json(snap_json)
     assert restored.instruments["WISH"] == {
-        "run_name": "Run 7", "counts": 3.0, "total_runs": 1, "notify_counts": 75.0, "beam_target": "TS2",
+        "run_name": "Run 7", "counts": 3.0, "notify_counts": 75.0, "beam_target": "TS2",
         "run_started_at": None, "end_notified": False, "stale_counts": -1.0,
         "run_totals": [], "rb_number": "", "run_rb": "",
         "exp_since": None, "exp_partial": True, "exp_runs": 0, "exp_uah": 0.0,
         "target": None, "auto_runs": 0, "auto": False,  # None: for the tracker to redo
     }
-    assert restored.instruments["MERLIN"]["total_runs"] == 0
+    assert restored.instruments["MERLIN"]["run_name"] == ""
     assert "PEARL" not in restored.instruments
 
 
@@ -257,16 +257,15 @@ def test_malformed_instrument_entries_in_snapshot_are_skipped():
     state = DaemonState(instruments=INSTRUMENTS)
     state.restore_from_snapshot_json(json.dumps({"instruments": {
         "PEARL": "junk",
-        "WISH": {"total_runs": 4},
+        "WISH": {"run_name": "Run 4"},
         "MERLIN": {},
     }}))
-    assert state.instruments["PEARL"]["total_runs"] == 0
-    assert state.instruments["WISH"]["total_runs"] == 4
+    assert state.instruments["PEARL"]["run_name"] == ""
+    assert state.instruments["WISH"]["run_name"] == "Run 4"
 
     # A bad value skips that instrument without partially applying it.
     state.restore_from_snapshot_json(json.dumps({"instruments": {"WISH": {"run_name": "R", "counts": None}}}))
-    assert state.instruments["WISH"]["run_name"] == ""
-    assert state.instruments["WISH"]["total_runs"] == 4
+    assert state.instruments["WISH"]["run_name"] == "Run 4"
 
 
 
@@ -298,9 +297,9 @@ def test_auto_target_is_published_and_run_totals_survive_a_snapshot():
 def test_malformed_run_totals_in_snapshot_skip_that_instrument(run_totals):
     state = DaemonState(instruments=INSTRUMENTS)
     state.restore_from_snapshot_json(json.dumps({"instruments": {
-        "WISH": {"total_runs": 4, "run_totals": run_totals},
+        "WISH": {"run_name": "R", "run_totals": run_totals},
     }}))
-    assert state.instruments["WISH"]["total_runs"] == 0
+    assert state.instruments["WISH"]["run_name"] == ""
 
 
 def test_finishing_card_is_due_again_after_switching_to_auto():
@@ -329,9 +328,9 @@ def test_run_progress_is_saved_but_not_published_and_survives_a_snapshot():
 def test_malformed_run_start_in_snapshot_skips_that_instrument():
     state = DaemonState(instruments=INSTRUMENTS)
     state.restore_from_snapshot_json(json.dumps({"instruments": {
-        "WISH": {"total_runs": 4, "run_started_at": "yesterday"},
+        "WISH": {"run_name": "R", "run_started_at": "yesterday"},
     }}))
-    assert state.instruments["WISH"]["total_runs"] == 0
+    assert state.instruments["WISH"]["run_name"] == ""
 
 
 

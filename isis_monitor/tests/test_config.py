@@ -97,14 +97,12 @@ def test_load_config_notifications_custom_values(tmp_path):
 mcr_page_url = https://example.com/mcr
 
 [NOTIFICATIONS]
-fun_mode = yes
 timezone = America/New_York
 debounce_seconds = 5
 stall_minutes = 10
 finish_warning_minutes = 30
 summary_time = 07:30
 """))
-    assert config.fun_mode is True
     assert config.notifications_timezone == "America/New_York"
     assert config.debounce_seconds == 5.0
     assert config.stall_minutes == 10.0
@@ -130,8 +128,7 @@ def test_load_config_defaults_match_dataclass_defaults(tmp_path):
     paths = {name: str(tmp_path / getattr(AppConfig, name)) for name in _PATH_FIELDS if getattr(AppConfig, name)}
     assert replace(config, instruments=[]) == AppConfig(mcr_news_url="http://test.com/news", **paths)
     assert config.mcr_poll_interval == 60.0
-    assert (config.fun_mode, config.notifications_timezone, config.debounce_seconds) == (
-        False, "Europe/London", 20.0)
+    assert (config.notifications_timezone, config.debounce_seconds) == ("Europe/London", 20.0)
     assert (config.instrument_target, config.stall_minutes, config.finish_warning_minutes) == ("TS1", 15.0, 15.0)
     assert (config.mcr_page_url, config.summary_time) == ("", "08:00")
     # With no [PVS] or [INSTRUMENT:*] sections the one instrument is PEARL.
@@ -146,7 +143,7 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     ("[TIMEOUTS_INTERVALS]\nmcr_poll_interval = soon\n", r"\[TIMEOUTS_INTERVALS\] mcr_poll_interval"),
     ("[DAEMON]\nretention_days = 1.5\n", r"\[DAEMON\] retention_days"),
     ("[LOGGING]\nlog_max_bytes = big\n", r"\[LOGGING\] log_max_bytes"),
-    (NOTIF + "fun_mode = maybe\n", r"\[NOTIFICATIONS\] fun_mode"),
+    (NOTIF + "debounce_seconds = soon\n", r"\[NOTIFICATIONS\] debounce_seconds"),
     ("[BEAM_BOUNDARIES]\nts1_boundaries = 0, a, 2\n", r"\[BEAM_BOUNDARIES\] ts1_boundaries"),
     ("[BEAM_BOUNDARIES]\nts1_boundaries = 0.0, 50.0\n", "exactly 3"),
     ("[INSTRUMENT:WISH]\n[INSTRUMENT:WISH]\n", "Could not parse"),  # duplicate section
@@ -286,7 +283,7 @@ def test_editable_settings_are_ini_strings(tmp_path):
     config = load_config(_editable_file(tmp_path))
     assert editable_settings(config) == {
         "notifications": {
-            "fun_mode": "false", "timezone": "Europe/London", "debounce_seconds": "20",
+            "timezone": "Europe/London", "debounce_seconds": "20",
             "stall_minutes": "10", "finish_warning_minutes": "15", "summary_time": "08:00",
         },
         "instruments": [{"name": "PEARL", "notify_counts": "130", "beam_target": "TS1", "channel": "experiment"}],
@@ -303,7 +300,7 @@ def test_editable_settings_keep_full_precision():
 def test_update_config_file_round_trips_and_keeps_other_settings(tmp_path):
     path = _editable_file(tmp_path)
     settings = editable_settings(load_config(path))
-    settings["notifications"]["fun_mode"] = "true"
+    settings["notifications"]["summary_time"] = "09:30"
     settings["instruments"][0]["notify_counts"] = "200"
     settings["instruments"][0]["channel"] = "instrument"
     settings["instruments"].append({"name": "wish", "notify_counts": "50", "beam_target": "TS2"})
@@ -311,7 +308,7 @@ def test_update_config_file_round_trips_and_keeps_other_settings(tmp_path):
     update_config_file(path, settings)
 
     reloaded = load_config(path)
-    assert reloaded.fun_mode is True and reloaded.stall_minutes == 10.0
+    assert reloaded.summary_time == "09:30" and reloaded.stall_minutes == 10.0
     assert reloaded.beam_teams_url == "http://secret"
     assert [(i.name, i.notify_counts, i.beam_target, i.channel) for i in reloaded.instruments] == [
         ("PEARL", 200.0, "TS1", "instrument"), ("WISH", 50.0, "TS2", "experiment"),
@@ -352,16 +349,16 @@ def test_update_config_file_writes_through_symlink(tmp_path):
     real = _editable_file(tmp_path)
     link = tmp_path / "link.ini"
     link.symlink_to(real)
-    update_config_file(link, {"notifications": {"fun_mode": "true"}})
+    update_config_file(link, {"notifications": {"summary_time": "09:30"}})
     assert link.is_symlink()
-    assert load_config(real).fun_mode is True
+    assert load_config(real).summary_time == "09:30"
 
 
 @pytest.mark.parametrize("settings, match", [
     ([], "settings must be an object"),
     ({"notifications": []}, "notifications must be an object"),
     ({"notifications": {"log_level": "DEBUG"}}, "'log_level' can't be edited"),
-    ({"notifications": {"fun_mode": True}}, "must be a single-line string"),
+    ({"notifications": {"debounce_seconds": 20}}, "must be a single-line string"),
     ({"notifications": {"summary_time": "08:00\n[DATA]"}}, "must be a single-line string"),
     ({"notifications": {"timezone": "Mars/Base"}}, "not a known timezone"),
     ({"instruments": []}, "non-empty list"),
@@ -389,7 +386,7 @@ def test_update_config_file_cleans_up_temp_file_on_write_failure(tmp_path):
     path = _editable_file(tmp_path)
     with patch("isis_monitor.config.os.replace", side_effect=OSError("disk full")):
         with pytest.raises(OSError, match="disk full"):
-            update_config_file(path, {"notifications": {"fun_mode": "true"}})
+            update_config_file(path, {"notifications": {"summary_time": "09:30"}})
     assert path.read_text() == EDITABLE_BASE
     assert [p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")] == []
 
@@ -397,12 +394,12 @@ def test_update_config_file_cleans_up_temp_file_on_write_failure(tmp_path):
 def test_update_config_file_checks_revision(tmp_path):
     path = _editable_file(tmp_path)
     revision = read_config(path)[1]
-    update_config_file(path, {"notifications": {"fun_mode": "true"}}, revision)
+    update_config_file(path, {"notifications": {"summary_time": "09:30"}}, revision)
     assert read_config(path)[1] != revision
 
     with pytest.raises(ConfigChangedError, match="has changed since it was read"):
-        update_config_file(path, {"notifications": {"fun_mode": "false"}}, revision)
-    assert load_config(path).fun_mode is True
+        update_config_file(path, {"notifications": {"summary_time": "07:00"}}, revision)
+    assert load_config(path).summary_time == "09:30"
 
 
 def test_update_config_file_directory_fsync_failure_is_only_a_warning(tmp_path, caplog):
@@ -415,8 +412,8 @@ def test_update_config_file_directory_fsync_failure_is_only_a_warning(tmp_path, 
         return real_open(target, flags, *args)
 
     with patch("isis_monitor.config.os.open", side_effect=failing_dir_open):
-        update_config_file(path, {"notifications": {"fun_mode": "true"}})
-    assert load_config(path).fun_mode is True
+        update_config_file(path, {"notifications": {"summary_time": "09:30"}})
+    assert load_config(path).summary_time == "09:30"
     assert "Could not fsync" in caplog.text
 
 

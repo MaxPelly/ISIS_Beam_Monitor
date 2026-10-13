@@ -123,7 +123,6 @@ async def test_mcr_run_broadcasts_only_on_news_change(mock_config, mock_channel)
     notification = mock_channel.broadcast.call_args[0][0]
     assert notification.text == "News B"
     assert notification.emoji == "📰"
-    assert notification.flavour == ""  # fun_mode defaults to False
     assert [c.args[0] for c in sink.update_mcr_news.call_args_list] == ["News A", "News B"]
     assert monitor.old_news == "News B"
 
@@ -144,18 +143,6 @@ async def test_mcr_run_announces_news_posted_while_down(mock_config, mock_channe
     assert delays == [mock_config.mcr_poll_interval]  # polled straight away, then waited
     assert mock_channel.broadcast.call_count == sent
     assert monitor.old_news == feed
-
-
-async def test_mcr_run_fun_mode_adds_flavour(mock_config):
-    import random
-    from dataclasses import replace
-
-    channel = fake_channel()
-    monitor = MCRNewsMonitor(
-        replace(mock_config, fun_mode=True), channel, notify_current=False, rng=random.Random(1)
-    )
-    await run_script(monitor, "News A", "News B")
-    assert channel.broadcast.call_args[0][0].flavour != ""
 
 
 async def test_mcr_run_baseline_retries_until_news_available(mock_config, mock_channel):

@@ -2,7 +2,6 @@
 import base64
 import logging
 import math
-import random
 import statistics
 from collections import deque
 from dataclasses import dataclass, field
@@ -12,7 +11,7 @@ from typing import Any, Callable, Deque, Optional, Sequence, Tuple
 from isis_monitor.config import InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.messages import (
-    collection_resumed, collection_stalled, experiment_finished, run_finishing, run_milestone, run_started,
+    collection_resumed, collection_stalled, experiment_finished, run_finishing, run_started,
     strip_controls,
 )
 from isis_monitor.notifiers import NotificationChannel
@@ -25,7 +24,6 @@ STALL_CHECK_WINDOW = timedelta(minutes=5)
 # sent on its ETA; until then the card waits for notify_counts itself.
 ETA_MIN_HISTORY = timedelta(minutes=3)
 ETA_CHECK_INTERVAL = timedelta(seconds=30)  # at most one rate fit per this, per instrument
-RUN_MILESTONE_INTERVAL = 25
 # DAE run states in which counts should rise, so flat counts are a stall.
 # Others (SETUP, PAUSED, WAITING on run control, and the brief ones between)
 # aren't checked; an automated run plan can pass through them in seconds.
@@ -132,7 +130,6 @@ class InstrumentTracker:
         beam_power: Callable[[str], str],
         stall_minutes: float,
         finish_warning_minutes: float = 15.0,
-        flavour_rng: Optional[random.Random] = None,  # set only with fun_mode
         sink: Optional[DaemonState] = None,
     ):
         self.instrument = instrument
@@ -140,7 +137,6 @@ class InstrumentTracker:
         self.beam_power = beam_power
         self.stall_minutes = stall_minutes
         self.finish_warning_minutes = finish_warning_minutes
-        self.flavour_rng = flavour_rng
         self.sink = sink
         self.state = InstrumentState(run_target=instrument.notify_counts)
 
@@ -285,11 +281,10 @@ class InstrumentTracker:
         self.state.collection_stalled_since = None
         self.state.stall_warned = False
 
-        total_runs = (
-            self.sink.record_run_completed(self.instrument.name, time_now, max(prev_counts, 0.0)) if self.sink else 0
-        )
+        if self.sink:
+            self.sink.record_run_completed(self.instrument.name, time_now, max(prev_counts, 0.0))
         # Saved before any await, so a snapshot can't pair the new
-        # completion count with the old run (which a restart would re-report).
+        # completion with the old run (which a restart would re-report).
         self.state.run_name = name
         self.state.run_started_at = time_now
         self._set_target()
@@ -307,17 +302,10 @@ class InstrumentTracker:
             target_note = f"auto's fallback, until {AUTO_MIN_RUNS} runs"
         notification = run_started(
             self.instrument.name, name, prev_name, prev_duration, prev_counts, time_now,
-            self.state.run_target, target_note, rng=self.flavour_rng, channel=self._card_channel(),
+            self.state.run_target, target_note, channel=self._card_channel(),
         )
         logger.info(f"New Run: {notification.to_summary()}")
         await self.experiment_channel.broadcast(notification)
-
-        if self.flavour_rng and total_runs and total_runs % RUN_MILESTONE_INTERVAL == 0:
-            milestone = run_milestone(
-                self.instrument.name, total_runs, time_now, rng=self.flavour_rng, channel=self._card_channel()
-            )
-            logger.info(f"Milestone: {milestone.to_summary()}")
-            await self.experiment_channel.broadcast(milestone)
 
     async def handle_counts(self, raw_value: Any, time_now: datetime) -> None:
         """`raw_value` is IN:<NAME>:DAE:TOTALUAMPS: total µA·h collected this run."""
@@ -382,7 +370,6 @@ class InstrumentTracker:
                 rate,
                 self._beam_state(),
                 time_now,
-                rng=self.flavour_rng,
                 channel=self._card_channel(),
                 auto=self.state.auto_runs > 0,
                 run_number=self.state.run_number,

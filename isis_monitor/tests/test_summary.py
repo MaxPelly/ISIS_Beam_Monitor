@@ -1,6 +1,4 @@
 import asyncio
-import json
-import random
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -106,7 +104,7 @@ def test_compute_summary_treats_unknown_as_off():
 # daily_summary_loop
 # ---------------------------------------------------------------------------
 
-async def run_summary(store, state=None, rng=None, now=None, **overrides):
+async def run_summary(store, state=None, now=None, **overrides):
     """Run daily_summary_loop briefly with its clock stopped at `now` (default: the
     real time), so a run can't straddle midnight; summary_time defaults to that minute.
     Returns the channel."""
@@ -122,7 +120,7 @@ async def run_summary(store, state=None, rng=None, now=None, **overrides):
 
     with patch("isis_monitor.summary.SUMMARY_CHECK_INTERVAL", 0.01), patch("isis_monitor.summary.datetime", clock):
         asyncio.create_task(stop_soon())
-        await daily_summary_loop(make_config(**overrides), state or DaemonState(), store, channel, stop_event, rng=rng)
+        await daily_summary_loop(make_config(**overrides), state or DaemonState(), store, channel, stop_event)
     return channel
 
 
@@ -136,10 +134,6 @@ def store(tmp_path):
 def noon():
     """Midday local time, in whatever display timezone is current."""
     return datetime(2026, 6, 1, 12, 0, tzinfo=get_timezone())
-
-
-def ts1_card(channel):
-    return next(c.args[0] for c in channel.broadcast.call_args_list if c.args[0].title.startswith("TS1"))
 
 
 async def test_daily_summary_loop_sends_one_card_per_target_at_summary_time(store):
@@ -164,18 +158,6 @@ async def test_daily_summary_loop_does_not_fire_before_summary_time(store):
     (await run_summary(store, now=noon(), summary_time="12:01")).broadcast.assert_not_called()
 
 
-@pytest.mark.parametrize("fun_mode", [True, False])
-async def test_daily_summary_loop_tracks_records_only_in_fun_mode(store, fun_mode):
-    state = DaemonState()
-    t0 = datetime.now(timezone.utc) - timedelta(hours=2)
-    for minute in range(121):
-        state.history["TS1"].append((t0 + timedelta(minutes=minute), 10.0, "high"))
-    channel = await run_summary(store, state, rng=random.Random(1), fun_mode=fun_mode)
-    assert ("New record" in ts1_card(channel).text) is fun_mode
-    saved = store.load_snapshot("records")
-    assert (json.loads(saved)["TS1"] > 0) if fun_mode else saved is None
-
-
 async def test_daily_summary_not_resent_after_restart_same_day(tmp_path):
     """The last-sent date is persisted, so restarting the daemon after
     summary_time doesn't send the day's cards a second time."""
@@ -186,14 +168,11 @@ async def test_daily_summary_not_resent_after_restart_same_day(tmp_path):
         store.close()
 
 
-@pytest.mark.parametrize("records", ["{not json", "[1, 2]", '{"TS1": "x"}'])
-async def test_daily_summary_tolerates_corrupt_persisted_values(store, caplog, records):
-    store.upsert_snapshot("records", records)
+async def test_daily_summary_tolerates_a_corrupt_last_sent_date(store):
     store.upsert_snapshot(LAST_SENT_KEY, "yesterday-ish")
     store.commit()
     now = datetime.now(timezone.utc)
-    channel = await run_summary(store, rng=random.Random(1), now=now, fun_mode=True)
-    assert "Corrupt records snapshot" in caplog.text
+    channel = await run_summary(store, now=now)
     assert channel.broadcast.call_count == 3
     assert store.load_snapshot(LAST_SENT_KEY) == now.astimezone(get_timezone()).date().isoformat()
 
@@ -221,7 +200,7 @@ async def test_daily_summary_loop_survives_database_errors(store, caplog):
     real_run = store.run
 
     async def failing_run(fn, *args):
-        if fn.__name__ in ("_load_records", "_save_progress"):
+        if fn.__name__ in ("_load_last_sent", "_save_progress"):
             raise sqlite3.OperationalError("database is locked")
         return await real_run(fn, *args)
 

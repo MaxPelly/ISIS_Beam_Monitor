@@ -1,8 +1,6 @@
-"""Daily beam-uptime summary cards, with fun_mode-only uptime records."""
+"""Daily beam-uptime summary cards."""
 import asyncio
-import json
 import logging
-import random
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -10,7 +8,6 @@ from typing import Deque, Dict, List, Optional, Tuple
 
 from isis_monitor.config import TARGET_LABELS, AppConfig
 from isis_monitor.daemon_state import DaemonState
-from isis_monitor.flavour import fact_of_the_day
 from isis_monitor.messages import daily_summary, get_timezone, sparkline_chars
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.storage import SQLiteStateStore
@@ -109,18 +106,6 @@ def _instruments_by_channel(state: DaemonState) -> Dict[str, List[str]]:
     return grouped
 
 
-def _load_records(store: SQLiteStateStore) -> Dict[str, float]:
-    raw = store.load_snapshot("records")
-    if not raw:
-        return {}
-    try:
-        records = json.loads(raw)
-        return {str(k): float(v) for k, v in records.items()}
-    except (ValueError, TypeError, AttributeError):  # including JSONDecodeError
-        logger.warning("Corrupt records snapshot, starting fresh.")
-        return {}
-
-
 def _load_last_sent(store: SQLiteStateStore) -> Optional[date]:
     raw = store.load_snapshot(LAST_SENT_KEY)
     try:
@@ -129,10 +114,8 @@ def _load_last_sent(store: SQLiteStateStore) -> Optional[date]:
         return None
 
 
-def _save_progress(store: SQLiteStateStore, sent: date, records: Dict[str, float]) -> None:
+def _save_progress(store: SQLiteStateStore, sent: date) -> None:
     store.upsert_snapshot(LAST_SENT_KEY, sent.isoformat())
-    if records:
-        store.upsert_snapshot("records", json.dumps(records))
     store.commit()
 
 
@@ -142,16 +125,14 @@ async def daily_summary_loop(
     store: SQLiteStateStore,
     beam_channel: NotificationChannel,
     stop_event: asyncio.Event,
-    rng: Optional[random.Random] = None,
 ) -> None:
     """Send one summary card per target at config.summary_time (local time), once a day."""
     try:
-        records = await store.run(_load_records, store)
         last_sent_date = await store.run(_load_last_sent, store)
     except sqlite3.Error:
         # Worst case today's summary is sent again; better than no summaries.
         logger.exception("Failed to load daily summary state; starting fresh")
-        records, last_sent_date = {}, None
+        last_sent_date = None
     target_hour, target_minute = (int(x) for x in config.summary_time.split(":"))
 
     while not stop_event.is_set():
@@ -179,15 +160,7 @@ async def daily_summary_loop(
             since = now_utc - SUMMARY_WINDOW
             summaries = compute_summary(state.history, since, now_utc, config.sample_interval)
             instruments_by_channel = _instruments_by_channel(state)
-            todays_fact = fact_of_the_day(rng) if (config.fun_mode and rng) else ""
-
             for beam, target_summary in summaries.items():
-                prior_record = records.get(beam, 0.0)
-                streak_seconds = target_summary.longest_on_streak.total_seconds()
-                is_new_record = config.fun_mode and streak_seconds > prior_record
-                if is_new_record:
-                    records[beam] = streak_seconds
-
                 notification = daily_summary(
                     beam,
                     target_summary.uptime_pct,
@@ -196,8 +169,6 @@ async def daily_summary_loop(
                     target_summary.sparkline,
                     state.runs_completed_since(since, instruments_by_channel.get(beam, [])),
                     now_utc,
-                    is_new_record=is_new_record,
-                    fact_of_the_day=todays_fact,
                     coverage_pct=target_summary.coverage_pct,
                 )
                 await beam_channel.broadcast(notification)
@@ -205,7 +176,7 @@ async def daily_summary_loop(
             logger.exception("Failed to send the daily summary")
 
         try:
-            await store.run(_save_progress, store, last_sent_date, records)
+            await store.run(_save_progress, store, last_sent_date)
         except sqlite3.Error:
             # last_sent_date is still set in memory, so it isn't resent today.
             logger.exception("Failed to save daily summary state")

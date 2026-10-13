@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 import logging
-import random
 import re
 from datetime import datetime, timezone
 import aiohttp
@@ -29,7 +28,6 @@ class MCRNewsMonitor:
         channel: NotificationChannel,
         notify_current: bool = False,
         sink: Optional[DaemonState] = None,
-        rng: Optional[random.Random] = None,
         old_news: Optional[str] = None,
     ):
         """`old_news` is the last news seen before a restart, if known; news
@@ -39,7 +37,6 @@ class MCRNewsMonitor:
         self.channel = channel
         self.notify_current = notify_current
         self.sink = sink
-        self._rng = rng or random.Random()
         self.old_news = old_news
         self._force_reconnect = asyncio.Event()
 
@@ -138,11 +135,10 @@ class MCRNewsMonitor:
 
                 logger.info(f"New MCR Update: {news}")
                 self._publish_news(news)
-                rng = self._rng if self.config.fun_mode else None
                 try:
                     notification = mcr_news(
                         news, datetime.now(timezone.utc),
-                        url=self.config.mcr_page_url or None, rng=rng,
+                        url=self.config.mcr_page_url or None,
                     )
                     await self.channel.broadcast(notification)
                 except Exception:

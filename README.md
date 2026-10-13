@@ -10,7 +10,6 @@ This is a Python application that monitors the status of the ISIS beam, experime
 - **Experiment Updates**: Tracks run starts/finishes on any number of instruments, each with its own notify threshold, using each instrument's total µA·h collected (`IN:<NAME>:DAE:TOTALUAMPS`): previous-run stats and the new run's target, collection rate and ETA, a warning if data collection stalls while that instrument's beam is on and its DAE is running (and a card when it resumes), and a summary of each experiment (runs, µA·h, duration) when the instrument's RB number changes or goes to "0" (no experiment).
 - **MCR News**: Fetches the latest Main Control Room (MCR) news and classifies each update's severity (good/attention/warning) by keyword, with an optional "Open MCR news" link.
 - **Daily Summary**: Sends a per-target uptime/trip/sparkline summary card once a day at a configurable time, with the runs and µA·h of each instrument on that target over the last 24h.
-- **`fun_mode`**: Optional personality lines, longest-uptime records, run-count milestones and a daily fact, on top of the always-on severity/emoji information.
 - **Microsoft Teams Integration**: Sends rich Adaptive Cards directly to configured Teams webhook URLs.
 - **Signed Webhook (optional)**: Can also POST every notification as HMAC-signed JSON, e.g. to the optional `push_site` for mobile push notifications (see `[PUSH]` below).
 - **Dummy Notifier**: Includes a logging-based dummy notifier for testing and development without sending actual webhooks.
@@ -109,9 +108,6 @@ daily summary and the auto target history.
 
 ```ini
 [NOTIFICATIONS]
-# Adds optional personality lines to notification cards (default = false).
-# Emoji and severity colours always show, regardless of this setting.
-# fun_mode = false
 # Timezone for card timestamps and for summary_time (default = Europe/London).
 # timezone = Europe/London
 # How long a beam state change must persist, in seconds (0-3600), before a
@@ -173,7 +169,7 @@ Each request has an `X-Timestamp` header (Unix seconds) and an `X-Signature` hea
 the hex HMAC-SHA256 of `<timestamp>.<body>` under the secret (the file's contents with
 surrounding whitespace, such as the trailing newline, removed). The body is a JSON
 object (`"v": 1`) holding the notification's `id`, `title`, `text`,
-`severity`, `emoji`, `facts`, `flavour`, `url`, `url_label`, `timestamp`
+`severity`, `emoji`, `facts`, `url`, `url_label`, `timestamp`
 (ISO 8601, UTC), `topic` (`TS1`/`TS2`/`Muons`, the instrument name, `MCR`
 or `Summary`) and `monitor_version`. A retry keeps the same `id`.
 
@@ -205,7 +201,7 @@ by hand.
 ### Editing the configuration from the TUI
 
 Press `c` to pause the display and open a numbered menu of the notification settings
-(`fun_mode`, `timezone`, `debounce_seconds`, `stall_minutes`,
+(`timezone`, `debounce_seconds`, `stall_minutes`,
 `finish_warning_minutes`, `summary_time`) and the
 instruments (name, notify threshold, beam target, Teams channel). Type a number to edit
 that entry (Enter keeps the current value), `a` to add an instrument, `d <number>` to
@@ -224,7 +220,6 @@ Things to know:
   and `beam_target` for every instrument, so
   `[PVS] instrument_target` then only applies to sections added by hand without a
   `beam_target`.
-- Renaming an instrument starts its run count (for milestones) from zero.
 - The daemon's user needs write access to `config.ini` and its directory (for the temporary
   file and `config.ini.bak`); otherwise saving fails with a write error.
 - Each restart re-sends the beam "Monitor online" cards, as any daemon start does.

@@ -7,7 +7,6 @@ import fcntl
 import json
 import logging
 import os
-import random
 import shutil
 import signal
 import sys
@@ -303,7 +302,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             run_until_stopped(beam_monitor.run(), stop_event),
             run_until_stopped(mcr_monitor.run(), stop_event),
             state_persistence_loop(config, state, store, stop_event),
-            daily_summary_loop(config, state, store, beam_channel, stop_event, rng=random.Random()),
+            daily_summary_loop(config, state, store, beam_channel, stop_event),
         )]
         await asyncio.gather(*tasks)
     finally:
