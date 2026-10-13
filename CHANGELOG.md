@@ -8,21 +8,20 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
-- Each instrument's PV prefix and default beam target come from ISIS's instrument list, `CS:INSTLIST`, so instruments whose PVs aren't under `IN:<NAME>:` work. `beam_target` is now optional and best left unset; set it only for an instrument the list doesn't put on TS1, TS2 or MUON, or to override the list. `[PVS] instrument_target` changes meaning: it's now only the fallback for such an instrument (or one the list doesn't name). The config editor offers `auto` for the beam target and no longer writes an explicit one.
+## [1.2.0] - 2026-10-13
 
-- `sample_interval` moves from `[TUI]` to `[DAEMON]`, since it sets how often the daemon samples beam history and saves its state.
+Includes push site v1.0.3 (unchanged).
 
-- `[WEBHOOKS]` URLs must start with `https://`, since whoever has one can post to the channel. A plain `http://` `[PUSH] url` to a host other than this one logs a warning.
-
-- On start, one warning lists every section and key in `config.ini` that isn't used, such as a typo or a setting retired by an upgrade. Before, only instrument sections were checked.
-
-- Each beam target is configured in its own optional section, `[BEAM:TS1]`, `[BEAM:TS2]` or `[BEAM:Muons]`, with `pv` and `boundaries`; boundaries must be finite and in increasing order. These replace `[PVS] ts1_beam_current_pv`, `ts2_beam_current_pv` and `muon_beam_current_pv` and the `[BEAM_BOUNDARIES]` section, which are now ignored. Beam target names are case-insensitive and "Muon" still works, but the muon target is called "Muons" everywhere, so its beam cards are now titled "Muons …" rather than "Muon …", and the config editor writes `beam_target = Muons`.
-
-- Each notifier (each Teams webhook, and the push site) has its own queue, so a slow or failing one no longer delays the others. One push notifier serves all three channels, so the push feed keeps the order notifications were sent in, and push retries match Teams'.
-
-- Only the daemon logs, to stderr (so journald under systemd) and, if `[LOGGING] file` is set, to a rotating file (5 MB × 3). `monitor.log` is no longer written by default. The TUI logs nothing and `stop` only prints warnings, so neither touches the daemon's log. `[LOGGING] log_file` and `log_level` are now `file` and `level`; `log_max_bytes` and `log_backup_count` are gone.
+Upgrading: a stale `config.ini` still starts, and one warning lists the settings it no longer uses. To keep each instrument's beam target from ISIS's instrument list, delete any `beam_target` lines the config editor wrote, unless one is on purpose. Logs now go to stderr (journald under systemd); set `[LOGGING] file = monitor.log` to keep writing a file.
 
 - `fun_mode` is gone, with its personality lines, uptime records, run-count milestones and daily fact. A leftover `[NOTIFICATIONS] fun_mode` is ignored, and the saved uptime records are deleted on start. Push payloads no longer carry `flavour`.
+- Each beam target is configured in its own optional section, `[BEAM:TS1]`, `[BEAM:TS2]` or `[BEAM:Muons]`, with `pv` and `boundaries`; boundaries must be finite and in increasing order. These replace `[PVS] ts1_beam_current_pv`, `ts2_beam_current_pv` and `muon_beam_current_pv` and the `[BEAM_BOUNDARIES]` section, which are now ignored. Beam target names are case-insensitive and "Muon" still works, but the muon target is called "Muons" everywhere, so its beam cards are now titled "Muons …" rather than "Muon …", and the config editor writes `beam_target = Muons`.
+- Each instrument's PV prefix and default beam target come from ISIS's instrument list, `CS:INSTLIST`, so instruments whose PVs aren't under `IN:<NAME>:` work. `beam_target` is now optional and best left unset; set it only for an instrument the list doesn't put on TS1, TS2 or MUON, or to override the list. `[PVS] instrument_target` changes meaning: it's now only the fallback for such an instrument (or one the list doesn't name). The config editor offers `auto` for the beam target and no longer writes an explicit one.
+- `sample_interval` moves from `[TUI]` to `[DAEMON]`, since it sets how often the daemon samples beam history and saves its state.
+- Only the daemon logs, to stderr (so journald under systemd) and, if `[LOGGING] file` is set, to a rotating file (5 MB × 3). `monitor.log` is no longer written by default. The TUI logs nothing and `stop` only prints warnings, so neither touches the daemon's log. `[LOGGING] log_file` and `log_level` are now `file` and `level`; `log_max_bytes` and `log_backup_count` are gone.
+- On start, one warning lists every section and key in `config.ini` that isn't used, such as a typo or a setting retired by an upgrade. Before, only instrument sections were checked.
+- `[WEBHOOKS]` URLs must start with `https://`, since whoever has one can post to the channel. A plain `http://` `[PUSH] url` to a host other than this one logs a warning.
+- Each notifier (each Teams webhook, and the push site) has its own queue, so a slow or failing one no longer delays the others. One push notifier serves all three channels, so the push feed keeps the order notifications were sent in, and push retries match Teams'.
 
 ## [1.1.1] - 2026-10-13
 
