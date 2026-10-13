@@ -235,6 +235,23 @@ async def test_change_aggregator_cancel_all_stops_pending_flush(mock_config, moc
     assert m.change_aggregator._pending == {}
 
 
+async def test_change_aggregator_logs_flush_failure_and_keeps_working(mock_config, mock_channels, caplog):
+    """A failure while sending one change is logged, and later changes still flush."""
+    beam_channel, _ = mock_channels
+    m = make_monitor(mock_config, mock_channels)
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "10.0"})  # startup
+    beam_channel.broadcast.reset_mock()
+
+    with patch("isis_monitor.beam.beam_change", side_effect=RuntimeError("boom")):
+        await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "60.0"})
+        await asyncio.sleep(SETTLE)
+    assert "TS1: failed to send the beam change" in caplog.text
+    assert "boom" in caplog.text
+
+    await m._handle_update({"pv": mock_config.ts1_beam_current_pv, "value": "150.0"})
+    await wait_until(lambda: beam_channel.broadcast.call_count == 1)
+
+
 @pytest.mark.parametrize("fun_mode", [False, True])
 async def test_handle_update_beam_flavour_only_in_fun_mode(mock_config, mock_channels, fun_mode):
     """Flavour lines appear only with fun_mode on. fun_mode defaults to False,

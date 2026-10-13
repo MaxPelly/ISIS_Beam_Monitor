@@ -115,7 +115,10 @@ class BeamChangeAggregator:
 
     async def _flush_after_delay(self, state_key: str) -> None:
         await asyncio.sleep(self.debounce_seconds)
-        await self._flush(state_key)
+        try:
+            await self._flush(state_key)
+        except Exception:
+            logger.exception(f"{state_key}: failed to send the beam change")
 
     async def _flush(self, state_key: str) -> None:
         pending = self._pending.pop(state_key, None)
