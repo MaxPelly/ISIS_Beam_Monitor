@@ -6,7 +6,7 @@ import statistics
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Callable, Deque, Optional, Sequence, Tuple
+from typing import Any, Awaitable, Callable, Deque, Dict, Optional, Sequence, Tuple
 
 from isis_monitor.config import InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
@@ -17,6 +17,17 @@ from isis_monitor.messages import (
 from isis_monitor.notifiers import NotificationChannel
 
 logger = logging.getLogger(__name__)
+
+PVHandler = Callable[[dict, datetime], Awaitable[None]]
+
+
+def on_field(field: str, handle: Callable[[Any, datetime], Optional[Awaitable[None]]]) -> PVHandler:
+    """A PVWS update handler calling `handle(update[field], time_now)`. PVWS
+    also sends partial updates (e.g. only a new severity), which are skipped."""
+    async def handler(update: dict, time_now: datetime) -> None:
+        if field in update and (result := handle(update[field], time_now)) is not None:
+            await result
+    return handler
 
 COUNTS_SAMPLE_WINDOW = timedelta(minutes=15)
 STALL_CHECK_WINDOW = timedelta(minutes=5)
@@ -169,6 +180,20 @@ class InstrumentTracker:
                 self.instrument.name, s.rb_number, s.run_rb, s.exp_since, s.exp_partial, s.exp_runs,
                 s.exp_uah,
             )
+
+    def pv_handlers(self) -> Dict[str, PVHandler]:
+        """This instrument's PVs, each with its update handler. RB numbers come
+        first (see handle_rb_number), then titles before counts, so a run that
+        changed while disconnected is reported under its new title rather than
+        started by its counts reset; the server may still reorder them."""
+        inst = self.instrument
+        return {
+            inst.rb_number_pv: on_field("text", self.handle_rb_number),
+            inst.run_number_pv: on_field("text", lambda text, _now: self.handle_run_number(text)),
+            inst.run_name_pv: on_field("b64byt", self.handle_run_name),
+            inst.counts_pv: on_field("value", self.handle_counts),
+            inst.run_state_pv: on_field("text", lambda text, _now: self.handle_run_state(text)),
+        }
 
     def handle_run_state(self, text: Any) -> None:
         self.state.run_state = strip_controls(str(text)).strip().upper()

@@ -1032,11 +1032,26 @@ async def test_run_loop_subscribes_to_every_instruments_pvs(mock_config, mock_ch
             await wait_until(lambda: server.subscriptions)
 
     pvs = server.subscriptions[0]["pvs"]
-    assert {"IN:PEARL:DAE:TOTALUAMPS", "IN:PEARL:DAE:WDTITLE", "IN:WISH:DAE:TOTALUAMPS", "IN:WISH:DAE:WDTITLE"} <= set(pvs)
-    # Titles first, so a run changed while disconnected is started by its title.
-    assert max(pvs.index(f"IN:{n}:DAE:WDTITLE") for n in ("PEARL", "WISH")) < min(
-        pvs.index(f"IN:{n}:DAE:TOTALUAMPS") for n in ("PEARL", "WISH")
-    )
+    assert pvs[:3] == [b.pv for b in DEFAULT_BEAMS]
+    # Each instrument's RB and run numbers first, then its title before its
+    # counts, so a run changed while disconnected is started by its title.
+    for name in ("PEARL", "WISH"):
+        assert [pv for pv in pvs if pv.startswith(f"IN:{name}:")] == [
+            f"IN:{name}:DAE:{pv}" for pv in ("_RBNUMBER", "RUNNUMBER", "WDTITLE", "TOTALUAMPS", "RUNSTATE_STR")
+        ]
+
+
+@pytest.mark.parametrize("pv", [TS1_PV, PEARL_UAMPS, PEARL_TITLE, "IN:PEARL:DAE:RUNSTATE_STR",
+                                "IN:PEARL:DAE:RUNNUMBER", "IN:PEARL:DAE:_RBNUMBER"])
+async def test_severity_only_updates_are_ignored(mock_config, mock_channels, pv):
+    """PVWS sends updates with only a new severity; they mustn't read as a
+    missing value (beam "unknown", a counts warning or run state "NONE")."""
+    sink = MagicMock()
+    m = make_monitor(mock_config, mock_channels, sink=sink)
+    before = (vars(tracker(m).state).copy(), vars(m.beams["TS1"]).copy())
+    await m._handle_update({"type": "update", "pv": pv, "severity": "MAJOR"})
+    assert (vars(tracker(m).state), vars(m.beams["TS1"])) == before
+    assert not sink.method_calls
 
 
 async def test_stall_check_uses_each_instruments_beam_target(mock_config, mock_channels):

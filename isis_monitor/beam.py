@@ -13,7 +13,7 @@ import websockets
 
 from isis_monitor.config import AppConfig, BeamTargetConfig
 from isis_monitor.daemon_state import DaemonState
-from isis_monitor.instrument import InstrumentTracker
+from isis_monitor.instrument import InstrumentTracker, PVHandler, on_field
 from isis_monitor.messages import beam_change, fmt_duration, startup_status
 from isis_monitor.notifiers import NotificationChannel
 
@@ -182,7 +182,6 @@ class BeamMonitor:
         self._current_ws = None
         self._close_task: Optional[asyncio.Task] = None
 
-        self.pv_to_beam: Dict[str, BeamTargetConfig] = {bt.pv: bt for bt in config.beams}
 
         self.instruments: Dict[str, InstrumentTracker] = {
             inst.name: InstrumentTracker(
@@ -192,21 +191,13 @@ class BeamMonitor:
             )
             for inst in config.instruments
         }
-        self.pv_to_run_name: Dict[str, InstrumentTracker] = {
-            t.instrument.run_name_pv: t for t in self.instruments.values()
+        # Each PV's update handler, in the order they're subscribed to.
+        self.routes: Dict[str, PVHandler] = {
+            bt.pv: on_field("value", lambda value, now, bt=bt: self._handle_beam_current(bt, value, now))
+            for bt in config.beams
         }
-        self.pv_to_counts: Dict[str, InstrumentTracker] = {
-            t.instrument.counts_pv: t for t in self.instruments.values()
-        }
-        self.pv_to_run_state: Dict[str, InstrumentTracker] = {
-            t.instrument.run_state_pv: t for t in self.instruments.values()
-        }
-        self.pv_to_run_number: Dict[str, InstrumentTracker] = {
-            t.instrument.run_number_pv: t for t in self.instruments.values()
-        }
-        self.pv_to_rb_number: Dict[str, InstrumentTracker] = {
-            t.instrument.rb_number_pv: t for t in self.instruments.values()
-        }
+        for tracker in self.instruments.values():
+            self.routes.update(tracker.pv_handlers())
 
     @staticmethod
     def _parse_current(value: Any) -> Optional[float]:
@@ -271,30 +262,9 @@ class BeamMonitor:
             self.sink.update_beam_state(bt.name, beam_val, new_state)
 
     async def _handle_update(self, message: Dict[str, Any]):
-        """Dispatch WebSocket update messages."""
-        time_now = datetime.now(timezone.utc)
-
-        # NOTE: Bare module-level names are NOT constant patterns in Python's
-        # structural pattern matching — they are capture variables. Guard clauses
-        # are therefore used for the PV-specific arms.
-        match message:
-            case {"pv": pv, "value": raw_val} if pv in self.pv_to_beam:
-                await self._handle_beam_current(self.pv_to_beam[pv], raw_val, time_now)
-
-            case {"pv": pv, "b64byt": b64_data} if pv in self.pv_to_run_name:
-                await self.pv_to_run_name[pv].handle_run_name(b64_data, time_now)
-
-            case {"pv": pv, "value": raw_val} if pv in self.pv_to_counts:
-                await self.pv_to_counts[pv].handle_counts(raw_val, time_now)
-
-            case {"pv": pv, "text": text} if pv in self.pv_to_run_state:
-                self.pv_to_run_state[pv].handle_run_state(text)
-
-            case {"pv": pv, "text": text} if pv in self.pv_to_run_number:
-                self.pv_to_run_number[pv].handle_run_number(text)
-
-            case {"pv": pv, "text": text} if pv in self.pv_to_rb_number:
-                await self.pv_to_rb_number[pv].handle_rb_number(text, time_now)
+        """Dispatch a WebSocket update message to its PV's handler."""
+        if handler := self.routes.get(message.get("pv")):
+            await handler(message, datetime.now(timezone.utc))
 
     def restore_instruments(self, saved: Dict[str, dict]) -> None:
         """Seed each tracker from DaemonState's restored per-instrument state."""
@@ -370,17 +340,8 @@ class BeamMonitor:
             logger.exception(f"Failed to handle PV update: {data!r:.200}")
 
     async def _run_loop(self) -> None:
-        # Titles before counts, so a run that changed while disconnected is
-        # reported under its new title rather than started by its counts reset.
-        # RB numbers go first too, which can save a new experiment's first run
-        # for its history (the server may still send them later).
-        subscribe_msg = json.dumps({
-            "type": "subscribe",
-            "pvs": [
-                *self.pv_to_beam, *self.pv_to_rb_number, *self.pv_to_run_name, *self.pv_to_counts,
-                *self.pv_to_run_state, *self.pv_to_run_number,
-            ],
-        })
+        # In the routes' order: beams, then each instrument's (see pv_handlers).
+        subscribe_msg = json.dumps({"type": "subscribe", "pvs": list(self.routes)})
         logger.info(f"Beam Monitor started. Connecting to {self.data_url}...")
         interval = self.config.beam_reconnect_interval
 
