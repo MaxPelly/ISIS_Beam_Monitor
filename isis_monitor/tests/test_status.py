@@ -30,21 +30,25 @@ def test_beams_report_live_values_and_unknown_ones_as_unknown():
     assert [b["name"] for b in status["beams"]] == ["TS1", "TS2", "Muons"]
 
 
-def test_history_is_24h_in_10_minute_bins():
+def test_history_is_24h_in_10_minute_bins_on_fixed_boundaries():
     state = state_with()
-    for minutes, current, power in ((5, 100.0, "high"), (8, 50.0, "high"), (9, 0.0, "off"),
-                                    (24 * 60 + 5, 1.0, "low")):  # the last is too old
-        state.history["TS1"].append((NOW - timedelta(minutes=minutes), current, power))
-    values = build(state, {}, 60, NOW)["beams"][0]["history"]["values"]
+    now = NOW + timedelta(minutes=3)  # 12:03, so the last bin is 12:00-12:10, still filling
+    for at, current, power in ((-24 * 60, 1.0, "low"),  # too old
+                               (-9, 0.0, "off"), (-8, 50.0, "high"), (-5, 100.0, "high"),  # 11:51-11:55
+                               (1, 20.0, "low"), (3.01, 21.0, "low")):  # 12:01, and just after now (jitter)
+        state.history["TS1"].append((NOW + timedelta(minutes=at), current, power))
+    values = build(state, {}, 60, now)["beams"][0]["history"]["values"]
     assert len(values) == HISTORY_POINTS
-    assert values[-1] == [50.0, "high"]  # mean, and the most common power
-    assert values[-2] == [None, "unknown"] and values[0] == [None, "unknown"]
+    assert values[-1] == [20.5, "low"]
+    assert values[-2] == [50.0, "high"]  # mean, and the most common power
+    assert values[-3] == [None, "unknown"] and values[0] == [None, "unknown"]
+    assert build(state, {}, 60, now + timedelta(minutes=5))["beams"][0]["history"]["values"] == values
 
 
 def test_instruments_come_from_the_trackers():
     pearl = tracker(auto_counts=True)
-    pearl.state.run_name, pearl.state.current_counts, pearl.state.run_number = "x" * 300, 65.256, "127921"
-    pearl.state.run_state, pearl.state.rb_number = "RUNNING", "2610403"
+    pearl.state.run_name, pearl.state.current_counts, pearl.state.rb_number = "x" * 300, 65.256, "2610403"
+    pearl.runs.run_number, pearl.runs.run_state = "127921", "RUNNING"
     wish = tracker("WISH")
     (p, w) = build(state_with(pearl, wish), {}, 60, NOW)["instruments"]
     assert p == {"name": "PEARL", "beam": "TS1", "run_number": "127921", "run_state": "RUNNING",
@@ -163,7 +167,7 @@ async def test_a_failing_build_is_logged_and_retried(caplog):
     async with receiver() as server:
         async with publishing(str(server.make_url("/ingest")), interval=0.05, build=build):
             await wait_until(lambda: server.received)
-    assert "Failed to build the status" in caplog.text and server.received[0] == {"n": 2}
+    assert "Failed to send the status" in caplog.text and server.received[0] == {"n": 2}
 
 
 def test_significant_changes_poke_the_publisher():
@@ -182,3 +186,44 @@ def test_significant_changes_poke_the_publisher():
 @pytest.mark.parametrize("url", ["http://127.0.0.1:8765/ingest", "http://127.0.0.1:8765/ingest/"])
 def test_the_status_goes_to_the_ingest_url_plus_status(url):
     assert StatusPublisher(url, SECRET, dict, 60, MagicMock()).url == "http://127.0.0.1:8765/ingest/status"
+
+
+async def test_an_unencodable_status_doesnt_stop_the_publisher(caplog):
+    build = MagicMock(side_effect=[{"t": "\ud800"}, {"n": 3}])  # e.g. a lone surrogate from a bug
+    async with receiver() as server:
+        async with publishing(str(server.make_url("/ingest")), interval=0.05, build=build):
+            await wait_until(lambda: server.received)
+    assert server.received[0] == {"n": 3}
+
+
+def test_every_string_fits_the_push_sites_limits():
+    """A longer one would make the site refuse the whole status."""
+    long = "x" * 2000
+    pearl = tracker("P" * 40)
+    pearl.state.run_name, pearl.state.rb_number, pearl.beam_target = long + "\ud800", long, long
+    pearl.runs.run_number, pearl.runs.run_state = long, long
+    state = state_with(pearl)
+    state.mcr_news = long
+    status = build(state, {}, 60, NOW)
+    (inst,) = status["instruments"]
+    assert (len(inst["name"]), len(inst["beam"]), len(inst["run_number"]), len(inst["run_state"]),
+            len(inst["rb"]), len(inst["title"]), len(status["mcr"]["news"])) == (32, 16, 32, 32, 32, 200, 1000)
+    json.dumps(status, ensure_ascii=False).encode()  # no lone surrogates
+
+
+def test_counts_are_unknown_while_the_run_state_is():
+    """E.g. the instrument's IOC or the gateway is down: not the last counts as if live."""
+    pearl = tracker()
+    pearl.state.current_counts = 50.0
+    pearl.runs.run_state = ""
+    assert build(state_with(pearl), {}, 60, NOW)["instruments"][0]["counts"] is None
+
+
+async def test_run_state_and_number_changes_poke_the_publisher():
+    sink = MagicMock()
+    pearl = InstrumentTracker(InstrumentConfig("PEARL", 130.0, "TS1"), fake_channel(), lambda b: "high", 15, sink=sink)
+    for text in ("RUNNING", "RUNNING", "ENDING"):
+        pearl.handle_run_state(text)
+    for text in ("00010", "10", "00011"):
+        pearl.handle_run_number(text)
+    assert sink.on_change.call_count == 4

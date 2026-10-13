@@ -1121,3 +1121,13 @@ async def test_run_daemon_publishes_the_status_with_a_push_url(tmp_path):
         async with daemon(config, argparse.Namespace(dummy=False, notify_current=False)):
             await wait_until(lambda: site.received)
     assert site.received[0]["kind"] == "status" and site.received[0]["instruments"][0]["name"] == "PEARL"
+
+
+
+@pytest.mark.parametrize("dummy, push_url", [(True, "http://127.0.0.1:9/ingest"), (False, "")])
+async def test_run_daemon_publishes_no_status_when_dummy_or_without_a_push_url(tmp_path, dummy, push_url):
+    config = _config(tmp_path, push_url=push_url, push_secret=b"s" * 32)
+    with patch("main.StatusPublisher") as publisher:
+        async with daemon(config, argparse.Namespace(dummy=dummy, notify_current=False)):
+            pass
+    publisher.assert_not_called()

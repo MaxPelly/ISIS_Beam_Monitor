@@ -162,7 +162,10 @@ Each beam target (`TS1`, `TS2`, `Muons`) can override its current PV and power b
 
 Sends every notification, on all three channels, as HMAC-signed JSON to one URL as
 well as to Teams. It's meant for the optional `push_site` submodule (mobile push
-notifications), but any receiver that checks the signature will work.
+notifications), but any receiver that checks the signature will work. It also sends the
+daemon's status (beams, instruments, MCR news, health), signed the same way, to the URL
+plus `/status` (e.g. `/ingest/status`) every `[DAEMON] sample_interval` and soon after a
+change, for the push site's Status page (push site 1.1.0 or later).
 
 The push site is a separate repository, included here as the `push_site` git submodule.
 A plain clone leaves it empty, and the monitor works without it. To use it:

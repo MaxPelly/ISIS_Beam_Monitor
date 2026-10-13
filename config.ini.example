@@ -14,7 +14,8 @@ experiment_teams_url =
 
 [PUSH]
 # Optional: also POST every notification as HMAC-signed JSON to this URL, e.g. the
-# push_site submodule (mobile push notifications). Leave blank to disable.
+# push_site submodule (mobile push notifications). Leave blank to disable. The
+# daemon's status, for the push site's Status page, goes to this URL plus /status.
 # Plain http:// is fine to this host; to another, use https:// (a warning says so).
 # url = http://127.0.0.1:8765/ingest
 # File holding the shared secret (at least 32 characters, e.g. from

@@ -328,8 +328,9 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
     if config.push_url and not args.dummy:
         publisher = StatusPublisher(
             config.push_url, config.push_secret,
+            # The interval it really sends at, which the site judges staleness by.
             lambda: build_status(state, {name: b.since for name, b in beam_monitor.beams.items()},
-                                 config.sample_interval),
+                                 max(config.sample_interval, StatusPublisher.DEBOUNCE)),
             config.sample_interval, session, config.push_timeout,
         )
         state.on_change = publisher.poke

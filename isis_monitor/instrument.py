@@ -234,11 +234,17 @@ class InstrumentTracker:
         return both
 
     def handle_run_state(self, text: Any) -> None:
-        self.state.run_state = strip_controls(str(text)).strip().upper()
+        state = strip_controls(str(text)).strip().upper()
+        if self.sink and state != self.state.run_state:
+            self.sink.on_change()
+        self.state.run_state = state
 
     def handle_run_number(self, text: Any) -> None:
         number = strip_controls(str(text)).strip()
-        self.state.run_number = number.lstrip("0") or number  # "00127920" -> "127920"
+        number = number.lstrip("0") or number  # "00127920" -> "127920"
+        if self.sink and number != self.state.run_number:
+            self.sink.on_change()
+        self.state.run_number = number
 
     async def handle_rb_number(self, text: Any, time_now: datetime) -> None:
         """`text` is IN:<NAME>:DAE:_RBNUMBER, "0" while the instrument has no
@@ -453,8 +459,9 @@ class InstrumentTracker:
     def view(self) -> dict:
         """The snapshot plus what clients show: the effective beam target, and
         the DAE's run number and state."""
+        # The run number and state as the shadow sees them: "" while unknown, e.g. its IOC is down.
         return {**self.to_snapshot(), "beam_target": self.beam_target,
-                "run_number": self.state.run_number, "run_state": self.state.run_state}
+                "run_number": self.runs.run_number, "run_state": self.runs.run_state}
 
     def from_snapshot(self, saved: object) -> None:
         """Restore state saved by to_snapshot() after a restart; a malformed or

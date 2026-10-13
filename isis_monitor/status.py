@@ -8,6 +8,7 @@ look like the beam going off.
 import asyncio
 import contextlib
 import logging
+import math
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Optional
@@ -23,7 +24,18 @@ logger = logging.getLogger(__name__)
 
 HISTORY = timedelta(hours=24)
 HISTORY_POINTS = 144  # 10-minute bins
-MAX_TITLE = 200
+# The push site's limits (its status.py); anything longer would make it refuse the whole status.
+SHORT, LABEL, MAX_TITLE, MAX_NEWS = 16, 32, 200, 1000
+
+
+def _text(value: object, limit: int) -> str:
+    """Text the site will take: at most `limit` characters, and valid UTF-8
+    (PVWS can deliver lone surrogates, which become "?")."""
+    return str(value).encode("utf-8", "replace").decode("utf-8")[:limit]
+
+
+def _number(value: object) -> Optional[float]:
+    return round(value, 2) if isinstance(value, (int, float)) and math.isfinite(value) else None
 
 
 def _iso(ts: Optional[datetime]) -> Optional[str]:
@@ -31,16 +43,20 @@ def _iso(ts: Optional[datetime]) -> Optional[str]:
 
 
 def _history(samples, now: datetime) -> dict:
-    """The last 24h of (time, current, power) samples, as each bin's mean
-    current and its most common power; [None, "unknown"] where there are none."""
+    """The last 24h of (time, current, power) samples (oldest first), as each
+    10-minute bin's mean current and its most common power; [None, "unknown"]
+    where there are none. Bins are on fixed 10-minute boundaries, the last one
+    still filling, so they don't shift from one status to the next."""
     width = HISTORY / HISTORY_POINTS
-    start = now - HISTORY
+    end = datetime.fromtimestamp((now.timestamp() // width.total_seconds() + 1) * width.total_seconds(), timezone.utc)
+    start = end - HISTORY
     bins = [[] for _ in range(HISTORY_POINTS)]
-    for ts, current, power in samples:
-        if start <= ts < now + width:  # just past now is the last bin's (timer jitter)
-            bins[min(int((ts - start) / width), HISTORY_POINTS - 1)].append((current, power))
+    for ts, current, power in reversed(samples):  # newest first, so it can stop at 24h
+        if ts < start:
+            break
+        bins[min(int((ts - start) / width), HISTORY_POINTS - 1)].append((current, _text(power, SHORT)))
     values = [
-        [round(sum(c for c, _ in b) / len(b), 2), Counter(p for _, p in b).most_common(1)[0][0]] if b
+        [_number(sum(c for c, _ in b) / len(b)), Counter(p for _, p in b).most_common(1)[0][0]] if b
         else [None, "unknown"]
         for b in bins
     ]
@@ -48,18 +64,21 @@ def _history(samples, now: datetime) -> dict:
 
 
 def _instrument(name: str, view: dict) -> dict:
-    counts, target = view.get("counts", -1.0), view.get("target")
+    run_state = view.get("run_state", "")
+    counts = view.get("counts")
+    started = view.get("run_started_at")
     return {
-        "name": name,
-        "beam": view.get("beam_target", ""),
-        "run_number": view.get("run_number", ""),
-        "run_state": view.get("run_state", ""),
-        "title": view.get("run_name", "")[:MAX_TITLE],
-        "started_at": view.get("run_started_at"),
-        "counts": round(counts, 2) if counts is not None and counts >= 0 else None,
-        "target": target,
+        "name": _text(name, LABEL),
+        "beam": _text(view.get("beam_target", ""), SHORT),
+        "run_number": _text(view.get("run_number", ""), LABEL),
+        "run_state": _text(run_state, LABEL),
+        "title": _text(view.get("run_name", ""), MAX_TITLE),
+        "started_at": _iso(datetime.fromisoformat(started)) if started else None,
+        # Unknown while the DAE's state is (e.g. its IOC or the gateway is down), not the last value.
+        "counts": _number(counts) if run_state and counts is not None and counts >= 0 else None,
+        "target": _number(view.get("target")),
         "auto": bool(view.get("auto")),
-        "rb": view.get("rb_number", ""),
+        "rb": _text(view.get("rb_number", ""), LABEL),
     }
 
 
@@ -73,8 +92,8 @@ def build(state: DaemonState, since: Dict[str, Optional[datetime]], interval_s: 
         known = beam["power"] != "unknown"
         beams.append({
             "name": name,
-            "current": round(float(beam["current"]), 2) if known else None,
-            "power": str(beam["power"]),
+            "current": _number(float(beam["current"])) if known else None,
+            "power": _text(beam["power"], SHORT),
             "since": _iso(since.get(name)) if known else None,
             "history": _history(state.history[name], now),
         })
@@ -83,11 +102,11 @@ def build(state: DaemonState, since: Dict[str, Optional[datetime]], interval_s: 
         # To the millisecond: the site only keeps a status newer than the last.
         "v": 1, "kind": "status", "generated_at": now.astimezone(timezone.utc).isoformat(timespec="milliseconds"),
         "interval_s": interval_s,
-        "monitor_version": __version__,
-        "health": dict(state.health),
+        "monitor_version": _text(__version__, LABEL),
+        "health": {_text(k, SHORT): _text(v, SHORT) for k, v in state.health.items()},
         "beams": beams,
         "instruments": [_instrument(name, view) for name, view in state.instruments().items()],
-        "mcr": {"news": news, "seen_at": _iso(state.mcr_news_at)},
+        "mcr": {"news": _text(news, MAX_NEWS), "seen_at": _iso(state.mcr_news_at)},
     }
 
 
@@ -118,17 +137,15 @@ class StatusPublisher:
             self._changed.clear()
 
     async def _send(self) -> None:
-        try:
-            status = self.build()
-        except Exception:  # a bug: logged, and the next send tries again
-            logger.exception("Failed to build the status")
-            return
+        """One status; any failure is only logged, and never stops the publisher."""
         try:
             async with self.session.post(
                 self.url, timeout=aiohttp.ClientTimeout(total=self.timeout), allow_redirects=False,
-                **signed_json(status, self.secret),
+                **signed_json(self.build(), self.secret),
             ) as resp:
-                if resp.status not in (204, 409):  # 409: an older one, e.g. after a clock step
+                if resp.status != 204:  # e.g. 409: not newer than the last, after a clock step
                     logger.debug(f"Push site didn't take the status: HTTP {resp.status}")
         except (aiohttp.ClientError, TimeoutError) as exc:
             logger.debug(f"Failed to send the status: {exc!r}")
+        except Exception:  # a bug: logged, and the next send tries again
+            logger.exception("Failed to send the status")
