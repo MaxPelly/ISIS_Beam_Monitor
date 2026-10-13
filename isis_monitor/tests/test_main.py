@@ -1111,3 +1111,13 @@ async def test_run_stop_reports_a_dropped_connection(tmp_path, capsys):
             await main.run_stop(_config(tmp_path))
     assert exc.value.code == 1
     assert "Lost the connection" in capsys.readouterr().out
+
+
+async def test_run_daemon_publishes_the_status_with_a_push_url(tmp_path):
+    from isis_monitor.tests.test_status import SECRET, receiver
+    async with receiver() as site:
+        config = _config(tmp_path, push_url=str(site.make_url("/ingest")), push_secret=SECRET,
+                         instruments=[InstrumentConfig("PEARL", 130.0, "TS1")])
+        async with daemon(config, argparse.Namespace(dummy=False, notify_current=False)):
+            await wait_until(lambda: site.received)
+    assert site.received[0]["kind"] == "status" and site.received[0]["instruments"][0]["name"] == "PEARL"
