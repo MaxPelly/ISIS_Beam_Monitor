@@ -85,11 +85,10 @@ notify_counts = 130
 # reconnect_max = 15
 
 [LOGGING]
-# log_file = monitor.log
-# log_level = INFO
-# log_max_bytes = 5000000
-# log_backup_count = 3
-# (both at least 1: a 0 in either would stop the log rotating)
+# The daemon logs to stderr; under systemd, read it with journalctl.
+# level = INFO
+# Also write a rotating log file (5 MB x 3). Not needed under systemd.
+# file = monitor.log
 
 [TIMEOUTS_INTERVALS]
 # Seconds between MCR news polls (5-86400).

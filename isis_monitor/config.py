@@ -53,8 +53,6 @@ _BOUNDS = {
     "refresh_per_second": (1, 60),
     "logs_maxlen": (1, 10_000),
     "retention_days": (1, 365),
-    "log_max_bytes": (1, 1_000_000_000),  # 0 would turn rotation off
-    "log_backup_count": (1, 100),
 }
 # The daemon keeps retention_days of samples per beam in memory.
 MAX_HISTORY_SAMPLES = 100_000
@@ -147,7 +145,7 @@ class AppConfig:
     refresh_per_second: int = _ini("TUI", 4)
     logs_maxlen: int = _ini("TUI", 50)
 
-    # Relative paths (these, log_file and [PUSH] secret_file) are resolved
+    # Relative paths (these, [LOGGING] file and [PUSH] secret_file) are resolved
     # against the config file's directory. The socket and lock stay out of
     # shared /tmp, where another local user could pre-create them.
     daemon_db_path: str = _ini("DAEMON", "beam_monitor.db", "db_path")
@@ -158,10 +156,10 @@ class AppConfig:
     tui_reconnect_initial: float = _ini("TUI_CLIENT", 1.0, "reconnect_initial")
     tui_reconnect_max: float = _ini("TUI_CLIENT", 15.0, "reconnect_max")
 
-    log_file: str = _ini("LOGGING", "monitor.log")
-    log_level: str = _ini("LOGGING", "INFO")
-    log_max_bytes: int = _ini("LOGGING", 5_000_000)
-    log_backup_count: int = _ini("LOGGING", 3)
+    # The daemon logs to stderr (journald under systemd), and also to this
+    # rotating file if it's set.
+    log_file: str = _ini("LOGGING", "", "file")
+    log_level: str = _ini("LOGGING", "INFO", "level")
 
     notifications_timezone: str = _ini("NOTIFICATIONS", "Europe/London", "timezone")
     debounce_seconds: float = _ini("NOTIFICATIONS", 20.0)

@@ -193,7 +193,6 @@ def _config(tmp_path, **overrides) -> AppConfig:
             daemon_db_path=str(tmp_path / "state.db"),
             daemon_socket_path=str(tmp_path / "d.sock"),
             daemon_lock_file=str(tmp_path / "d.lock"),
-            log_file=str(tmp_path / "monitor.log"),
             mcr_poll_interval=3600,
         ),
         **overrides,
@@ -606,11 +605,28 @@ def test_main_daemon_refuses_second_instance(tmp_path, capsys):
     assert "Lock file already held" in capsys.readouterr().out
 
 
-def test_configure_logging_sets_the_level(tmp_path):
-    with patch("main.RotatingFileHandler"), patch("main.logging.basicConfig") as basic:
-        main.configure_logging(str(tmp_path / "a.log"), "debug", 10, 2)
-        main.configure_logging(str(tmp_path / "a.log"), "nonsense", 10, 2)
+def test_configure_logging_sets_the_daemons_level(tmp_path):
+    with patch("main.logging.basicConfig") as basic:
+        main.configure_logging("daemon", _config(tmp_path, log_level="debug", log_file=""))
+        main.configure_logging("daemon", _config(tmp_path, log_level="nonsense", log_file=""))
     assert [c.kwargs["level"] for c in basic.call_args_list] == [logging.DEBUG, logging.WARNING]
+
+
+@pytest.mark.parametrize("mode, log_file, handlers", [
+    ("daemon", "", [logging.StreamHandler]),
+    ("daemon", "monitor.log", [logging.StreamHandler, main.RotatingFileHandler]),
+    ("stop", "monitor.log", None),  # basicConfig's default: stderr
+    ("tui", "monitor.log", [logging.NullHandler]),
+])
+def test_only_the_daemon_writes_the_log_file(tmp_path, mode, log_file, handlers):
+    config = _config(tmp_path, log_file=log_file and str(tmp_path / log_file))
+    with patch("main.logging.basicConfig") as basic:
+        main.configure_logging(mode, config)
+    given = basic.call_args.kwargs.get("handlers")
+    assert (given and [type(h) for h in given]) == handlers
+    for h in given or []:
+        h.close()
+    assert (tmp_path / "monitor.log").exists() is (main.RotatingFileHandler in (handlers or []))
 
 
 @pytest.mark.parametrize("mode, target", [("daemon", "run_daemon"), ("tui", "run_tui"), ("stop", "run_stop")])

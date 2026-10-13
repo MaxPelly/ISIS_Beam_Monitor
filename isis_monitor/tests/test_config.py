@@ -142,7 +142,6 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     # Malformed values name the section and key.
     ("[TIMEOUTS_INTERVALS]\nmcr_poll_interval = soon\n", r"\[TIMEOUTS_INTERVALS\] mcr_poll_interval"),
     ("[DAEMON]\nretention_days = 1.5\n", r"\[DAEMON\] retention_days"),
-    ("[LOGGING]\nlog_max_bytes = big\n", r"\[LOGGING\] log_max_bytes"),
     (NOTIF + "debounce_seconds = soon\n", r"\[NOTIFICATIONS\] debounce_seconds"),
     ("[BEAM_BOUNDARIES]\nts1_boundaries = 0, a, 2\n", r"\[BEAM_BOUNDARIES\] ts1_boundaries"),
     ("[BEAM_BOUNDARIES]\nts1_boundaries = 0.0, 50.0\n", "exactly 3"),
@@ -156,11 +155,8 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     ("[TUI]\nsample_interval = nan\n", "sample_interval must be between"),
     ("[TUI]\nhistory_maxlen = -5\n", "history_maxlen must be between"),
     ("[TUI]\nhistory_maxlen = 1001\n", "history_maxlen must be between"),
-    ("[LOGGING]\nlog_max_bytes = 0\n", "log_max_bytes must be between"),
-    ("[LOGGING]\nlog_backup_count = 0\n", "log_backup_count must be between"),
     ("[TUI]\nlogs_maxlen = 0\n", "logs_maxlen must be between"),
     ("[DAEMON]\nretention_days = 100000000\n", "retention_days must be between"),
-    ("[LOGGING]\nlog_backup_count = -1\n", "log_backup_count must be between"),
     ("[DAEMON]\nretention_days = 30\n[TUI]\nsample_interval = 1\n", "samples per beam"),
     # [INSTRUMENT:*] sections
     ("[INSTRUMENT:]\n", "needs an instrument name"),
@@ -213,7 +209,8 @@ def test_load_config_blank_numeric_value_uses_default(tmp_path):
 
 
 def test_load_config_resolves_relative_paths_against_the_config_dir(tmp_path):
-    config = load_config(_write(tmp_path, "[PUSH]\nurl = http://127.0.0.1:9/ingest\nsecret_file = push.secret\n"))
+    config = load_config(_write(
+        tmp_path, "[PUSH]\nurl = http://127.0.0.1:9/ingest\nsecret_file = push.secret\n[LOGGING]\nfile = monitor.log\n"))
     assert config.daemon_db_path == str(tmp_path / "beam_monitor.db")
     assert config.daemon_socket_path == str(tmp_path / "isis_beam_monitor.sock")
     assert config.daemon_lock_file == str(tmp_path / "isis_beam_monitor.lock")

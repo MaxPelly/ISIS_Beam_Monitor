@@ -118,13 +118,24 @@ class SingleInstanceLock:
             self._fh = None
 
 
-def configure_logging(log_file: str, log_level: str, max_bytes: int, backup_count: int) -> None:
-    numeric_level = getattr(logging, log_level.upper(), logging.WARNING)
-    logging.basicConfig(
-        level=numeric_level,
-        format=LOG_FORMAT,
-        handlers=[RotatingFileHandler(log_file, maxBytes=max_bytes, backupCount=backup_count)],
-    )
+LOG_MAX_BYTES, LOG_BACKUP_COUNT = 5_000_000, 3
+
+
+def configure_logging(mode: str, config) -> None:
+    """Only the daemon writes the log: to stderr, and to `[LOGGING] file` if
+    set. `stop` shows warnings on stderr; the TUI logs nothing, as stderr
+    would draw over its display (it shows connection problems itself)."""
+    if mode == "tui":
+        logging.basicConfig(handlers=[logging.NullHandler()])
+        return
+    if mode != "daemon":
+        logging.basicConfig(level=logging.WARNING, format=LOG_FORMAT)
+        return
+    handlers = [logging.StreamHandler()]
+    if config.log_file:
+        handlers.append(RotatingFileHandler(config.log_file, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT))
+    level = getattr(logging, config.log_level.upper(), logging.WARNING)
+    logging.basicConfig(level=level, format=LOG_FORMAT, handlers=handlers)
 
 
 def install_signal_handlers(stop_event: asyncio.Event) -> None:
@@ -673,7 +684,7 @@ def main():
 
     set_timezone(config.notifications_timezone)
 
-    configure_logging(config.log_file, config.log_level, config.log_max_bytes, config.log_backup_count)
+    configure_logging(args.mode, config)
 
     stop_event = asyncio.Event()
 
