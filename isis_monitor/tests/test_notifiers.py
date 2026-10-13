@@ -13,7 +13,7 @@ import pytest
 
 from isis_monitor import __version__
 from isis_monitor.notifiers import (
-    _retry_after, HTTPNotifier, TeamsNotifier, DummyNotifier, NotificationChannel, Notifier, WebhookNotifier,
+    _retry_after, TeamsNotifier, DummyNotifier, NotificationChannel, Notifier, WebhookNotifier,
 )
 from isis_monitor.messages import Notification, Severity
 
@@ -52,8 +52,10 @@ def make_status_session(*statuses: int, headers=None):
 
 @pytest.fixture
 def no_retry_delay():
-    with patch.object(HTTPNotifier, "RETRY_DELAYS", (0.0, 0.0)):
-        yield
+    """Skip the waits between retries, whatever a notifier's RETRY_DELAYS;
+    yields the mock so tests can check the delays asked for."""
+    with patch("isis_monitor.notifiers.asyncio.sleep", new=AsyncMock()) as sleep:
+        yield sleep
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +151,7 @@ async def test_webhook_notifier_retries_with_the_same_id(no_retry_delay, caplog)
     ids = [json.loads(c.kwargs["data"])["id"] for c in notifier._session.post.call_args_list]
     assert len(ids) == 2 and ids[0] == ids[1]
     assert "Push webhook returned HTTP 503" in caplog.text
+    no_retry_delay.assert_awaited_once_with(WebhookNotifier.RETRY_DELAYS[0])
 
 
 # ---------------------------------------------------------------------------
