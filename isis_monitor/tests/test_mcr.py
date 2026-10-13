@@ -135,6 +135,16 @@ async def test_mcr_run_notify_current_broadcasts_first_poll(mock_config, mock_ch
     assert mock_channel.broadcast.call_args[0][0].text == "News A"
 
 
+@pytest.mark.parametrize("feed, sent", [("News B", 1), ("News A", 0)])
+async def test_mcr_run_announces_news_posted_while_down(mock_config, mock_channel, feed, sent):
+    """With the news restored from before a restart, there's no baseline fetch:
+    the first poll announces anything posted since."""
+    monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=True, old_news="News A")
+    await run_script(monitor, feed)
+    assert mock_channel.broadcast.call_count == sent
+    assert monitor.old_news == feed
+
+
 async def test_mcr_run_fun_mode_adds_flavour(mock_config):
     import random
     from dataclasses import replace

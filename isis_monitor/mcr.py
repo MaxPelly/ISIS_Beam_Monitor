@@ -30,14 +30,17 @@ class MCRNewsMonitor:
         notify_current: bool = False,
         sink: Optional[DaemonState] = None,
         rng: Optional[random.Random] = None,
+        old_news: Optional[str] = None,
     ):
+        """`old_news` is the last news seen before a restart, if known; news
+        posted since then is announced on the first poll."""
         self.config = config
         self.url = config.mcr_news_url
         self.channel = channel
         self.notify_current = notify_current
         self.sink = sink
         self._rng = rng or random.Random()
-        self.old_news: Optional[str] = None
+        self.old_news = old_news
         self._force_reconnect = asyncio.Event()
 
     async def get_news(self, session: aiohttp.ClientSession) -> Optional[str]:
@@ -100,9 +103,11 @@ class MCRNewsMonitor:
         # TCPConnector with DNS TTL avoids stale connections on long-running sessions
         connector = aiohttp.TCPConnector(ttl_dns_cache=300)
         async with aiohttp.ClientSession(connector=connector) as session:
-            if self.notify_current:
+            # With news restored from before a restart, the first poll
+            # announces anything posted since; otherwise take a baseline.
+            if self.old_news is None and self.notify_current:
                 self.old_news = ""  # so the first successful poll is broadcast
-            else:
+            elif self.old_news is None:
                 while (baseline := await self.get_news(session)) is None:
                     self._set_health("error")
                     await self._wait(self.config.mcr_poll_interval)

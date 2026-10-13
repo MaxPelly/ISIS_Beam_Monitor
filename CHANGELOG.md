@@ -8,6 +8,8 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+- MCR news posted while the daemon was stopped is announced when it starts again, instead of being taken as the baseline.
+
 ## [1.1.0] - 2026-10-11
 
 Includes push site v1.0.2, whose feed has a tab for each kind of notification.

@@ -369,15 +369,17 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
     store.close()
 
     config = _config(tmp_path, instruments=[InstrumentConfig("PEARL", 130.0, "TS1")])
-    async with daemon(config):
-        client = IPCClient(config.daemon_socket_path)
-        await client.connect()
-        snap = (await client.request({"method": "get_snapshot"}))["snapshot"]
-        history = (await client.request({"method": "get_history"}))["history"]
-        reconnect = (await client.request({"method": "command", "name": "force_reconnect_all"}))["result"]
-        await client.close()
+    with patch("main.MCRNewsMonitor", wraps=main.MCRNewsMonitor) as mcr_cls:
+        async with daemon(config):
+            client = IPCClient(config.daemon_socket_path)
+            await client.connect()
+            snap = (await client.request({"method": "get_snapshot"}))["snapshot"]
+            history = (await client.request({"method": "get_history"}))["history"]
+            reconnect = (await client.request({"method": "command", "name": "force_reconnect_all"}))["result"]
+            await client.close()
 
     assert snap["mcr_news"] == "old news"
+    assert mcr_cls.call_args.kwargs["old_news"] == "old news"
     assert snap["instruments"]["PEARL"]["total_runs"] == 30
     assert history["TS2"][0]["current"] == 7.0
     assert set(reconnect) == {"beam", "mcr"}

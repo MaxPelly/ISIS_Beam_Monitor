@@ -33,7 +33,7 @@ from isis_monitor.config import (
     read_push_secret,
     update_config_file,
 )
-from isis_monitor.daemon_state import DaemonState
+from isis_monitor.daemon_state import MCR_NEWS_PLACEHOLDER, DaemonState
 from isis_monitor.ipc import IPCClient, IPCServer
 from isis_monitor.mcr import MCRNewsMonitor
 from isis_monitor.messages import set_timezone
@@ -240,7 +240,10 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
         sink=state,
     )
     beam_monitor.restore_instruments(state.instruments)
-    mcr_monitor = MCRNewsMonitor(config, mcr_channel, args.notify_current, sink=state)
+    mcr_monitor = MCRNewsMonitor(
+        config, mcr_channel, args.notify_current, sink=state,
+        old_news=None if state.mcr_news == MCR_NEWS_PLACEHOLDER else state.mcr_news,
+    )
     restart_requested = False
 
     def request_restart(reason: str) -> None:

@@ -236,7 +236,7 @@ Things to know:
 ### Daemon options
 
 - `config`: (Required) Path to the `.ini` configuration file.
-- `-n`, `--notify_current`: Send a notification for the current news immediately on startup (not on restarts triggered from the TUI). Use `--no-notify_current` to disable (default behaviour: wait for new news before notifying).
+- `-n`, `--notify_current`: Send a notification for the current news immediately on a first start, when there's no saved news yet. Use `--no-notify_current` to disable (default behaviour: wait for new news before notifying). Otherwise the daemon compares against the news it last saw, so news posted while it was stopped is still announced.
 - `-d`, `--dummy`, `--no-dummy`: Use a dummy notifier for testing purposes that logs to the console instead of sending actual webhooks.
 
 ### Example

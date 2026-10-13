@@ -13,6 +13,8 @@ from isis_monitor.config import CHANNEL_LABELS, InstrumentConfig
 
 logger = logging.getLogger(__name__)
 
+MCR_NEWS_PLACEHOLDER = "Waiting for initial MCR news..."
+
 SUBSCRIBER_QUEUE_SIZE = 500
 # How far back run completions are kept in the snapshot: the daily summary
 # covers runs over the last 24h, so older ones don't survive a restart.
@@ -62,7 +64,7 @@ class DaemonState:
         self.history: Dict[str, Deque[Tuple[datetime, float, str]]] = {
             beam: deque(maxlen=history_maxlen) for beam in CHANNEL_LABELS
         }
-        self.mcr_news = "Waiting for initial MCR news..."
+        self.mcr_news = MCR_NEWS_PLACEHOLDER
         self.logs: Deque[str] = deque(maxlen=logs_maxlen)
         # notify_counts, auto and beam_target come from the config, for
         # clients to display; the saved notify_counts and auto are also
