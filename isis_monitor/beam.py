@@ -148,15 +148,15 @@ class BeamChangeAggregator:
 
         notification = beam_change(
             pending.bt.state_key,
-            pending.prev_state,
-            pending.new_state,
-            pending.beam_val,
-            pending.prev_val,
-            pending.high_threshold,
-            pending.started_at - pending.prev_since,
-            pending.started_at,
+            beam=pending.bt.channel_label,
+            prev_state=pending.prev_state,
+            new_state=pending.new_state,
+            beam_val=pending.beam_val,
+            prev_val=pending.prev_val,
+            high_threshold=pending.high_threshold,
+            time_in_prev_state=pending.started_at - pending.prev_since,
+            time_now=pending.started_at,
             trip_note=trip_note,
-            channel=pending.bt.channel_label,
         )
         logger.info(f"State Change: {notification.to_summary()}")
         await self.beam_channel.broadcast(notification)
@@ -265,8 +265,7 @@ class BeamMonitor:
             if prev_state == "":
                 # First reading for this target — always send immediately, never debounced.
                 notification = startup_status(
-                    bt.state_key, new_state, beam_val, time_now,
-                    channel=bt.channel_label,
+                    bt.state_key, beam=bt.channel_label, state=new_state, beam_val=beam_val, time_now=time_now,
                 )
                 logger.info(f"Startup: {notification.to_summary()}")
                 await self.beam_channel.broadcast(notification)

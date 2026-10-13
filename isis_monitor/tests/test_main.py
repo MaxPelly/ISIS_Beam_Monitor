@@ -245,17 +245,20 @@ TEAMS_ROUTES = [
 
 def _card(kind):
     now = datetime.now(timezone.utc)
+    hour = timedelta(hours=1)
+    run = dict(new_run_name="run", prev_run_name="old", prev_duration=hour, prev_counts=5, time_now=now, target=10)
     return {
         "beam_change": lambda: messages.beam_change(
-            "TS1", "high", "off", 0, 150, 140, timedelta(hours=1), now, channel="TS1"),
-        "startup_status": lambda: messages.startup_status("Muon", "high", 5, now, channel="Muons"),
-        "daily_summary": lambda: messages.daily_summary("TS2", 99, 0, timedelta(hours=9), "", {}, now),
-        "run_started": lambda: messages.run_started("PEARL", "run", "old", timedelta(hours=1), 5, now, 10),
-        "run_started_own_channel": lambda: messages.run_started(
-            "WISH", "run", "old", timedelta(hours=1), 5, now, 10, channel="WISH"),
+            "TS1", beam="TS1", prev_state="high", new_state="off", beam_val=0, prev_val=150, high_threshold=140,
+            time_in_prev_state=hour, time_now=now),
+        "startup_status": lambda: messages.startup_status("Muon", beam="Muons", state="high", beam_val=5, time_now=now),
+        "daily_summary": lambda: messages.daily_summary(
+            "TS2", uptime_pct=99, trips=0, longest_on_streak=hour, sparkline="", instrument_runs={}, time_now=now),
+        "run_started": lambda: messages.run_started("PEARL", **run),
+        "run_started_own_channel": lambda: messages.run_started("WISH", **run),
         "experiment_finished_own_channel": lambda: messages.experiment_finished(
-            "WISH", "123", 2, 5, timedelta(hours=1), False, now, channel="WISH"),
-        "mcr_news": lambda: messages.mcr_news("news", now),
+            "WISH", rb_number="123", runs=2, uah=5, duration=hour, partial=False, time_now=now),
+        "mcr_news": lambda: messages.mcr_news("news", time_now=now),
     }[kind]()
 
 

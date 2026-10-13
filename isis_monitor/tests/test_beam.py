@@ -142,7 +142,7 @@ async def test_handle_update_beam_startup_sends_immediately(mock_config, mock_ch
     beam_channel.broadcast.assert_called_once()
     notification = beam_channel.broadcast.call_args[0][0]
     assert "online" in notification.title and notification.title.endswith("TS1 is low")
-    assert notification.channel == "TS1"
+    assert notification.beam == "TS1"
 
 
 async def test_handle_update_beam_no_change_no_broadcast(mock_config, mock_channels):
@@ -177,7 +177,7 @@ async def test_handle_update_beam_change_is_debounced(mock_config, mock_channels
     beam_channel.broadcast.assert_called_once()
     notification = beam_channel.broadcast.call_args[0][0]
     assert "low → medium" in notification.title
-    assert notification.channel == "TS1"
+    assert notification.beam == "TS1"
 
 
 async def test_handle_update_beam_flapping_sends_nothing(mock_config, mock_channels):
@@ -1069,36 +1069,6 @@ async def test_one_instruments_failed_stall_check_does_not_skip_others(mock_conf
 
     m.instruments["WISH"].check_collection_progress.assert_awaited_once()
     assert "Collection check failed for PEARL" in caplog.text
-
-
-@pytest.mark.parametrize("mode, expected", [("experiment", ""), ("instrument", "PEARL")])
-async def test_run_cards_use_the_instruments_channel_setting(mock_config, mock_channels, mode, expected):
-    """Blank is filled with "Experiment Updates" by the experiment channel on broadcast."""
-    _, exp_channel = mock_channels
-    config = replace(mock_config, stall_minutes=0.01, instruments=[replace(mock_config.instruments[0], channel=mode)])
-    sink = MagicMock()
-    m = make_monitor(config, mock_channels, counts_target=130, sink=sink)
-    m._current_ws = MagicMock()  # connected to PVWS
-    t = tracker(m)
-    m.beams["TS1"].power = "high"
-    t.state.run_name = "Run 24"
-    t.state.run_started_at = datetime.now(timezone.utc)
-
-    await m._handle_update(title("Run 25"))
-    now = datetime.now(timezone.utc)
-    _seed_collected_baseline(m, now, 100.0)  # samples are oldest first; below the 130 target
-    t.state.current_counts = 100.0
-    await m._check_collection_progress(now)
-    await m._check_collection_progress(now + timedelta(seconds=1))
-    await m._handle_update({"pv": PEARL_UAMPS, "value": 150.0})
-
-    titles_channels = [(c.args[0].title, c.args[0].channel) for c in exp_channel.broadcast.call_args_list]
-    assert [title for title, _ in titles_channels] == [
-        "PEARL: New run started", "PEARL: Data collection stalled",
-        "PEARL: Run about to finish",
-    ]
-    assert {channel for _, channel in titles_channels} == {expected}
-
 
 
 async def test_repeated_run_title_after_reconnect_keeps_the_run_start_time(mock_config, mock_channels):

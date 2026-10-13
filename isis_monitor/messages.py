@@ -67,10 +67,9 @@ class Notification:
     url: Optional[str] = None
     url_label: str = "Open"
     timestamp: Optional[datetime] = None
-    channel: str = ""  # e.g. "TS1" or an instrument name; falls back to the NotificationChannel's
-                        # name in NotificationChannel.broadcast() when left blank
     topic: str = ""  # what it's about, for subscribers filtering it: a beam target's channel
                      # label, an instrument name, "MCR" or "Summary"
+    beam: str = ""  # the beam target's channel label (e.g. "Muons") for beam cards and summaries
 
     def _parts(self) -> List[str]:
         parts = [f"{self.emoji} {self.title}".strip(), self.text]
@@ -97,6 +96,8 @@ class Notification:
 
 def beam_change(
     display_name: str,
+    *,
+    beam: str,
     prev_state: str,
     new_state: str,
     beam_val: float,
@@ -105,7 +106,6 @@ def beam_change(
     time_in_prev_state: timedelta,
     time_now: datetime,
     trip_note: str = "",
-    channel: str = "",
 ) -> Notification:
     """Build a card for a confirmed (debounced) beam state transition."""
     going_up = _STATE_ORDER[new_state] > _STATE_ORDER[prev_state]
@@ -141,30 +141,25 @@ def beam_change(
             (f"Was {prev_state} for", fmt_duration(time_in_prev_state)),
         ],
         timestamp=time_now,
-        channel=channel,
-        topic=channel,
+        topic=beam,
+        beam=beam,
     )
 
 
-def startup_status(
-    display_name: str,
-    state: str,
-    beam_val: float,
-    time_now: datetime,
-    channel: str = "",
-) -> Notification:
+def startup_status(display_name: str, *, beam: str, state: str, beam_val: float, time_now: datetime) -> Notification:
     return Notification(
         title=f"Monitor online: {display_name} is {state}",
         text=f"Current: {beam_val:.3f} uA",
         emoji="🛰️",
         timestamp=time_now,
-        channel=channel,
-        topic=channel,
+        topic=beam,
+        beam=beam,
     )
 
 
 def run_started(
     instrument: str,
+    *,
     new_run_name: str,
     prev_run_name: str,
     prev_duration: timedelta,
@@ -172,14 +167,9 @@ def run_started(
     time_now: datetime,
     target: float,
     target_note: str = "",  # e.g. "auto, from 5 runs"
-    channel: str = "",
 ) -> Notification:
     """Build a card for a new run starting — its target, and a report on the
-    run that just ended.
-
-    The run builders' `channel` is blank by default, which broadcast() fills
-    with the experiment channel's name ("Experiment Updates").
-    """
+    run that just ended."""
     return Notification(
         title=f"{instrument}: New run started",
         text=new_run_name,
@@ -192,20 +182,19 @@ def run_started(
             ("Target", f"{target:g} µA·h" + (f" ({target_note})" if target_note else "")),
         ],
         timestamp=time_now,
-        channel=channel,
         topic=instrument,
     )
 
 
 def run_finishing(
     instrument: str,
+    *,
     run_name: str,
     counts_collected: float,
     counts_target: float,
     rate_per_second: float,
     instrument_state: str,
     time_now: datetime,
-    channel: str = "",
     auto: bool = False,  # counts_target came from recent runs (notify_counts = auto)
     run_number: str = "",
 ) -> Notification:
@@ -227,14 +216,12 @@ def run_finishing(
         emoji=FINISHING_EMOJI,
         facts=facts,
         timestamp=time_now,
-        channel=channel,
         topic=instrument,
     )
 
 
 def collection_stalled(
-    instrument: str, beam_target: str, stalled_for: timedelta, time_now: datetime, channel: str = "",
-    run_number: str = "",
+    instrument: str, *, beam_target: str, stalled_for: timedelta, time_now: datetime, run_number: str = "",
 ) -> Notification:
     return Notification(
         title=f"{instrument}: Data collection stalled",
@@ -243,12 +230,11 @@ def collection_stalled(
         severity=Severity.WARNING,
         emoji="⚠️",
         timestamp=time_now,
-        channel=channel,
         topic=instrument,
     )
 
 
-def collection_resumed(instrument: str, stalled_for: timedelta, time_now: datetime, channel: str = "") -> Notification:
+def collection_resumed(instrument: str, *, stalled_for: timedelta, time_now: datetime) -> Notification:
     """After a collection_stalled warning, once the µA·h collected rises again."""
     return Notification(
         title=f"{instrument}: Data collection resumed",
@@ -256,7 +242,6 @@ def collection_resumed(instrument: str, stalled_for: timedelta, time_now: dateti
         severity=Severity.GOOD,
         emoji="✅",
         timestamp=time_now,
-        channel=channel,
         topic=instrument,
     )
 
@@ -283,11 +268,7 @@ def _mcr_severity_and_emoji(news_text: str) -> Tuple[Severity, str]:
     return Severity.INFO, MCR_NEWS_EMOJI
 
 
-def mcr_news(
-    news_text: str,
-    time_now: datetime,
-    url: Optional[str] = None,
-) -> Notification:
+def mcr_news(news_text: str, *, time_now: datetime, url: Optional[str] = None) -> Notification:
     severity, emoji = _mcr_severity_and_emoji(news_text)
     return Notification(
         title="MCR News",
@@ -303,6 +284,7 @@ def mcr_news(
 
 def daily_summary(
     display_name: str,
+    *,
     uptime_pct: float,
     trips: int,
     longest_on_streak: timedelta,
@@ -336,14 +318,14 @@ def daily_summary(
         emoji="📊",
         facts=facts,
         timestamp=time_now,
-        channel=display_name,  # already the beam target's channel label (e.g. "TS1")
         topic="Summary",
+        beam=display_name,  # already the beam target's channel label (e.g. "TS1")
     )
 
 
 def experiment_finished(
-    instrument: str, rb_number: str, runs: int, uah: float, duration: timedelta, partial: bool,
-    time_now: datetime, channel: str = "",
+    instrument: str, *, rb_number: str, runs: int, uah: float, duration: timedelta, partial: bool,
+    time_now: datetime,
 ) -> Notification:
     """On an instrument's RB number changing: the experiment it ended. `partial`
     means it had started before the daemon saw it, so its totals are only the runs since."""
@@ -359,7 +341,6 @@ def experiment_finished(
             ("Duration", f"{at_least}{fmt_duration(duration)}"),
         ],
         timestamp=time_now,
-        channel=channel,
         topic=instrument,
     )
 

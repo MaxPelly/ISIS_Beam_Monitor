@@ -8,10 +8,9 @@ import math
 import time
 import uuid
 from abc import ABC, abstractmethod
-from dataclasses import replace
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import aiohttp
 
@@ -56,8 +55,8 @@ def _retry_after(value: object, cap: float) -> Optional[float]:
 class Notifier(ABC):
     """Abstract interface for any notification method."""
     @abstractmethod
-    async def send(self, notification: Notification):
-        pass
+    async def send(self, notification: Notification, route: str = ""):
+        """`route` is the Teams channel name the NotificationChannel chose."""
 
     async def close(self) -> None:
         """Release any resources held by the notifier."""
@@ -93,15 +92,15 @@ class HTTPNotifier(Notifier):
             self._session = None
 
     @abstractmethod
-    def _create_payload(self, notification: Notification) -> dict:
+    def _create_payload(self, notification: Notification, route: str) -> dict:
         """The JSON payload to POST for a notification."""
 
     def _request_kwargs(self, payload: dict) -> dict:
         """Keyword arguments for session.post(); called again for each attempt."""
         return {"json": payload}
 
-    async def send(self, notification: Notification):
-        payload = self._create_payload(notification)
+    async def send(self, notification: Notification, route: str = ""):
+        payload = self._create_payload(notification, route)
         for attempt, delay in enumerate((*self.RETRY_DELAYS, None), 1):
             error, retryable, retry_after = await self._post(payload)
             if error is None:
@@ -152,7 +151,7 @@ class TeamsNotifier(HTTPNotifier):
     """Sends notifications to a Microsoft Teams Incoming Webhook as Adaptive Cards."""
     LABEL = "Teams webhook"
 
-    def _create_payload(self, notification: Notification) -> dict:
+    def _create_payload(self, notification: Notification, route: str) -> dict:
         header_text = _no_links(f"{notification.emoji} {notification.title}".strip())
         body: list = [
             {
@@ -197,7 +196,7 @@ class TeamsNotifier(HTTPNotifier):
             # Not part of the Adaptive Card schema — kept for downstream (e.g.
             # Power Automate) flows that route on these two fields.
             "summary": summary,
-            "channel": notification.channel,
+            "channel": route,
             "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
             "type": "AdaptiveCard",
             "version": "1.2",
@@ -236,7 +235,7 @@ class WebhookNotifier(HTTPNotifier):
         super().__init__(url, timeout=timeout)
         self.secret = secret
 
-    def _create_payload(self, notification: Notification) -> dict:
+    def _create_payload(self, notification: Notification, route: str) -> dict:
         n = notification
         return {
             "v": 1,
@@ -266,12 +265,16 @@ class WebhookNotifier(HTTPNotifier):
 
 class DummyNotifier(Notifier):
     """A dummy notifier for testing — logs the message instead of sending."""
-    async def send(self, notification: Notification):
+    async def send(self, notification: Notification, route: str = ""):
         logger.info(f"[DUMMY NOTIFIER] {notification.to_plain_text()}")
 
 
 class NotificationChannel:
     """Manages a group of notifiers for a specific topic.
+
+    `route` picks the Teams channel name for each notification, which
+    downstream (e.g. Power Automate) flows route on; by default it's the
+    channel's own name.
 
     broadcast() only queues a notification; a worker task sends them in
     order, so a slow or hung webhook (up to webhook_timeout per send) never
@@ -281,8 +284,9 @@ class NotificationChannel:
     QUEUE_SIZE = 100  # beyond this (e.g. a long Teams outage) the oldest are dropped
     CLOSE_TIMEOUT = 5.0  # how long close() waits for queued notifications to send
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, route: Optional[Callable[[Notification], str]] = None):
         self.name = name
+        self.route = route or (lambda _n: name)
         self.notifiers: List[Notifier] = []
         self._queue: Optional[asyncio.Queue] = None
         self._worker: Optional[asyncio.Task] = None
@@ -301,31 +305,29 @@ class NotificationChannel:
         if self._closed:
             logger.warning(f"Channel '{self.name}' is closed; not sending: {notification.title}")
             return
-        if not notification.channel:
-            notification = replace(notification, channel=self.name)
         if self._queue is None:
             self._queue = asyncio.Queue(maxsize=self.QUEUE_SIZE)
             self._worker = asyncio.create_task(self._send_loop())
         if self._queue.full():
             dropped = self._queue.get_nowait()
             self._queue.task_done()
-            logger.warning(f"Channel '{self.name}' send queue full; dropped notification: {dropped.title}")
-        self._queue.put_nowait(notification)
+            logger.warning(f"Channel '{self.name}' send queue full; dropped notification: {dropped[0].title}")
+        self._queue.put_nowait((notification, self.route(notification)))
 
     async def _send_loop(self) -> None:
         while True:
-            notification = await self._queue.get()
+            notification, route = await self._queue.get()
             try:
-                await self._send(notification)
+                await self._send(notification, route)
             except Exception:  # never let one bad send stop all later ones
                 logger.exception(f"Sending on channel '{self.name}' failed")
             finally:
                 self._queue.task_done()
 
-    async def _send(self, notification: Notification) -> None:
+    async def _send(self, notification: Notification, route: str) -> None:
         """Send to all registered notifiers in parallel."""
         results = await asyncio.gather(
-            *(n.send(notification) for n in self.notifiers), return_exceptions=True
+            *(n.send(notification, route) for n in self.notifiers), return_exceptions=True
         )
         for notifier, result in zip(self.notifiers, results):
             if isinstance(result, Exception):

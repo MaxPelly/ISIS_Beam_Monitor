@@ -140,11 +140,6 @@ class InstrumentTracker:
         self.sink = sink
         self.state = InstrumentState(run_target=instrument.notify_counts)
 
-    def _card_channel(self) -> str:
-        """Teams channel for this instrument's cards; blank means the
-        experiment channel's own name ("Experiment Updates")."""
-        return self.instrument.name if self.instrument.channel == "instrument" else ""
-
     def _beam_state(self) -> str:
         return self.beam_power(self.instrument.beam_target)
 
@@ -209,9 +204,8 @@ class InstrumentTracker:
             runs = state.exp_runs + (last > 0)
             if old_rb != "0" and runs and state.exp_since is not None:  # "0" was no experiment
                 notification = experiment_finished(
-                    self.instrument.name, old_rb, runs, state.exp_uah + last,
-                    time_now - state.exp_since, state.exp_partial or unwatched, time_now,
-                    channel=self._card_channel(),
+                    self.instrument.name, rb_number=old_rb, runs=runs, uah=state.exp_uah + last,
+                    duration=time_now - state.exp_since, partial=state.exp_partial or unwatched, time_now=time_now,
                 )
             state.exp_partial = unwatched
         else:
@@ -301,8 +295,8 @@ class InstrumentTracker:
         else:
             target_note = f"auto's fallback, until {AUTO_MIN_RUNS} runs"
         notification = run_started(
-            self.instrument.name, name, prev_name, prev_duration, prev_counts, time_now,
-            self.state.run_target, target_note, channel=self._card_channel(),
+            self.instrument.name, new_run_name=name, prev_run_name=prev_name, prev_duration=prev_duration,
+            prev_counts=prev_counts, time_now=time_now, target=self.state.run_target, target_note=target_note,
         )
         logger.info(f"New Run: {notification.to_summary()}")
         await self.experiment_channel.broadcast(notification)
@@ -364,13 +358,12 @@ class InstrumentTracker:
         if remaining < 0 or (rate > 0 and remaining / rate <= self.finish_warning_minutes * 60):
             notification = run_finishing(
                 self.instrument.name,
-                self.state.run_name,
-                total_collected,
-                counts_target,
-                rate,
-                self._beam_state(),
-                time_now,
-                channel=self._card_channel(),
+                run_name=self.state.run_name,
+                counts_collected=total_collected,
+                counts_target=counts_target,
+                rate_per_second=rate,
+                instrument_state=self._beam_state(),
+                time_now=time_now,
                 auto=self.state.auto_runs > 0,
                 run_number=self.state.run_number,
             )
@@ -480,16 +473,15 @@ class InstrumentTracker:
             ):
                 self.state.stall_warned = True
                 notification = collection_stalled(
-                    self.instrument.name, self.instrument.beam_target, stalled_for, time_now,
-                    channel=self._card_channel(), run_number=self.state.run_number,
+                    self.instrument.name, beam_target=self.instrument.beam_target, stalled_for=stalled_for,
+                    time_now=time_now, run_number=self.state.run_number,
                 )
                 logger.info(f"Stall Warning: {notification.to_summary()}")
                 await self.experiment_channel.broadcast(notification)
         else:
             if self.state.stall_warned:
                 notification = collection_resumed(
-                    self.instrument.name, time_now - self.state.collection_stalled_since, time_now,
-                    channel=self._card_channel(),
+                    self.instrument.name, stalled_for=time_now - self.state.collection_stalled_since, time_now=time_now,
                 )
                 logger.info(f"Collection resumed: {notification.to_summary()}")
                 await self.experiment_channel.broadcast(notification)

@@ -68,7 +68,7 @@ async def test_teams_notifier_sends_request():
     notifier = TeamsNotifier("http://fake.webhook.url")
     notifier._session = make_status_session(200)
 
-    await notifier.send(Notification(title="Test title", text="Test message", channel="TS1"))
+    await notifier.send(Notification(title="Test title", text="Test message"), "TS1")
 
     notifier._session.post.assert_called_once()
     args, kwargs = notifier._session.post.call_args
@@ -87,7 +87,7 @@ def test_teams_card_breaks_markdown_links_in_remote_text():
     """A run title can't become a disguised link in the Experiment Updates channel."""
     evil = "[Session expired - sign in](https://evil.example)"
     payload = TeamsNotifier("http://x")._create_payload(
-        Notification(title=f"PEARL: {evil}", text=evil, facts=[("Previous run", evil)]))
+        Notification(title=f"PEARL: {evil}", text=evil, facts=[("Previous run", evil)]), "")
     card = json.dumps(payload["attachments"][0]["content"]["body"])
     assert "](" not in card and card.count("]\\u200b(") == 3
     assert "](" not in payload["summary"]  # read by plain-text clients and flows
@@ -123,8 +123,8 @@ async def test_webhook_notifier_posts_signed_json():
 
     await notifier.send(Notification(
         title="PEARL: New run started", text="Run 2", severity=Severity.GOOD, emoji="🚀",
-        facts=[("Duration", "1h 0m")], timestamp=when, channel="Experiment Updates", topic="PEARL",
-    ))
+        facts=[("Duration", "1h 0m")], timestamp=when, topic="PEARL",
+    ), "Experiment Updates")
 
     args, kwargs = notifier._session.post.call_args
     assert args[0] == "http://127.0.0.1:8765/ingest"
@@ -162,7 +162,7 @@ def test_create_payload_header_style_follows_severity():
     notifier = TeamsNotifier("http://fake.webhook.url")
     styles = {}
     for severity in Severity:
-        payload = notifier._create_payload(Notification(title="Title", text="Text", severity=severity))
+        payload = notifier._create_payload(Notification(title="Title", text="Text", severity=severity), "")
         styles[severity] = payload["attachments"][0]["content"]["body"][0]["style"]
     assert styles == {
         Severity.INFO: "default", Severity.GOOD: "good",
@@ -176,7 +176,7 @@ def test_create_payload_includes_facts():
         title="Title", text="Text", facts=[("Current", "3.500 uA"), ("Previous", "off")]
     )
 
-    payload = notifier._create_payload(notification)
+    payload = notifier._create_payload(notification, "")
 
     card = payload["attachments"][0]["content"]
     fact_sets = [item for item in card["body"] if item["type"] == "FactSet"]
@@ -192,7 +192,7 @@ def test_create_payload_ends_with_the_timestamp_and_version():
     ts = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
     notification = Notification(title="Title", text="Text", timestamp=ts)
 
-    payload = notifier._create_payload(notification)
+    payload = notifier._create_payload(notification, "")
 
     body = payload["attachments"][0]["content"]["body"]
     assert body[-1]["isSubtle"] is True
@@ -201,7 +201,7 @@ def test_create_payload_ends_with_the_timestamp_and_version():
 
 def test_create_payload_ends_with_the_version_without_a_timestamp():
     body = TeamsNotifier("http://fake.webhook.url")._create_payload(
-        Notification(title="Title", text="Text"))["attachments"][0]["content"]["body"]
+        Notification(title="Title", text="Text"), "")["attachments"][0]["content"]["body"]
     assert body[-1]["text"] == f"ISIS Beam Monitor v{__version__}" and body[-1]["size"] == "Small"
 
 
@@ -209,12 +209,12 @@ def test_create_payload_url_action_only_when_url_given():
     notifier = TeamsNotifier("http://fake.webhook.url")
     notification = Notification(title="Title", text="Text", url="https://example.com/news")
 
-    card = notifier._create_payload(notification)["attachments"][0]["content"]
+    card = notifier._create_payload(notification, "")["attachments"][0]["content"]
     assert card["actions"] == [
         {"type": "Action.OpenUrl", "title": "Open", "url": "https://example.com/news"}
     ]
 
-    card = notifier._create_payload(replace(notification, url=None))["attachments"][0]["content"]
+    card = notifier._create_payload(replace(notification, url=None), "")["attachments"][0]["content"]
     assert "actions" not in card
 
 
@@ -222,7 +222,7 @@ def test_create_payload_url_action_only_when_url_given():
 # NotificationChannel
 # ---------------------------------------------------------------------------
 
-async def test_notification_channel_fills_in_only_a_blank_channel():
+async def test_notification_channel_routes_by_its_name_or_its_route():
     channel = NotificationChannel("TestChannel")
 
     mock_notifier1 = MagicMock()
@@ -237,16 +237,16 @@ async def test_notification_channel_fills_in_only_a_blank_channel():
     await channel.broadcast(notification)
     await channel.flush()
 
-    # broadcast() fills in a blank channel with the NotificationChannel's own
-    # name, so the notifiers receive a copy rather than the exact same object.
-    expected = replace(notification, channel="TestChannel")
-    mock_notifier1.send.assert_called_once_with(expected)
-    mock_notifier2.send.assert_called_once_with(expected)
+    # By default every notification is routed to the channel's own name.
+    mock_notifier1.send.assert_called_once_with(notification, "TestChannel")
+    mock_notifier2.send.assert_called_once_with(notification, "TestChannel")
 
-    explicit = Notification(title="Title", text="Text", channel="TS1")
-    await channel.broadcast(explicit)
-    await channel.flush()
-    mock_notifier1.send.assert_called_with(explicit)
+    routed = NotificationChannel("Beam", route=lambda n: n.beam)
+    routed.add_notifier(mock_notifier1)
+    beam_card = Notification(title="Title", text="Text", beam="Muons")
+    await routed.broadcast(beam_card)
+    await routed.flush()
+    mock_notifier1.send.assert_called_with(beam_card, "Muons")
 
 
 async def test_notification_channel_empty_logs_debug(caplog):
@@ -261,7 +261,7 @@ async def test_notification_channel_empty_logs_debug(caplog):
 
 
 class _FailingNotifier(DummyNotifier):
-    async def send(self, notification):
+    async def send(self, notification, route=""):
         raise RuntimeError("webhook exploded")
 
 
@@ -410,7 +410,7 @@ class _SlowNotifier(Notifier):
         self.delay = delay
         self.sent = []
 
-    async def send(self, notification):
+    async def send(self, notification, route=""):
         await asyncio.sleep(self.delay)
         self.sent.append(notification.title)
 

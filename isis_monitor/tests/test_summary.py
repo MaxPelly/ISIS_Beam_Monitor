@@ -143,7 +143,7 @@ async def test_daily_summary_loop_sends_one_card_per_target_at_summary_time(stor
         state.history[beam].append((t0, 10.0, "high"))
     channel = await run_summary(store, state)
     # One card per target, even though multiple ticks elapsed — last_sent_date dedupes to once/day.
-    assert {c.args[0].channel for c in channel.broadcast.call_args_list} == {"TS1", "TS2", "Muons"}
+    assert {c.args[0].beam for c in channel.broadcast.call_args_list} == {"TS1", "TS2", "Muons"}
     assert channel.broadcast.call_count == 3
 
 
@@ -188,7 +188,7 @@ async def test_daily_summary_counts_runs_only_on_instruments_using_that_target(s
     state.record_run_completed("EMU", now, 5.0)
     state.record_run_completed("EMU", now - timedelta(hours=30), 5.0)  # outside the window
     channel = await run_summary(store, state)
-    cards = {c.args[0].channel: dict(c.args[0].facts) for c in channel.broadcast.call_args_list}
+    cards = {c.args[0].beam: dict(c.args[0].facts) for c in channel.broadcast.call_args_list}
     assert {beam: facts["Runs in last 24h"] for beam, facts in cards.items()} == {"TS1": "2", "TS2": "0", "Muons": "1"}
     assert (cards["TS1"]["PEARL"], cards["Muons"]["EMU"]) == ("2 runs, 130.0 µA·h", "1 run, 5.0 µA·h")
     assert "EMU" not in cards["TS1"]

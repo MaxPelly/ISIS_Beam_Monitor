@@ -35,7 +35,7 @@ from isis_monitor.config import (
 from isis_monitor.daemon_state import MCR_NEWS_PLACEHOLDER, DaemonState
 from isis_monitor.ipc import IPCClient, IPCServer
 from isis_monitor.mcr import MCRNewsMonitor
-from isis_monitor.messages import set_timezone
+from isis_monitor.messages import Notification, set_timezone
 from isis_monitor.notifiers import DummyNotifier, NotificationChannel, TeamsNotifier, WebhookNotifier
 from isis_monitor.storage import SQLiteStateStore
 from isis_monitor.summary import daily_summary_loop
@@ -151,8 +151,16 @@ async def run_until_stopped(coro, stop_event: asyncio.Event) -> None:
 
 
 def build_channels(config, dummy: bool):
-    def channel(name: str, url: str) -> NotificationChannel:
-        ch = NotificationChannel(name)
+    """The beam, experiment and MCR channels. Each picks the Teams channel
+    name that downstream flows route on: the beam target's, the instrument's
+    (with `channel = instrument`) or else the NotificationChannel's own."""
+    own_channel = {i.name for i in config.instruments if i.channel == "instrument"}
+
+    def experiment_route(n: Notification) -> str:
+        return n.topic if n.topic in own_channel else "Experiment Updates"
+
+    def channel(name: str, url: str, route=None) -> NotificationChannel:
+        ch = NotificationChannel(name, route)
         if dummy:
             ch.add_notifier(DummyNotifier())
         else:
@@ -163,8 +171,8 @@ def build_channels(config, dummy: bool):
         return ch
 
     return (
-        channel("Beam Updates", config.beam_teams_url),
-        channel("Experiment Updates", config.experiment_teams_url),
+        channel("Beam Updates", config.beam_teams_url, lambda n: n.beam),
+        channel("Experiment Updates", config.experiment_teams_url, experiment_route),
         channel("MCR News", config.news_teams_url),
     )
 

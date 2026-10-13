@@ -163,12 +163,12 @@ async def daily_summary_loop(
             for beam, target_summary in summaries.items():
                 notification = daily_summary(
                     beam,
-                    target_summary.uptime_pct,
-                    target_summary.trips,
-                    target_summary.longest_on_streak,
-                    target_summary.sparkline,
-                    state.runs_completed_since(since, instruments_by_channel.get(beam, [])),
-                    now_utc,
+                    uptime_pct=target_summary.uptime_pct,
+                    trips=target_summary.trips,
+                    longest_on_streak=target_summary.longest_on_streak,
+                    sparkline=target_summary.sparkline,
+                    instrument_runs=state.runs_completed_since(since, instruments_by_channel.get(beam, [])),
+                    time_now=now_utc,
                     coverage_pct=target_summary.coverage_pct,
                 )
                 await beam_channel.broadcast(notification)

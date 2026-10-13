@@ -102,10 +102,24 @@ def test_to_summary_is_one_line_with_details():
 # Builders
 # ---------------------------------------------------------------------------
 
+# Typical arguments for each builder; tests override what they check.
+CHANGE = dict(beam="TS1", prev_state="low", new_state="high", beam_val=150.0, prev_val=20.0, high_threshold=140.0,
+              time_in_prev_state=timedelta(hours=1), time_now=DT)
+STARTED = dict(new_run_name="Run 2", prev_run_name="Run 1", prev_duration=timedelta(hours=1), prev_counts=1000.0,
+               time_now=DT, target=130.0)
+FINISHING = dict(run_name="Run 1", counts_collected=150.0, counts_target=130.0, rate_per_second=0.5,
+                 instrument_state="high", time_now=DT)
+STALLED = dict(beam_target="TS1", stalled_for=timedelta(minutes=17), time_now=DT)
+SUMMARY = dict(uptime_pct=95.0, trips=0, longest_on_streak=timedelta(hours=10), sparkline="▇", instrument_runs={},
+               time_now=DT)
+
+
+def kw(base, **overrides):
+    return {**base, **overrides}
+
+
 def test_beam_change_builder_going_up_is_good():
-    n = beam_change(
-        "TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=3, minutes=12), DT, channel="TS1",
-    )
+    n = beam_change("TS1", **kw(CHANGE, time_in_prev_state=timedelta(hours=3, minutes=12)))
     assert n.title == "TS1 ⬆️ low → high"
     assert n.severity == Severity.GOOD
     assert n.emoji == "🟢"
@@ -116,7 +130,7 @@ def test_beam_change_builder_going_up_is_good():
         ("Was low for", "3h 12m"),
     ]
     assert n.timestamp == DT
-    assert n.channel == "TS1"
+    assert n.beam == n.topic == "TS1"
 
 
 @pytest.mark.parametrize("old, new, current, previous, severity, emoji", [
@@ -124,7 +138,7 @@ def test_beam_change_builder_going_up_is_good():
     ("low", "off", 0.0, 20.0, Severity.ATTENTION, "🔴"),
 ])
 def test_beam_change_builder_going_down(old, new, current, previous, severity, emoji):
-    n = beam_change("TS1", old, new, current, previous, 140.0, timedelta(minutes=45), DT)
+    n = beam_change("TS1", **kw(CHANGE, prev_state=old, new_state=new, beam_val=current, prev_val=previous))
     assert n.title == f"TS1 ⬇️ {old} → {new}"
     assert (n.severity, n.emoji) == (severity, emoji)
 
@@ -132,38 +146,35 @@ def test_beam_change_builder_going_down(old, new, current, previous, severity, e
 def test_beam_change_builder_restored_emoji_only_after_an_hour_plus_outage():
     """A quick blip (< 1h off) is not a 'restored' event — no party emoji.
     Recovering from an hour-plus outage gets the celebratory emoji instead."""
-    n = beam_change("TS1", "off", "high", 150.0, 0.0, 140.0, timedelta(minutes=30), DT)
-    assert n.emoji == "🟢"
-    n = beam_change("TS1", "off", "high", 150.0, 0.0, 140.0, timedelta(hours=1, minutes=5), DT)
-    assert n.emoji == "🎉"
+    off = kw(CHANGE, prev_state="off", prev_val=0.0)
+    assert beam_change("TS1", **kw(off, time_in_prev_state=timedelta(minutes=30))).emoji == "🟢"
+    assert beam_change("TS1", **kw(off, time_in_prev_state=timedelta(hours=1, minutes=5))).emoji == "🎉"
 
 
 def test_beam_change_builder_zero_high_threshold_does_not_crash():
     """A misconfigured (0.0) high boundary must degrade gracefully, not raise."""
-    n = beam_change("Muon", "low", "high", 3.0, 1.0, 0.0, timedelta(minutes=5), DT)
+    n = beam_change("Muon", **kw(CHANGE, beam="Muons", high_threshold=0.0))
     assert ("% of high threshold", "n/a") in n.facts
 
 
 def test_beam_change_builder_includes_trip_note():
-    n = beam_change(
-        "TS1", "low", "off", 0.0, 20.0, 140.0, timedelta(minutes=10), DT,
-        trip_note="⚠️ TS2 and Muons also went off, likely a facility-wide trip",
-    )
+    n = beam_change("TS1", **kw(CHANGE, new_state="off", beam_val=0.0,
+                                trip_note="⚠️ TS2 and Muons also went off, likely a facility-wide trip"))
     assert "facility-wide trip" in n.text
 
 
 def test_startup_status_builder():
-    n = startup_status("TS1", "high", 150.0, DT, channel="TS1")
+    n = startup_status("TS1", beam="TS1", state="high", beam_val=150.0, time_now=DT)
     assert n.title == "Monitor online: TS1 is high"
     assert n.emoji == "🛰️"
     assert "150.000 uA" in n.text
-    assert n.channel == n.topic == "TS1"
+    assert n.beam == n.topic == "TS1"
 
 
 def test_run_started_builder():
-    n = run_started("PEARL", "Run 12346", "Run 12345", timedelta(hours=2), 1000.0, DT, 128.0, "auto, from 5 runs")
+    n = run_started("PEARL", **kw(STARTED, new_run_name="Run 12346", prev_run_name="Run 12345",
+                                  prev_duration=timedelta(hours=2), target=128.0, target_note="auto, from 5 runs"))
     assert n.title == "PEARL: New run started"
-    assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
     assert n.text == "Run 12346"
     assert n.severity == Severity.INFO
     assert n.emoji == "🚀"
@@ -174,15 +185,14 @@ def test_run_started_builder():
         ("Target", "128 µA·h (auto, from 5 runs)"),
     ]
     # Negative counts mean no reading ever arrived for the previous run.
-    n = run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), -1.0, DT, 130.0)
+    n = run_started("PEARL", **kw(STARTED, prev_counts=-1.0))
     assert ("Final total collected", "unknown") in n.facts
     assert ("Target", "130 µA·h") in n.facts
 
 
 def test_run_finishing_builder():
-    n = run_finishing("PEARL", "Run 12345", 150.0, 130.0, 0.5, "high", DT)
+    n = run_finishing("PEARL", **kw(FINISHING, run_name="Run 12345"))
     assert n.title == "PEARL: Run about to finish"
-    assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
     assert n.text == "Run 12345"
     assert n.severity == Severity.INFO
     assert n.emoji == "🏁"
@@ -193,21 +203,21 @@ def test_run_finishing_builder():
         ("Instrument beam", "high"),
     ]
     # Sent ahead of the target: a real ETA (80 µA·h to go at 1 µA·h a minute).
-    n = run_finishing("PEARL", "Run 12345", 50.0, 130.0, 1 / 60, "high", DT)
+    n = run_finishing("PEARL", **kw(FINISHING, counts_collected=50.0, rate_per_second=1 / 60))
     assert dict(n.facts)["ETA"] == "1h 20m"
     # No ETA when the rate isn't positive.
-    n = run_finishing("PEARL", "Run 12345", 50.0, 130.0, 0.0, "high", DT)
+    n = run_finishing("PEARL", **kw(FINISHING, counts_collected=50.0, rate_per_second=0.0))
     assert "ETA" not in [key for key, _ in n.facts]
 
 
 def test_mcr_news_builder():
-    n = mcr_news("Machine update: nothing to report.", DT)
+    n = mcr_news("Machine update: nothing to report.", time_now=DT)
     assert n.title == "MCR News"
     assert n.text == "Machine update: nothing to report."
     assert n.severity == Severity.INFO
     assert n.emoji == "📰"
     assert n.url is None
-    n = mcr_news("Machine update.", DT, url="https://example.com/mcr")
+    n = mcr_news("Machine update.", time_now=DT, url="https://example.com/mcr")
     assert n.url == "https://example.com/mcr"
     assert n.url_label == "Open MCR news"
 
@@ -225,14 +235,13 @@ def test_mcr_news_builder():
     ("Tissue samples arriving for the triple-axis study.", Severity.INFO, MCR_NEWS_EMOJI),
 ])
 def test_mcr_news_builder_keywords(news, severity, emoji):
-    n = mcr_news(news, DT)
+    n = mcr_news(news, time_now=DT)
     assert (n.severity, n.emoji) == (severity, emoji)
 
 
 def test_collection_stalled_builder():
-    n = collection_stalled("PEARL", "TS1", timedelta(minutes=17), DT)
+    n = collection_stalled("PEARL", **STALLED)
     assert n.title == "PEARL: Data collection stalled"
-    assert n.channel == ""  # filled with "Experiment Updates" by the channel on broadcast
     assert n.severity == Severity.WARNING
     assert n.emoji == "⚠️"
     assert "17m" in n.text
@@ -241,7 +250,8 @@ def test_collection_stalled_builder():
 
 def test_daily_summary_builder():
     runs = {"PEARL": (6, 512.34), "WISH": (1, 60.0), "SXD": (0, 0.0)}
-    n = daily_summary("TS1", 95.0, 2, timedelta(hours=5, minutes=30), "▁▂▃▄▅", runs, DT)
+    n = daily_summary("TS1", **kw(SUMMARY, trips=2, longest_on_streak=timedelta(hours=5, minutes=30),
+                                  sparkline="▁▂▃▄▅", instrument_runs=runs))
     assert n.title == "TS1 daily summary"
     assert n.severity == Severity.GOOD  # >= 90% uptime
     assert n.emoji == "📊"
@@ -255,16 +265,14 @@ def test_daily_summary_builder():
         ("WISH", "1 run, 60.0 µA·h"),
         ("SXD", "no runs"),
     ]
-    assert n.channel == "TS1"  # display_name doubles as the channel label here
+    assert n.beam == "TS1"  # display_name doubles as the channel label here
     assert n.topic == "Summary"
-    n = daily_summary("TS1", 50.0, 5, timedelta(hours=1), "▁▂", {}, DT)
-    assert n.severity == Severity.INFO  # below 90% uptime
+    assert daily_summary("TS1", **kw(SUMMARY, uptime_pct=50.0)).severity == Severity.INFO  # below 90% uptime
 
 
 def test_daily_summary_shows_data_coverage_only_when_samples_are_missing():
-    args = ("TS1", 95.0, 0, timedelta(hours=10), "▇", {}, DT)
-    assert "Data coverage" not in dict(daily_summary(*args, coverage_pct=99.5).facts)
-    facts = daily_summary(*args, coverage_pct=62.4).facts
+    assert "Data coverage" not in dict(daily_summary("TS1", **SUMMARY, coverage_pct=99.5).facts)
+    facts = daily_summary("TS1", **SUMMARY, coverage_pct=62.4).facts
     assert facts[:2] == [("Uptime", "95%"), ("Data coverage", "62%")]
 
 
@@ -273,13 +281,13 @@ def test_no_builder_bakes_its_own_emoji_into_the_title():
     a builder must never also embed that emoji inside the title text itself,
     or it renders twice everywhere the notification is shown."""
     notifications = [
-        beam_change("TS1", "low", "high", 150.0, 20.0, 140.0, timedelta(hours=1), DT),
-        startup_status("TS1", "high", 150.0, DT),
-        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, DT, 130.0),
-        run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", DT),
-        collection_stalled("PEARL", "TS1", timedelta(minutes=17), DT),
-        mcr_news("Machine update.", DT),
-        daily_summary("TS1", 95.0, 0, timedelta(hours=10), "▇", {}, DT),
+        beam_change("TS1", **CHANGE),
+        startup_status("TS1", beam="TS1", state="high", beam_val=150.0, time_now=DT),
+        run_started("PEARL", **STARTED),
+        run_finishing("PEARL", **FINISHING),
+        collection_stalled("PEARL", **STALLED),
+        mcr_news("Machine update.", time_now=DT),
+        daily_summary("TS1", **SUMMARY),
     ]
     for n in notifications:
         if n.emoji:
@@ -287,12 +295,12 @@ def test_no_builder_bakes_its_own_emoji_into_the_title():
 
 
 def test_builders_set_topic():
-    assert beam_change("Muon", "low", "high", 5.0, 1.0, 5.0, timedelta(hours=1), DT, channel="Muons").topic == "Muons"
-    assert mcr_news("Machine update.", DT).topic == "MCR"
+    assert beam_change("Muon", **kw(CHANGE, beam="Muons")).topic == "Muons"
+    assert mcr_news("Machine update.", time_now=DT).topic == "MCR"
     # Run cards carry the instrument as their topic whatever their channel.
     for n in (
-        run_started("PEARL", "Run 2", "Run 1", timedelta(hours=1), 1000.0, DT, 130.0),
-        run_finishing("PEARL", "Run 1", 150.0, 130.0, 0.5, "high", DT),
-        collection_stalled("PEARL", "TS1", timedelta(minutes=17), DT),
+        run_started("PEARL", **STARTED),
+        run_finishing("PEARL", **FINISHING),
+        collection_stalled("PEARL", **STALLED),
     ):
         assert n.topic == "PEARL", n.title
