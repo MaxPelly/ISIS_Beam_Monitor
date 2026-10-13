@@ -229,7 +229,7 @@ class InstrumentTracker:
             self._save_target()
         self._save_experiment()
         if notification:
-            logger.info(f"Experiment finished: {notification.to_plain_text()}")
+            logger.info(f"Experiment finished: {notification.to_summary()}")
             await self.experiment_channel.broadcast(notification)
 
     async def handle_run_name(self, b64_data: Any, time_now: datetime) -> None:
@@ -309,14 +309,14 @@ class InstrumentTracker:
             self.instrument.name, name, prev_name, prev_duration, prev_counts, time_now,
             self.state.run_target, target_note, rng=self.flavour_rng, channel=self._card_channel(),
         )
-        logger.info(f"New Run: {notification.to_plain_text()}")
+        logger.info(f"New Run: {notification.to_summary()}")
         await self.experiment_channel.broadcast(notification)
 
         if self.flavour_rng and total_runs and total_runs % RUN_MILESTONE_INTERVAL == 0:
             milestone = run_milestone(
                 self.instrument.name, total_runs, time_now, rng=self.flavour_rng, channel=self._card_channel()
             )
-            logger.info(f"Milestone: {milestone.to_plain_text()}")
+            logger.info(f"Milestone: {milestone.to_summary()}")
             await self.experiment_channel.broadcast(milestone)
 
     async def handle_counts(self, raw_value: Any, time_now: datetime) -> None:
@@ -387,7 +387,7 @@ class InstrumentTracker:
                 auto=self.state.auto_runs > 0,
                 run_number=self.state.run_number,
             )
-            logger.info(f"Run finishing: {notification.to_plain_text()}")
+            logger.info(f"Run finishing: {notification.to_summary()}")
             await self.experiment_channel.broadcast(notification)
             self.state.end_notified = True
             self._save_progress()
@@ -496,7 +496,7 @@ class InstrumentTracker:
                     self.instrument.name, self.instrument.beam_target, stalled_for, time_now,
                     channel=self._card_channel(), run_number=self.state.run_number,
                 )
-                logger.info(f"Stall Warning: {notification.to_plain_text()}")
+                logger.info(f"Stall Warning: {notification.to_summary()}")
                 await self.experiment_channel.broadcast(notification)
         else:
             if self.state.stall_warned:
@@ -504,7 +504,7 @@ class InstrumentTracker:
                     self.instrument.name, time_now - self.state.collection_stalled_since, time_now,
                     channel=self._card_channel(),
                 )
-                logger.info(f"Collection resumed: {notification.to_plain_text()}")
+                logger.info(f"Collection resumed: {notification.to_summary()}")
                 await self.experiment_channel.broadcast(notification)
             self.state.collection_stalled_since = None
             self.state.stall_warned = False

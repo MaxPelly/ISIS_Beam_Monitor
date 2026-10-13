@@ -159,7 +159,7 @@ class BeamChangeAggregator:
             rng=self.flavour_rng,
             channel=pending.bt.channel_label,
         )
-        logger.info(f"State Change: {notification.to_plain_text()}")
+        logger.info(f"State Change: {notification.to_summary()}")
         await self.beam_channel.broadcast(notification)
 
     def pending(self, state_key: str) -> Optional[_PendingChange]:
@@ -272,7 +272,7 @@ class BeamMonitor:
                     bt.state_key, new_state, beam_val, time_now,
                     rng=self._flavour_rng, channel=bt.channel_label,
                 )
-                logger.info(f"Startup: {notification.to_plain_text()}")
+                logger.info(f"Startup: {notification.to_summary()}")
                 await self.beam_channel.broadcast(notification)
                 beam_state.since = time_now
             else:
