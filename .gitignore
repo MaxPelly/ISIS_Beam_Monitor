@@ -3,6 +3,8 @@ config.ini
 *.bak
 .*.tmp
 *.secret
+.env
+.envrc
 
 # Runtime state
 *.db
