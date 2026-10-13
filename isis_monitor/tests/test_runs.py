@@ -359,6 +359,14 @@ def test_a_rebegin_while_disconnected_is_found_when_the_replay_ends():
     assert r.log[1:] == [("rebegin", "00010")]
 
 
+def test_counts_re_sent_after_a_rebegin_while_disconnected_are_the_new_attempts():
+    r = reconnect(running())((100, "STARTTIME", "Tue 13-Oct-2026 10:01:30"), (100, "TOTALUAMPS", 3.0),
+                             (100, "RUNNUMBER", "00010"), (100, "RUNSTATE_STR", "PAUSED"),
+                             (130, "RUNSTATE_STR", "ENDING"), (131, "RUNNUMBER", "00011"),
+                             (131, "RUNSTATE_STR", "SETUP")).settle()
+    assert r.log[1:] == [("rebegin", "00010"), ("done", "00010", 3.0)]
+
+
 def test_an_unknown_run_state_is_taken_as_between_runs_with_one_warning(caplog):
     r = running()((30, "RUNSTATE_STR", "DREAMING"), (31, "RUNSTATE_STR", "DREAMING")).settle()
     assert caplog.text.count("unknown run state DREAMING") == 1

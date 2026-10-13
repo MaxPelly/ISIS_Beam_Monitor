@@ -171,13 +171,13 @@ class RunTracker:
             self.replaying = False
             run = self.run
             if run and run.number == self.run_number:  # what was re-sent meanwhile is this run's
+                # A STARTTIME that changed under the same number is a re-begin;
+                # checked first, as the counts re-sent are then the new attempt's.
+                if run.start_text and self.start_text and self.start_text != run.start_text:
+                    self._rebegin(now)
                 run.title = self.title or run.title
                 if self.counts is not None and self.credited():
                     run.last_counts = self.counts
-            # A STARTTIME that changed under the same number while replaying is a re-begin.
-            if run and run.number == self.run_number and run.start_text and self.start_text \
-                    and self.start_text != run.start_text:
-                self._rebegin(now)
 
     def on_run_number(self, value: Any, now: datetime) -> None:
         number = pv_text(value)
@@ -365,10 +365,11 @@ class RunTracker:
     def _complete(self, now: datetime, final_known: bool) -> None:
         run = self.run
         run.ended_at, run.final_known, self.last_completed = now, final_known, run.number
+        if run.exp_gen == self.exp_gen:
+            self.exp_partial = self.exp_partial or not final_known  # so its totals are "at least"
         if run.exp_gen == self.exp_gen and run.last_counts > 0:
             self.exp_runs += 1
             self.exp_uah += run.last_counts
-            self.exp_partial = self.exp_partial or not final_known  # so its totals are "at least"
             if self.instrument.auto_counts and final_known:
                 self.run_totals.append(run.last_counts)
         counts = f"{run.last_counts:.1f} µA·h" if run.last_counts >= 0 else "no counts read"
