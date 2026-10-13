@@ -209,11 +209,26 @@ def _read_value(parser: configparser.ConfigParser, section: str, key: str, kind:
     return {int: parser.getint, float: parser.getfloat, bool: parser.getboolean}[kind](section, key)
 
 
-def _unknown_keys(parser: configparser.ConfigParser, section: str, known) -> None:
-    # options() also lists any [DEFAULT] keys, which aren't this section's fault.
-    unknown = set(parser.options(section)) - set(known) - set(parser.defaults())
+def _warn_unknown(parser: configparser.ConfigParser, config_path: Path) -> None:
+    """One warning naming every section and key the config doesn't use,
+    e.g. typos or settings retired by an upgrade."""
+    known: dict = {}
+    for f in fields(AppConfig):
+        if "section" in f.metadata:
+            known.setdefault(f.metadata["section"], set()).add(f.metadata["key"] or f.name)
+    unknown = []
+    for section in parser.sections():
+        upper = section.upper()
+        keys = (_INSTRUMENT_KEYS if upper.startswith(INSTRUMENT_SECTION_PREFIX)
+                else _BEAM_KEYS if upper.startswith(BEAM_SECTION_PREFIX) else known.get(section))
+        if keys is None:
+            unknown.append(f"[{section}]")
+            continue
+        # options() also lists any [DEFAULT] keys, which aren't this section's fault.
+        unknown += [f"[{section}] {key}" for key in parser.options(section)
+                    if key not in keys and key not in parser.defaults()]
     if unknown:
-        logger.warning(f"[{section}] ignoring unknown key(s): {', '.join(sorted(unknown))}")
+        logger.warning(f"{config_path}: ignoring unknown setting(s): {', '.join(unknown)}")
 
 
 def _read_beams(parser: configparser.ConfigParser) -> Tuple[BeamTargetConfig, ...]:
@@ -229,7 +244,6 @@ def _read_beams(parser: configparser.ConfigParser) -> Tuple[BeamTargetConfig, ..
         if name in seen:
             raise ConfigError(f"Beam target {name} is configured more than once")
         seen.add(name)
-        _unknown_keys(parser, section, _BEAM_KEYS)
         changes = {}
         if pv := parser.get(section, "pv", fallback="").strip():
             changes["pv"] = pv
@@ -259,7 +273,6 @@ def _read_instruments(
             raise ConfigError(
                 f"[{section}] instrument name may only contain letters, digits, '_' and '-'"
             )
-        _unknown_keys(parser, section, _INSTRUMENT_KEYS)
         raw_counts = parser.get(section, "notify_counts", fallback="").strip()
         if not raw_counts:
             raise ConfigError(f"[{section}] notify_counts is required")
@@ -427,6 +440,7 @@ def parse_config(parser: configparser.ConfigParser, config_path: Path) -> AppCon
             values[name] = str(config_path.absolute().parent / path)  # an absolute path is kept as is
     if "instrument_target" in values:
         values["instrument_target"] = beam_name(values["instrument_target"]) or values["instrument_target"]
+    _warn_unknown(parser, config_path)
     config = AppConfig(**values, beams=_read_beams(parser))
     config.instruments = _read_instruments(parser, config)
     _validate(config, config_path)

@@ -235,7 +235,7 @@ def test_beam_sections_override_the_defaults(tmp_path, caplog):
         BeamTargetConfig("TS2", DEFAULT_BEAMS[1].pv, (1.0, 2.5, 2.5)),
         BeamTargetConfig("Muons", "X:MU", DEFAULT_BEAMS[2].boundaries),
     )
-    assert "[BEAM:Muon] ignoring unknown key(s): colour" in caplog.text
+    assert "ignoring unknown setting(s): [BEAM:Muon] colour" in caplog.text
 
 
 def test_instrument_sections(tmp_path):
@@ -256,9 +256,18 @@ notify_counts = 75
     assert config.instruments[1].run_name_pv == "IN:WISH:DAE:WDTITLE"
 
 
-def test_instrument_unknown_key_warns(tmp_path, caplog):
-    load_config(_write(tmp_path, "[INSTRUMENT:PEARL]\nnotify_counts = 5\nteams_url = http://x\n"))
-    assert "ignoring unknown key(s): teams_url" in caplog.text
+def test_unknown_sections_and_keys_get_one_warning(tmp_path, caplog):
+    path = _write(tmp_path, "[INSTRUMENT:PEARL]\nnotify_counts = 5\nteams_url = http://x\n"
+                            "[NOTIFICATIONS]\nfun_mode = true\n[BEAM_BOUNDARIES]\nts1_boundaries = 0, 1, 2\n")
+    load_config(path)
+    (warning,) = [r.getMessage() for r in caplog.records if "unknown" in r.getMessage()]
+    assert warning == (f"{path}: ignoring unknown setting(s): "
+                       "[INSTRUMENT:PEARL] teams_url, [NOTIFICATIONS] fun_mode, [BEAM_BOUNDARIES]")
+
+
+def test_a_config_without_unknown_settings_gets_no_warning(tmp_path, caplog):
+    load_config(_write(tmp_path, "[BEAM:TS1]\npv = X\n[LOGGING]\nlevel = DEBUG\n"))
+    assert "unknown" not in caplog.text
 
 
 def test_instrument_default_section_keys_not_reported_as_unknown(tmp_path, caplog):
@@ -433,7 +442,7 @@ def test_instrument_progress_pv_is_derived_from_the_name(tmp_path, caplog):
         tmp_path, "[INSTRUMENT:POLARIS]\ncounts_pv = IN:POLARIS:CS:DASHBOARD:TAB:2:1:VALUE\nnotify_counts = 300\n"
     ))
     assert config.instruments[0].counts_pv == "IN:POLARIS:DAE:TOTALUAMPS"
-    assert "[INSTRUMENT:POLARIS] ignoring unknown key(s): counts_pv" in caplog.text
+    assert "[INSTRUMENT:POLARIS] counts_pv" in caplog.text
 
 
 def test_update_config_file_drops_unknown_instrument_keys_and_rejects_editing_them(tmp_path):
