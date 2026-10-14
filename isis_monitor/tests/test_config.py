@@ -63,13 +63,11 @@ def test_load_config_requires_an_instrument_section(tmp_path):
         load_config(config_file)
 
 
-def test_load_config_empty_websocket_url_logs_warning(tmp_path, caplog):
-    """Empty isis_websocket_url should log a WARNING, not raise."""
-    import logging
-    with caplog.at_level(logging.WARNING, logger="isis_monitor.config"):
-        config = load_config(_write(tmp_path, "isis_websocket_url =\n"))
+def test_load_config_empty_websocket_url_warns(tmp_path):
+    """Empty isis_websocket_url is a warning, not an error."""
+    config = load_config(_write(tmp_path, "isis_websocket_url =\n"))
     assert config.isis_websocket_url == ""
-    assert "isis_websocket_url" in caplog.text
+    assert any("isis_websocket_url" in w for w in config.warnings)
 
 
 def test_load_config_daemon_and_tui_client_values(tmp_path):
@@ -223,9 +221,9 @@ def test_load_config_blank_numeric_value_uses_default(tmp_path):
     ("http://push.example.org/ingest", True),
     ("http://10.0.0.5/ingest", True),
 ])
-def test_push_over_plain_http_to_another_host_warns(tmp_path, caplog, url, warned):
-    load_config(_write(tmp_path, f"[PUSH]\nurl = {url}\nsecret_file = push.secret\n"))
-    assert ("[PUSH] url is plain http://" in caplog.text) is warned
+def test_push_over_plain_http_to_another_host_warns(tmp_path, url, warned):
+    config = load_config(_write(tmp_path, f"[PUSH]\nurl = {url}\nsecret_file = push.secret\n"))
+    assert any("[PUSH] url is plain http://" in w for w in config.warnings) is warned
 
 
 def test_load_config_resolves_relative_paths_against_the_config_dir(tmp_path):
@@ -238,14 +236,14 @@ def test_load_config_resolves_relative_paths_against_the_config_dir(tmp_path):
     assert config.push_secret_file == str(tmp_path / "push.secret")
 
 
-def test_beam_sections_override_the_defaults(tmp_path, caplog):
+def test_beam_sections_override_the_defaults(tmp_path):
     config = load_config(_write(tmp_path, "[BEAM:ts2]\nboundaries = 1, 2.5 , 2.5\n[BEAM:Muon]\npv = X:MU\ncolour = red\n"))
     assert config.beams == (
         DEFAULT_BEAMS[0],
         BeamTargetConfig("TS2", DEFAULT_BEAMS[1].pv, (1.0, 2.5, 2.5)),
         BeamTargetConfig("Muons", "X:MU", DEFAULT_BEAMS[2].boundaries),
     )
-    assert "ignoring unknown setting(s): [BEAM:Muon] colour" in caplog.text
+    assert f"{tmp_path / 'config.ini'}: ignoring unknown setting(s): [BEAM:Muon] colour" in config.warnings
 
 
 def test_instrument_sections(tmp_path):
@@ -269,20 +267,15 @@ notify_counts = 75
 def test_unknown_sections_and_keys_get_one_warning(tmp_path, caplog):
     path = _write(tmp_path, "[INSTRUMENT:PEARL]\nnotify_counts = 5\nteams_url = http://x\n"
                             "[NOTIFICATIONS]\nfun_mode = true\n[BEAM_BOUNDARIES]\nts1_boundaries = 0, 1, 2\n")
-    load_config(path)
-    (warning,) = [r.getMessage() for r in caplog.records if "unknown" in r.getMessage()]
-    assert warning == (f"{path}: ignoring unknown setting(s): "
-                       "[INSTRUMENT:PEARL] teams_url, [NOTIFICATIONS] fun_mode, [BEAM_BOUNDARIES]")
+    assert [w for w in load_config(path).warnings if "unknown" in w] == [
+        f"{path}: ignoring unknown setting(s): [INSTRUMENT:PEARL] teams_url, [NOTIFICATIONS] fun_mode, [BEAM_BOUNDARIES]"]
+    assert not caplog.records  # collected for the daemon to log once, not logged on every read
 
 
-def test_a_config_without_unknown_settings_gets_no_warning(tmp_path, caplog):
-    load_config(_write(tmp_path, "[BEAM:TS1]\npv = X\n[LOGGING]\nlevel = DEBUG\n"))
-    assert "unknown" not in caplog.text
-
-
-def test_instrument_default_section_keys_not_reported_as_unknown(tmp_path, caplog):
-    load_config(_write(tmp_path, "[DEFAULT]\nfoo = 1\n[INSTRUMENT:PEARL]\nnotify_counts = 5\n"))
-    assert "unknown key" not in caplog.text
+@pytest.mark.parametrize("extra", ["[BEAM:TS1]\npv = X\n[LOGGING]\nlevel = DEBUG\n",
+                                   "[DEFAULT]\nfoo = 1\n[INSTRUMENT:PEARL]\nnotify_counts = 5\n"])
+def test_a_config_without_unknown_settings_gets_no_warning(tmp_path, extra):
+    assert load_config(_write(tmp_path, "isis_websocket_url = wss://x\n" + extra)).warnings == []
 
 
 # ---------------------------------------------------------------------------
@@ -447,12 +440,12 @@ def test_update_config_file_directory_fsync_failure_is_only_a_warning(tmp_path, 
     assert "Could not fsync" in caplog.text
 
 
-def test_instrument_progress_pv_is_derived_from_the_name(tmp_path, caplog):
+def test_instrument_progress_pv_is_derived_from_the_name(tmp_path):
     config = load_config(_write(
         tmp_path, "[INSTRUMENT:POLARIS]\ncounts_pv = IN:POLARIS:CS:DASHBOARD:TAB:2:1:VALUE\nnotify_counts = 300\n"
     ))
     assert config.instruments[0].counts_pv == "IN:POLARIS:DAE:TOTALUAMPS"
-    assert "[INSTRUMENT:POLARIS] counts_pv" in caplog.text
+    assert "[INSTRUMENT:POLARIS] counts_pv" in config.warnings[0]
 
 
 def test_update_config_file_drops_unknown_instrument_keys_and_rejects_editing_them(tmp_path):

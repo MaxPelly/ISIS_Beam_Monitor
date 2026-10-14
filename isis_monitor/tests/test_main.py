@@ -630,6 +630,17 @@ def run_main(*argv):
         main.main()
 
 
+def test_main_logs_config_warnings_once_logging_is_set_up(tmp_path, caplog):
+    ini = Path(_ini(tmp_path))
+    ini.write_text(ini.read_text() + "[NOTIFICATIONS]\nfun_mode = true\n")
+    order = []
+    with patch("main.configure_logging", side_effect=lambda *a: order.append("logging")), \
+            patch("main.run_stop", new_callable=AsyncMock), patch.object(main.sys, "argv", ["main.py", "stop", str(ini)]):
+        caplog.handler.emit = lambda record, emit=caplog.handler.emit: (order.append("warning"), emit(record))
+        main.main()
+    assert order[0] == "logging" and set(order[1:]) == {"warning"} and "[NOTIFICATIONS] fun_mode" in caplog.text
+
+
 def test_main_reports_config_error(tmp_path, capsys):
     with pytest.raises(SystemExit):
         run_main("stop", str(tmp_path / "missing.ini"))

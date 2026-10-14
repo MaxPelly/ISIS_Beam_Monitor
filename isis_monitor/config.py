@@ -207,6 +207,8 @@ class AppConfig:
 
     # Built from the [INSTRUMENT:<NAME>] sections
     instruments: List[InstrumentConfig] = field(default_factory=list)
+    # Problems worth a warning, logged once the daemon's logging is set up
+    warnings: List[str] = field(default_factory=list, repr=False, compare=False)
 
 
 def _parse_boundaries(raw: str) -> Tuple[float, float, float]:
@@ -221,10 +223,10 @@ def _parse_boundaries(raw: str) -> Tuple[float, float, float]:
 def _read_value(parser: configparser.ConfigParser, section: str, key: str, kind: type):
     if kind is str:
         return parser.get(section, key)
-    return {int: parser.getint, float: parser.getfloat, bool: parser.getboolean}[kind](section, key)
+    return {int: parser.getint, float: parser.getfloat}[kind](section, key)
 
 
-def _warn_unknown(parser: configparser.ConfigParser, config_path: Path) -> None:
+def _unknown_settings(parser: configparser.ConfigParser, config_path: Path) -> List[str]:
     """One warning naming every section and key the config doesn't use,
     e.g. typos or settings retired by an upgrade."""
     known: dict = {}
@@ -242,8 +244,7 @@ def _warn_unknown(parser: configparser.ConfigParser, config_path: Path) -> None:
         # options() also lists any [DEFAULT] keys, which aren't this section's fault.
         unknown += [f"[{section}] {key}" for key in parser.options(section)
                     if key not in keys and key not in parser.defaults()]
-    if unknown:
-        logger.warning(f"{config_path}: ignoring unknown setting(s): {', '.join(unknown)}")
+    return [f"{config_path}: ignoring unknown setting(s): {', '.join(unknown)}"] if unknown else []
 
 
 def _read_beams(parser: configparser.ConfigParser) -> Tuple[BeamTargetConfig, ...]:
@@ -366,10 +367,7 @@ def _validate(config: AppConfig, config_path: Path) -> None:
     if not config.mcr_news_url:
         raise ConfigError(f"[DATA] mcr_news_url is required. Please edit config file: {config_path}")
     if not config.isis_websocket_url:
-        logger.warning(
-            "isis_websocket_url is empty — BeamMonitor will not run. "
-            "Please set [DATA] isis_websocket_url in your config file."
-        )
+        config.warnings.append("[DATA] isis_websocket_url is empty, so beams and instruments aren't watched")
     _check_choice("PVS", "instrument_target", config.instrument_target, BEAM_NAMES)
     try:
         hour, minute = (int(x) for x in config.summary_time.split(":"))
@@ -405,8 +403,8 @@ def _validate(config: AppConfig, config_path: Path) -> None:
         if not config.push_secret_file:
             raise ConfigError("[PUSH] secret_file is required when url is set")
         if config.push_url.startswith("http://") and not _is_loopback(urlsplit(config.push_url).hostname or ""):
-            logger.warning("[PUSH] url is plain http:// to another host, so notifications cross the network "
-                           "unencrypted (they're signed, so can't be forged); use https:// unless it's local")
+            config.warnings.append("[PUSH] url is plain http:// to another host, so notifications cross the network "
+                                   "unencrypted (they're signed, so can't be forged); use https:// unless it's local")
     _validate_instruments(config)
 
 
@@ -471,8 +469,7 @@ def parse_config(parser: configparser.ConfigParser, config_path: Path) -> AppCon
             values[name] = str(config_path.absolute().parent / path)  # an absolute path is kept as is
     if "instrument_target" in values:
         values["instrument_target"] = beam_name(values["instrument_target"]) or values["instrument_target"]
-    _warn_unknown(parser, config_path)
-    config = AppConfig(**values, beams=_read_beams(parser))
+    config = AppConfig(**values, beams=_read_beams(parser), warnings=_unknown_settings(parser, config_path))
     config.instruments = _read_instruments(parser, config)
     _validate(config, config_path)
     return config
@@ -480,8 +477,6 @@ def parse_config(parser: configparser.ConfigParser, config_path: Path) -> AppCon
 
 def _format_value(value: Any) -> str:
     """Render a setting as it would be written in the INI file."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value)

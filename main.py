@@ -716,8 +716,6 @@ def main():
 
     try:
         config = load_config(args.config)
-        if args.mode == "daemon":
-            config.push_secret = read_push_secret(config)
     except ConfigError as e:
         print(f"Configuration error: {e}")
         raise SystemExit(1)
@@ -725,6 +723,14 @@ def main():
     set_timezone(config.notifications_timezone)
 
     configure_logging(args.mode, config)
+    for warning in config.warnings:  # once, now they can reach the log
+        logger.warning(warning)
+    if args.mode == "daemon":
+        try:
+            config.push_secret = read_push_secret(config)
+        except ConfigError as e:
+            print(f"Configuration error: {e}")
+            raise SystemExit(1)
 
     stop_event = asyncio.Event()
 
