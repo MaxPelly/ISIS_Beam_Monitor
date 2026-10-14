@@ -25,7 +25,7 @@ def mock_channel():
 # get_news()
 # ---------------------------------------------------------------------------
 
-def news_session(status=200, text="", error=None):
+def news_session(status=200, text="", error=None, charset="utf-8"):
     """A mock aiohttp session whose get() responds with `status`/`text`, or raises `error` on entry."""
     session = MagicMock()
     ctx = session.get.return_value
@@ -36,37 +36,34 @@ def news_session(status=200, text="", error=None):
         chunk = bytes(body[:min(n, 7)])
         del body[:len(chunk)]
         return chunk
-    ctx.__aenter__.return_value = MagicMock(status=status, charset="utf-8", content=MagicMock(read=read))
+    ctx.__aenter__.return_value = MagicMock(status=status, charset=charset, content=MagicMock(read=read))
     ctx.__aenter__.side_effect = error
     ctx.__aexit__ = AsyncMock(return_value=None)
     return session
 
 
-@pytest.mark.parametrize("session, expected", [
-    # The news is the text before the "<N> more lines" / old-line footer, whatever the digits.
-    (news_session(text="Current news text\r\n\r\n12 more lines\r\n"), "Current news text"),
-    (news_session(text="News content\r\n123 old line\r\n"), "News content"),
-    (news_session(status=500), None),
-    (news_session(error=TimeoutError()), None),
-    (news_session(text="  \r\n  "), None),  # parses to empty
-])
-async def test_mcr_get_news(mock_config, mock_channel, session, expected):
-    assert await MCRNewsMonitor(mock_config, mock_channel).get_news(session) == expected
-
-
-async def test_mcr_get_news_bounds_a_feed_without_entry_breaks(mock_config, mock_channel):
-    """If the feed format changes and nothing splits it, the item is still short."""
-    news = await MCRNewsMonitor(mock_config, mock_channel).get_news(news_session(text="word " * 100_000))
-    assert len(news) == mcr.MAX_NEWS_CHARS and news.endswith("…")
-
-
-async def test_mcr_get_news_connection_error_and_empty_feed_log(mock_config, mock_channel, caplog):
-    monitor = MCRNewsMonitor(mock_config, mock_channel)
+def refused_session():
     session = MagicMock()
     session.get.side_effect = aiohttp.ClientConnectionError("refused")
-    assert await monitor.get_news(session) is None
-    assert await monitor.get_news(news_session(text="  ")) is None
-    assert "parsed to empty string" in caplog.text
+    return session
+
+
+@pytest.mark.parametrize("session, expected, log", [
+    # The news is the text before the "<N> more lines" / old-line footer, whatever the digits.
+    (news_session(text="Current news text\r\n\r\n12 more lines\r\n"), "Current news text", ""),
+    (news_session(text="News content\r\n123 old line\r\n"), "News content", ""),
+    (news_session(text="Beam on ✓\r\n12 more", charset="no-such-charset"), "Beam on ✓", ""),  # falls back to UTF-8
+    (news_session(text="Beam\x1b[2J on\x07\r\n12 more"), "Beam [2J on", ""),  # control characters stripped
+    # If the feed format changes and nothing splits it, the item is still short.
+    (news_session(text="word " * 100_000), ("word " * 100_000)[:mcr.MAX_NEWS_CHARS - 1] + "…", ""),
+    (news_session(status=500), None, "Status: 500"),
+    (news_session(error=TimeoutError()), None, "Timeout"),
+    (refused_session(), None, "Connection error while fetching MCR news: refused"),
+    (news_session(text="  \r\n  "), None, "parsed to empty string"),
+])
+async def test_mcr_get_news(mock_config, mock_channel, caplog, session, expected, log):
+    assert await MCRNewsMonitor(mock_config, mock_channel).get_news(session) == expected
+    assert log in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -114,35 +111,32 @@ async def run_script(monitor, *items, waits=None):
     return delays
 
 
-async def test_mcr_run_broadcasts_only_on_news_change(mock_config, mock_channel):
+async def test_mcr_run_broadcasts_only_on_news_change_and_survives_a_failed_send(mock_config, mock_channel, caplog):
     sink = MagicMock(spec=DaemonState())
     monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=False, sink=sink)
+    mock_channel.broadcast.side_effect = [RuntimeError("queue broken"), None]
 
-    await run_script(monitor, "News A", "News A", "News B")
+    await run_script(monitor, "News A", "News A", "News B", "News C")
 
-    mock_channel.broadcast.assert_called_once()
-    notification = mock_channel.broadcast.call_args[0][0]
-    assert notification.text == "News B"
-    assert notification.emoji == "📰"
-    assert [c.args[0] for c in sink.update_mcr_news.call_args_list] == ["News A", "News B"]
-    assert monitor.old_news == "News B"
-
-
-async def test_mcr_run_notify_current_broadcasts_first_poll(mock_config, mock_channel):
-    monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=True)
-    await run_script(monitor, "News A")
-    mock_channel.broadcast.assert_called_once()
-    assert mock_channel.broadcast.call_args[0][0].text == "News A"
+    assert "Failed to send the MCR news notification" in caplog.text
+    assert [c.args[0].text for c in mock_channel.broadcast.call_args_list] == ["News B", "News C"]
+    assert mock_channel.broadcast.call_args[0][0].emoji == "📰"
+    assert [c.args[0] for c in sink.update_mcr_news.call_args_list] == ["News A", "News B", "News C"]
+    assert monitor.old_news == "News C"
 
 
-@pytest.mark.parametrize("feed, sent", [("News B", 1), ("News A", 0)])
-async def test_mcr_run_announces_news_posted_while_down(mock_config, mock_channel, feed, sent):
-    """With the news restored from before a restart, there's no baseline fetch:
-    the first poll announces anything posted since."""
-    monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=True, old_news="News A")
+@pytest.mark.parametrize("old_news, feed, sent, waits", [
+    (None, "News A", 1, 2),  # nothing restored, but -n: the first poll is announced
+    # With the news restored from before a restart, there's no baseline fetch:
+    # the first poll, straight away, announces anything posted since.
+    ("News A", "News B", 1, 1),
+    ("News A", "News A", 0, 1),
+])
+async def test_mcr_run_first_poll(mock_config, mock_channel, old_news, feed, sent, waits):
+    monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=True, old_news=old_news)
     delays = await run_script(monitor, feed)
-    assert delays == [mock_config.mcr_poll_interval]  # polled straight away, then waited
-    assert mock_channel.broadcast.call_count == sent
+    assert delays == [mock_config.mcr_poll_interval] * waits
+    assert [c.args[0].text for c in mock_channel.broadcast.call_args_list] == [feed] * sent
     assert monitor.old_news == feed
 
 
@@ -173,19 +167,7 @@ async def test_mcr_run_backoff_on_consecutive_failures(mock_config, mock_channel
     assert "error" in statuses and "connected" in statuses
 
 
-async def test_mcr_run_cancels_promptly_mid_wait(mock_config, mock_channel):
-    """Shutdown cancels run(); it must not sit out the poll interval."""
-    from dataclasses import replace
-    monitor = MCRNewsMonitor(replace(mock_config, mcr_poll_interval=3600), mock_channel, notify_current=True)
-    with fake_session(), patch.object(monitor, "get_news", AsyncMock(return_value="x")):
-        task = asyncio.create_task(monitor.run())
-        await asyncio.sleep(0.05)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, timeout=1.0)
-
-
-async def test_mcr_request_reconnect_polls_immediately(mock_config, mock_channel):
+async def test_mcr_request_reconnect_polls_immediately_and_shutdown_cancels_the_wait(mock_config, mock_channel):
     from dataclasses import replace
     sink = MagicMock(spec=DaemonState())
     monitor = MCRNewsMonitor(
@@ -204,20 +186,10 @@ async def test_mcr_request_reconnect_polls_immediately(mock_config, mock_channel
         assert monitor.request_reconnect() is True
         assert monitor.request_reconnect() is False  # already pending
         await asyncio.wait_for(polled.wait(), timeout=1.0)
+        # Shutdown cancels run(); it must not sit out the poll interval.
         task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1.0)
 
     assert ("mcr", "reconnecting") in [c.args for c in sink.update_health.call_args_list]
     assert monitor.request_reconnect() is True  # flag was consumed
-
-
-async def test_mcr_get_news_falls_back_to_utf8_for_an_unknown_charset(mock_config, mock_channel):
-    session = news_session(text="Beam on ✓\r\n12 more")
-    session.get.return_value.__aenter__.return_value.charset = "no-such-charset"
-    assert await MCRNewsMonitor(mock_config, mock_channel).get_news(session) == "Beam on ✓"
-
-
-async def test_mcr_get_news_strips_control_characters(mock_config, mock_channel):
-    news = await MCRNewsMonitor(mock_config, mock_channel).get_news(news_session(text="Beam\x1b[2J on\x07\r\n12 more"))
-    assert news == "Beam [2J on"

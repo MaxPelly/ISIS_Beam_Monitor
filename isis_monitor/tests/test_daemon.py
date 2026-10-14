@@ -30,29 +30,24 @@ def no_exec():
         yield execve
 
 
-def test_single_instance_lock_writes_pid_and_releases(tmp_path):
+def test_single_instance_lock(tmp_path):
     lock_file = tmp_path / "sub" / "test.lock"
     with SingleInstanceLock(lock_file):
         assert lock_file.read_text().strip() == str(os.getpid())
+        with pytest.raises(daemon.LockHeldError, match="Lock file already held"):
+            with SingleInstanceLock(lock_file):
+                pass
     # The file is kept (unlinking lock files is racy) but the lock is released.
     assert lock_file.exists()
     with SingleInstanceLock(lock_file):
         pass
 
 
-def test_single_instance_lock_rejects_second_holder(tmp_path):
-    lock_file = tmp_path / "test.lock"
-    with SingleInstanceLock(lock_file):
-        with pytest.raises(daemon.LockHeldError, match="Lock file already held"):
-            with SingleInstanceLock(lock_file):
-                pass
-
-
 # ---------------------------------------------------------------------------
 # run_until_stopped / signals
 # ---------------------------------------------------------------------------
 
-async def test_run_until_stopped_cancels_on_stop():
+async def test_run_until_stopped():
     cancelled = asyncio.Event()
 
     async def forever():
@@ -61,6 +56,7 @@ async def test_run_until_stopped_cancels_on_stop():
         finally:
             cancelled.set()
 
+    # Setting the stop event cancels it.
     stop = asyncio.Event()
     task = asyncio.create_task(daemon.run_until_stopped(forever(), stop))
     await asyncio.sleep(0.01)
@@ -68,8 +64,16 @@ async def test_run_until_stopped_cancels_on_stop():
     await asyncio.wait_for(task, 1)
     assert cancelled.is_set()
 
+    # Cancelling run_until_stopped itself propagates to the coroutine.
+    cancelled.clear()
+    task = asyncio.create_task(daemon.run_until_stopped(forever(), asyncio.Event()))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.wait_for(cancelled.wait(), 1)
 
-async def test_run_until_stopped_propagates_errors_and_returns_on_completion():
+    # The coroutine's own errors propagate, and returning ends it.
     async def boom():
         raise ValueError("crashed")
 
@@ -79,23 +83,6 @@ async def test_run_until_stopped_propagates_errors_and_returns_on_completion():
     with pytest.raises(ValueError, match="crashed"):
         await daemon.run_until_stopped(boom(), asyncio.Event())
     await asyncio.wait_for(daemon.run_until_stopped(quick(), asyncio.Event()), 1)
-
-
-async def test_run_until_stopped_propagates_outer_cancellation():
-    inner_cancelled = asyncio.Event()
-
-    async def forever():
-        try:
-            await asyncio.sleep(3600)
-        finally:
-            inner_cancelled.set()
-
-    task = asyncio.create_task(daemon.run_until_stopped(forever(), asyncio.Event()))
-    await asyncio.sleep(0.01)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    await asyncio.wait_for(inner_cancelled.wait(), 1)
 
 
 async def test_install_signal_handlers_sets_stop_event():
@@ -117,13 +104,7 @@ def _saved_instrument(inst: InstrumentConfig, **changes) -> dict:
     return {**json.loads(json.dumps(tracker.to_snapshot())), **changes}
 
 
-def test_build_channels_dummy_mode_uses_dummy_everywhere(tmp_path):
-    beam, exp, mcr = daemon.build_channels(app_config(tmp_path, beam_teams_url="http://x"), dummy=True)
-    for ch in (beam, exp, mcr):
-        assert [type(n) for n in ch.notifiers] == [DummyNotifier]
-
-
-def test_build_channels_only_configured_webhooks(tmp_path):
+def test_build_channels_only_configured_webhooks_or_dummy_everywhere(tmp_path):
     beam, exp, mcr = daemon.build_channels(
         app_config(tmp_path, beam_teams_url="http://beam", news_teams_url="http://news", webhook_timeout=3),
         dummy=False,
@@ -132,6 +113,9 @@ def test_build_channels_only_configured_webhooks(tmp_path):
     assert beam.notifiers[0].timeout == 3
     assert exp.notifiers == []
     assert isinstance(mcr.notifiers[0], TeamsNotifier)
+
+    for ch in daemon.build_channels(app_config(tmp_path, beam_teams_url="http://x"), dummy=True):
+        assert [type(n) for n in ch.notifiers] == [DummyNotifier]
 
 
 def test_build_channels_shares_one_push_webhook_and_session(tmp_path):
@@ -283,7 +267,16 @@ def _persisted_samples(db):
         store.close()
 
 
+def _saved_snapshot(db) -> dict:
+    store = SQLiteStateStore(db)
+    try:
+        return json.loads(store.load_snapshot("daemon_state"))
+    finally:
+        store.close()
+
+
 DAEMON_ARGS = argparse.Namespace(dummy=True, notify_current=False)
+LIVE_ARGS = argparse.Namespace(dummy=False, notify_current=False)
 
 
 @contextlib.asynccontextmanager
@@ -327,39 +320,54 @@ async def test_run_daemon_serves_ipc_and_shuts_down_cleanly_with_a_client_attach
             attached.close()
 
     assert not os.path.exists(config.daemon_socket_path)
-    store = SQLiteStateStore(tmp_path / "state.db")
-    snap = json.loads(store.load_snapshot("daemon_state"))
-    store.close()
-    assert snap["beam_states"]["TS1"]["power"] == "high"
+    assert _saved_snapshot(tmp_path / "state.db")["beam_states"]["TS1"]["power"] == "high"
 
 
-async def test_run_daemon_closes_each_notifier_once_then_the_session(tmp_path):
+async def test_run_daemon_teardown_closes_each_notifier_once_then_the_session_whatever_fails(tmp_path, caplog):
+    """A failing state save, or a notifier failing to close, still leaves the rest closed."""
     config = app_config(tmp_path, beam_teams_url="http://127.0.0.1:9/beam", push_url="http://127.0.0.1:9/ingest",
-                     push_secret=b"s" * 32)
-    args = argparse.Namespace(dummy=False, notify_current=False)
+                        push_secret=b"s" * 32)
     order = []
-    with patch.object(daemon.Notifier, "close", autospec=True, side_effect=lambda n, t: order.append(n)), \
+
+    def close(notifier, _timeout):
+        order.append(notifier)
+        if type(notifier) is TeamsNotifier:
+            raise RuntimeError("stuck")
+
+    with patch.object(daemon.Notifier, "close", autospec=True, side_effect=close), \
             patch.object(daemon.aiohttp.ClientSession, "close", autospec=True,
-                         side_effect=lambda s: order.append("session")):
-        async with running_daemon(config, args):
+                         side_effect=lambda s: order.append("session")), \
+            patch.object(daemon.SQLiteStateStore, "upsert_snapshot", side_effect=sqlite3.OperationalError("disk I/O")):
+        async with running_daemon(config, LIVE_ARGS):
             pass
     # (The MCR monitor closes a session of its own earlier.)
     assert [type(n) for n in order if n != "session"] == [TeamsNotifier, WebhookNotifier]
     assert order[-1] == "session"
+    assert "Failed to save the state or stop the IPC server" in caplog.text
+    assert "Closing TeamsNotifier failed: RuntimeError('stuck')" in caplog.text
 
 
 async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
     ts = datetime.now(timezone.utc) - timedelta(minutes=5)
     store = SQLiteStateStore(tmp_path / "state.db")
     pearl = InstrumentConfig("PEARL", 130.0, "TS1")
-    saved = _saved_instrument(pearl, run_name="Run 30", run_started_at=ts.isoformat(), counts=12.5, rb_number="A")
+    saved = _saved_instrument(pearl, run_name="Run 30", run_started_at=ts.isoformat(), counts=12.5, rb_number="A",
+                              end_notified=True)
     store.write_samples([(ts, "TS2", 7.0, "low")])
     store.upsert_snapshot("daemon_state", json.dumps({"mcr_news": "old news", "instruments": {"PEARL": saved}}))
     store.commit()
     store.close()
 
     config = app_config(tmp_path, instruments=[pearl])
-    with patch("isis_monitor.daemon.MCRNewsMonitor", wraps=daemon.MCRNewsMonitor) as mcr_cls:
+    seeded = {}
+    real_restore = daemon.BeamMonitor.restore_instruments
+
+    def spy(self, saved):
+        real_restore(self, saved)
+        seeded.update({name: vars(t.state).copy() for name, t in self.instruments.items()})
+
+    with patch("isis_monitor.daemon.MCRNewsMonitor", wraps=daemon.MCRNewsMonitor) as mcr_cls, \
+            patch.object(daemon.BeamMonitor, "restore_instruments", spy):
         async with running_daemon(config):
             status = (await ipc_request(Path(config.daemon_socket_path), {"method": "get_status"}))["status"]
             reconnect = (await ipc_request(Path(config.daemon_socket_path),
@@ -369,17 +377,58 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
     assert mcr_cls.call_args.kwargs["old_news"] == "old news"
     (inst,) = status["instruments"]
     assert (inst["name"], inst["title"], inst["rb"], inst["beam"]) == ("PEARL", "Run 30", "A", "TS1")
+    # The trackers are seeded with all they saved, not just what the status shows.
+    assert seeded["PEARL"]["run_name"] == "Run 30" and seeded["PEARL"]["end_notified"] is True
     assert [v for v, _ in status["beams"][1]["history"]["values"] if v is not None] == [7.0]
     assert set(reconnect) == {"beam", "mcr"}
 
 
-async def test_status_command_prints_the_daemons_status(tmp_path, capsys):
-    async with daemon_with_file(tmp_path):
-        await cli.run_status(app_config(tmp_path))
-        assert capsys.readouterr().out.startswith("ISIS Beam Monitor v")
-        await cli.run_status(app_config(tmp_path), as_json=True)
-    status = json.loads(capsys.readouterr().out)
-    assert status["kind"] == "status" and [b["name"] for b in status["beams"]] == ["TS1", "TS2", "Muons"]
+async def test_run_daemon_tears_down_when_a_loop_crashes_or_ipc_fails_to_start(tmp_path):
+    persistence_cancelled = asyncio.Event()
+
+    async def persistence(*_args):
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            persistence_cancelled.set()
+            raise
+
+    config = app_config(tmp_path)
+    with patch("isis_monitor.daemon.install_signal_handlers"), \
+         patch("isis_monitor.daemon.LOOP_STOP_TIMEOUT", 0.1), \
+         patch("isis_monitor.daemon.state_persistence_loop", side_effect=persistence), \
+         patch("isis_monitor.daemon.daily_summary_loop", new_callable=AsyncMock, side_effect=RuntimeError("summary bug")):
+        with pytest.raises(RuntimeError, match="summary bug"):
+            await asyncio.wait_for(daemon.run_daemon(config, DAEMON_ARGS, asyncio.Event()), 5)
+    assert persistence_cancelled.is_set()  # the other loops are stopped
+    assert not os.path.exists(config.daemon_socket_path)  # teardown still ran
+
+    # With no IPC server there are no loops to stop, but the state is still saved.
+    (tmp_path / "state.db").unlink()
+    with patch("isis_monitor.daemon.install_signal_handlers"), \
+         patch.object(daemon.IPCServer, "start", side_effect=OSError("address in use")):
+        with pytest.raises(OSError, match="address in use"):
+            await asyncio.wait_for(daemon.run_daemon(config, DAEMON_ARGS, asyncio.Event()), 5)
+    assert _saved_snapshot(tmp_path / "state.db")["mcr_news"]
+
+
+async def test_run_daemon_publishes_the_status_with_a_push_url(tmp_path):
+    from isis_monitor.tests.test_status import SECRET, receiver
+    async with receiver() as site:
+        config = app_config(tmp_path, push_url=str(site.make_url("/ingest")), push_secret=SECRET,
+                            instruments=[InstrumentConfig("PEARL", 130.0, "TS1")])
+        async with running_daemon(config, LIVE_ARGS):
+            await wait_until(lambda: site.received)
+    assert site.received[0]["kind"] == "status" and site.received[0]["instruments"][0]["name"] == "PEARL"
+
+
+@pytest.mark.parametrize("dummy, push_url", [(True, "http://127.0.0.1:9/ingest"), (False, "")])
+async def test_run_daemon_publishes_no_status_when_dummy_or_without_a_push_url(tmp_path, dummy, push_url):
+    config = app_config(tmp_path, push_url=push_url, push_secret=b"s" * 32)
+    with patch("isis_monitor.daemon.StatusPublisher") as publisher:
+        async with running_daemon(config, argparse.Namespace(dummy=dummy, notify_current=False)):
+            pass
+    publisher.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -421,34 +470,55 @@ async def _revision(client) -> str:
     return (await client.request({"method": "get_config"}))["revision"]
 
 
-async def test_daemon_get_config_reads_the_file(tmp_path):
+async def test_daemon_answers_requests_that_leave_it_running(tmp_path, capsys):
+    """One daemon run for every request that must neither change the file nor restart it."""
     async with daemon_with_file(tmp_path) as (task, client, ini):
+        before = ini.read_text()
+
+        await cli.run_status(app_config(tmp_path))
+        assert capsys.readouterr().out.startswith("ISIS Beam Monitor v")
+        await cli.run_status(app_config(tmp_path), as_json=True)
+        status = json.loads(capsys.readouterr().out)
+        assert status["kind"] == "status" and [b["name"] for b in status["beams"]] == ["TS1", "TS2", "Muons"]
+
         reply = await client.request({"method": "get_config"})
-    assert reply["config"]["instruments"][0]["name"] == "PEARL"
-    assert reply["beam_targets"] == ["TS1", "TS2", "Muons"]
-    assert reply["channel_modes"] == ["experiment", "instrument"]
-    assert len(reply["revision"]) == 64
-    assert task.result() is False  # plain stop, no restart
+        assert reply["config"]["instruments"][0]["name"] == "PEARL"
+        assert reply["beam_targets"] == ["TS1", "TS2", "Muons"]
+        assert reply["channel_modes"] == ["experiment", "instrument"]
+        assert len(reply["revision"]) == 64
+        revision = reply["revision"]
 
-
-async def test_daemon_update_config_requires_revision(tmp_path):
-    async with daemon_with_file(tmp_path) as (task, client, ini):
         reply = await client.request({"method": "update_config", "settings": {}})
-        assert (reply["ok"], reply["error"]) == (False, "invalid_request")
-        assert not task.done()
+        assert (reply["ok"], reply["error"]) == (False, "invalid_request")  # no revision
 
+        reply = await client.request({"method": "update_config", "revision": revision, "settings": {"instruments": []}})
+        assert (reply["ok"], reply["error"]) == (False, "invalid_config")
+        assert "non-empty" in reply["detail"]
 
-async def test_daemon_rejects_update_based_on_stale_read(tmp_path):
-    """A hand edit (or another editor's save) since get_config must not be overwritten."""
-    async with daemon_with_file(tmp_path) as (task, client, ini):
-        revision = await _revision(client)
-        ini.write_text(ini.read_text() + "[INSTRUMENT:WISH]\nnotify_counts = 5\n")
+        with patch("isis_monitor.daemon.update_config_file", side_effect=PermissionError("read-only")):
+            reply = await client.request({"method": "update_config", "revision": "r", "settings": {}})
+        assert (reply["ok"], reply["error"], reply["detail"]) == (False, "config_write_failed", "read-only")
+
+        with patch("builtins.input", side_effect=["1", "UTC", EOFError]):
+            await cli.run_config(app_config(tmp_path))
+        assert "Input closed; your changes were discarded." in capsys.readouterr().out
+        assert ini.read_text() == before
+
+        # A hand edit (or another editor's save) since get_config must not be overwritten.
+        ini.write_text(before + "[INSTRUMENT:WISH]\nnotify_counts = 5\n")
         reply = await client.request({
             "method": "update_config", "revision": revision, "settings": {"notifications": {"debounce_seconds": "30"}},
         })
         assert (reply["ok"], reply["error"]) == (False, "config_changed")
         assert "[INSTRUMENT:WISH]" in ini.read_text() and "debounce_seconds" not in ini.read_text()
+
+        # A file broken by hand: get_config says why.
+        ini.write_text("[DATA]\n[DATA]\n")
+        reply = await client.request({"method": "get_config"})
+        assert (reply["ok"], reply["error"]) == (False, "invalid_config") and "Could not parse" in reply["detail"]
+
         assert not task.done()
+    assert task.result() is False  # plain stop, no restart
 
 
 async def test_concurrent_updates_only_one_is_applied(tmp_path):
@@ -464,11 +534,11 @@ async def test_concurrent_updates_only_one_is_applied(tmp_path):
                             "settings": {"notifications": {"summary_time": "09:30"}}}),
             return_exceptions=True,
         )
-        assert await asyncio.wait_for(task, 5) is True
+        assert await asyncio.wait_for(task, 5) is True  # restarting to apply it
 
     winners = [r for r in results if isinstance(r, dict) and r.get("restarting")]
     losers = [r for r in results if r not in winners]
-    assert len(winners) == 1
+    assert winners == [{"ok": True, "restarting": True}]
     assert isinstance(losers[0], ConnectionError) or losers[0]["error"] == "restart_pending"
     text = ini.read_text()
     assert ("debounce_seconds = 30" in text) != ("summary_time = 09:30" in text)
@@ -483,46 +553,22 @@ async def test_config_command_edits_and_saves_over_ipc(tmp_path, capsys):
     assert "Saved. The daemon is restarting to apply it." in capsys.readouterr().out
 
 
-async def test_config_command_quits_without_saving_when_input_closes(tmp_path, capsys):
-    async with daemon_with_file(tmp_path) as (task, _client, ini):
-        before = ini.read_text()
-        with patch("builtins.input", side_effect=["1", "UTC", EOFError]):
-            await cli.run_config(app_config(tmp_path))
-        assert not task.done()
-    assert ini.read_text() == before
-    assert "Input closed; your changes were discarded." in capsys.readouterr().out
+async def test_config_save_is_refused_once_shutdown_has_started(tmp_path):
+    """A save accepted after SIGTERM or a shutdown command would re-exec the daemon."""
+    handlers = {}
+    real_ipc = daemon.IPCServer
 
+    def capture(*a):
+        handlers["config"] = a[2]
+        return real_ipc(*a)
 
-async def test_daemon_rejects_invalid_config_and_keeps_running(tmp_path):
-    async with daemon_with_file(tmp_path) as (task, client, ini):
-        before = ini.read_text()
-        reply = await client.request({
-            "method": "update_config", "revision": await _revision(client), "settings": {"instruments": []},
-        })
-        assert (reply["ok"], reply["error"]) == (False, "invalid_config")
-        assert "non-empty" in reply["detail"]
-        assert ini.read_text() == before
-        assert not task.done()
-
-
-async def test_daemon_reports_config_write_failure(tmp_path):
-    async with daemon_with_file(tmp_path) as (task, client, ini):
-        with patch("isis_monitor.daemon.update_config_file", side_effect=PermissionError("read-only")):
-            reply = await client.request({"method": "update_config", "revision": "r", "settings": {}})
-        assert (reply["ok"], reply["error"], reply["detail"]) == (False, "config_write_failed", "read-only")
-        assert not task.done()
-
-
-async def test_daemon_update_config_writes_file_and_requests_restart(tmp_path):
-    async with daemon_with_file(tmp_path) as (task, client, ini):
-        reply = await client.request({
-            "method": "update_config",
-            "revision": await _revision(client),
-            "settings": {"notifications": {"debounce_seconds": "30"}},
-        })
-        assert reply == {"ok": True, "restarting": True}
-        assert await asyncio.wait_for(task, 5) is True
-    assert "debounce_seconds = 30" in ini.read_text()
+    with patch("isis_monitor.daemon.IPCServer", side_effect=capture):
+        async with running_daemon(app_config(tmp_path), _file_args(tmp_path)) as (task, stop):
+            revision = (await handlers["config"]("get_config", {}))["revision"]
+            stop.set()
+            reply = await handlers["config"]("update_config", {"revision": revision, "settings": {}})
+            assert await asyncio.wait_for(task, 5) is False
+    assert (reply["ok"], reply["error"]) == (False, "restart_pending")
 
 
 def test_main_restarts_after_lock_is_released(tmp_path, no_exec):
@@ -561,94 +607,3 @@ def test_restarted_daemon_does_not_replay_notify_current(tmp_path, monkeypatch, 
         run_cli("daemon", write_ini(tmp_path), "-n")
     assert run_daemon.await_args.args[1].notify_current is expected
     assert daemon.RESTARTED_ENV not in os.environ
-
-
-async def test_run_daemon_stops_other_loops_when_one_crashes(tmp_path):
-    persistence_cancelled = asyncio.Event()
-
-    async def persistence(*_args):
-        try:
-            await asyncio.sleep(3600)
-        except asyncio.CancelledError:
-            persistence_cancelled.set()
-            raise
-
-    config = app_config(tmp_path)
-    with patch("isis_monitor.daemon.install_signal_handlers"), \
-         patch("isis_monitor.daemon.LOOP_STOP_TIMEOUT", 0.1), \
-         patch("isis_monitor.daemon.state_persistence_loop", side_effect=persistence), \
-         patch("isis_monitor.daemon.daily_summary_loop", new_callable=AsyncMock, side_effect=RuntimeError("summary bug")):
-        with pytest.raises(RuntimeError, match="summary bug"):
-            await asyncio.wait_for(daemon.run_daemon(config, DAEMON_ARGS, asyncio.Event()), 5)
-    assert persistence_cancelled.is_set()
-    assert not os.path.exists(config.daemon_socket_path)  # teardown still ran
-
-
-async def test_run_daemon_seeds_trackers_from_the_restored_snapshot(tmp_path):
-    started = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-    store = SQLiteStateStore(tmp_path / "state.db")
-    pearl = InstrumentConfig("PEARL", 130.0, "TS1")
-    store.upsert_snapshot("daemon_state", json.dumps({"instruments": {"PEARL": _saved_instrument(
-        pearl, run_name="Run 9", run_started_at=started, counts=150.0, end_notified=True,
-    )}}))
-    store.commit()
-    store.close()
-
-    config = app_config(tmp_path, instruments=[pearl])
-    seeded = {}
-    real_restore = daemon.BeamMonitor.restore_instruments
-
-    def spy(self, saved):
-        real_restore(self, saved)
-        seeded.update({name: vars(t.state).copy() for name, t in self.instruments.items()})
-
-    with patch.object(daemon.BeamMonitor, "restore_instruments", spy):
-        async with running_daemon(config):
-            pass
-    assert seeded["PEARL"]["run_name"] == "Run 9" and seeded["PEARL"]["end_notified"] is True
-
-
-async def test_config_save_is_refused_once_shutdown_has_started(tmp_path):
-    """A save accepted after SIGTERM or a shutdown command would re-exec the daemon."""
-    handlers = {}
-    real_ipc = daemon.IPCServer
-
-    def capture(*a):
-        handlers["config"] = a[2]
-        return real_ipc(*a)
-
-    with patch("isis_monitor.daemon.IPCServer", side_effect=capture):
-        async with running_daemon(app_config(tmp_path), _file_args(tmp_path)) as (task, stop):
-            revision = (await handlers["config"]("get_config", {}))["revision"]
-            stop.set()
-            reply = await handlers["config"]("update_config", {"revision": revision, "settings": {}})
-            assert await asyncio.wait_for(task, 5) is False
-    assert (reply["ok"], reply["error"]) == (False, "restart_pending")
-
-
-async def test_run_daemon_publishes_the_status_with_a_push_url(tmp_path):
-    from isis_monitor.tests.test_status import SECRET, receiver
-    async with receiver() as site:
-        config = app_config(tmp_path, push_url=str(site.make_url("/ingest")), push_secret=SECRET,
-                         instruments=[InstrumentConfig("PEARL", 130.0, "TS1")])
-        async with running_daemon(config, argparse.Namespace(dummy=False, notify_current=False)):
-            await wait_until(lambda: site.received)
-    assert site.received[0]["kind"] == "status" and site.received[0]["instruments"][0]["name"] == "PEARL"
-
-
-@pytest.mark.parametrize("dummy, push_url", [(True, "http://127.0.0.1:9/ingest"), (False, "")])
-async def test_run_daemon_publishes_no_status_when_dummy_or_without_a_push_url(tmp_path, dummy, push_url):
-    config = app_config(tmp_path, push_url=push_url, push_secret=b"s" * 32)
-    with patch("isis_monitor.daemon.StatusPublisher") as publisher:
-        async with running_daemon(config, argparse.Namespace(dummy=dummy, notify_current=False)):
-            pass
-    publisher.assert_not_called()
-
-
-async def test_a_failing_state_save_on_shutdown_still_closes_the_notifiers(tmp_path, caplog):
-    config = app_config(tmp_path, beam_teams_url="https://127.0.0.1:9/beam")
-    with patch.object(daemon.Notifier, "close", autospec=True) as close, \
-            patch.object(daemon.SQLiteStateStore, "upsert_snapshot", side_effect=sqlite3.OperationalError("disk I/O")):
-        async with running_daemon(config, argparse.Namespace(dummy=False, notify_current=False)):
-            pass
-    assert close.await_count == 1 and "Failed to save the state or stop the IPC server" in caplog.text

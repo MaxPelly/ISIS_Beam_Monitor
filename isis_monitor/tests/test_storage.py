@@ -1,3 +1,5 @@
+import asyncio
+import threading
 from datetime import datetime, timedelta, timezone
 
 from isis_monitor.storage import SQLiteStateStore
@@ -29,6 +31,9 @@ def test_storage_write_load_and_prune(tmp_path):
 def test_storage_snapshot_upsert_and_reopen(tmp_path):
     db = tmp_path / "state.db"
     store = SQLiteStateStore(db)
+    # An external reader holding a lock should delay writes, not fail them.
+    (timeout_ms,) = store.conn.execute("PRAGMA busy_timeout").fetchone()
+    assert timeout_ms > 0
     assert store.load_snapshot("daemon_state") is None
 
     store.upsert_snapshot("daemon_state", '{"v":1}')
@@ -41,21 +46,9 @@ def test_storage_snapshot_upsert_and_reopen(tmp_path):
     reopened.close()
 
 
-def test_storage_sets_busy_timeout(tmp_path):
-    """An external reader holding a lock should delay writes, not fail them."""
-    db = tmp_path / "state.db"
-    store = SQLiteStateStore(db)
-    (timeout_ms,) = store.conn.execute("PRAGMA busy_timeout").fetchone()
-    assert timeout_ms > 0
-    store.close()
-
-
-
 async def test_run_serialises_database_work_on_one_thread(tmp_path):
     """The persistence and summary loops share one connection; concurrent use
     from two threads raised InterfaceError/OperationalError."""
-    import asyncio
-    import threading
     store = SQLiteStateStore(tmp_path / "s.db")
     threads = set()
     active = 0

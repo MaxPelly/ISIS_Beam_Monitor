@@ -16,9 +16,13 @@ from isis_monitor.summary import LAST_SENT_KEY, TargetSummary, compute_summary, 
 # compute_summary
 # ---------------------------------------------------------------------------
 
-def test_compute_summary_empty_history_returns_zeroed_summary():
-    result = compute_summary({"TS1": []}, since=datetime.now(timezone.utc))
-    assert result["TS1"] == TargetSummary(0.0, 0, timedelta(0), "", coverage_pct=0.0)
+def test_compute_summary_uptime_counts_on_samples_in_the_window():
+    t0 = datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc)
+    assert compute_summary({"TS1": []}, since=t0)["TS1"] == TargetSummary(0.0, 0, timedelta(0), "", coverage_pct=0.0)
+    in_and_out = [(t0, 10.0, "off"), (t0 + timedelta(hours=25), 10.0, "high")]
+    assert compute_summary({"TS1": in_and_out}, since=t0 + timedelta(hours=24))["TS1"].uptime_pct == 100.0
+    unknown = [(t0, 10.0, "unknown"), (t0 + timedelta(minutes=1), 10.0, "unknown")]
+    assert compute_summary({"TS1": unknown}, since=t0)["TS1"].uptime_pct == 0.0  # unknown counts as off
 
 
 def test_compute_summary_counts_trips_and_longest_streak():
@@ -40,16 +44,6 @@ def test_compute_summary_sparkline_spans_the_whole_day():
                for i in range(1440)]
     sparkline = compute_summary({"TS1": samples}, since=t0)["TS1"].sparkline
     assert sparkline == " " * 30 + "█" * 30
-
-
-def test_compute_summary_filters_by_since():
-    t0 = datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc)
-    samples = [
-        (t0, 10.0, "off"),
-        (t0 + timedelta(hours=25), 10.0, "high"),
-    ]
-    summary = compute_summary({"TS1": samples}, since=t0 + timedelta(hours=24))["TS1"]
-    assert summary.uptime_pct == 100.0  # only the second sample is within the window
 
 
 def test_compute_summary_coverage_counts_missing_samples():
@@ -79,13 +73,6 @@ def test_compute_summary_on_streak_does_not_span_a_feed_gap():
     # A restart's short gap (a couple of missed samples) doesn't end it.
     restart = [(ts + timedelta(minutes=63), cur, power) for ts, cur, power in hour_on]
     assert compute_summary({"TS1": hour_on + restart}, since=t0)["TS1"].longest_on_streak == timedelta(hours=2, minutes=3)
-
-
-def test_compute_summary_treats_unknown_as_off():
-    t0 = datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc)
-    samples = [(t0, 10.0, "unknown"), (t0 + timedelta(minutes=1), 10.0, "unknown")]
-    summary = compute_summary({"TS1": samples}, since=t0)["TS1"]
-    assert summary.uptime_pct == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -130,45 +117,36 @@ def noon():
     return datetime(2026, 6, 1, 12, 0, tzinfo=get_timezone())
 
 
-async def test_daily_summary_loop_sends_one_card_per_target_at_summary_time(store):
+@pytest.mark.parametrize("summary_time, cards", [
+    ("12:00", 3),
+    # A slow tick that steps past the target minute must still send today's
+    # summary rather than silently waiting for tomorrow (regression guard).
+    ("11:59", 3),
+    ("12:01", 0),
+])
+async def test_daily_summary_loop_sends_one_card_per_target_once_summary_time_is_reached(store, summary_time, cards):
     state = DaemonState()
-    t0 = datetime.now(timezone.utc) - timedelta(hours=1)
     for beam in state.history:
-        state.history[beam].append((t0, 10.0, "high"))
-    channel = await run_summary(store, state)
-    # One card per target, even though multiple ticks elapsed — last_sent_date dedupes to once/day.
-    assert {c.args[0].beam for c in channel.broadcast.call_args_list} == {"TS1", "TS2", "Muons"}
-    assert channel.broadcast.call_count == 3
+        state.history[beam].append((noon() - timedelta(hours=1), 10.0, "high"))
+    channel = await run_summary(store, state, now=noon(), summary_time=summary_time)
+    # Once per target, though several ticks elapsed: the last-sent date dedupes to once a day.
+    assert channel.broadcast.call_count == cards
+    assert {c.args[0].beam for c in channel.broadcast.call_args_list} == ({"TS1", "TS2", "Muons"} if cards else set())
 
 
-async def test_daily_summary_loop_fires_even_if_the_exact_minute_was_missed(store):
-    """A slow tick that steps past the target minute must still send today's
-    summary rather than silently waiting for tomorrow (regression guard)."""
-    channel = await run_summary(store, now=noon(), summary_time="11:59")
-    assert channel.broadcast.call_count == 3
-
-
-async def test_daily_summary_loop_does_not_fire_before_summary_time(store):
-    (await run_summary(store, now=noon(), summary_time="12:01")).broadcast.assert_not_called()
-
-
-async def test_daily_summary_not_resent_after_restart_same_day(tmp_path):
-    """The last-sent date is persisted, so restarting the daemon after
-    summary_time doesn't send the day's cards a second time."""
+async def test_daily_summary_last_sent_date_is_kept_across_restarts(tmp_path):
+    """Restarting the daemon after summary_time doesn't send the day's cards a
+    second time; a corrupt saved date is taken as not sent today."""
     now = datetime.now(timezone.utc)
-    for expected in (3, 0):
-        store = SQLiteStateStore(tmp_path / "summary.db")
-        assert (await run_summary(store, now=now)).broadcast.call_count == expected
-        store.close()
-
-
-async def test_daily_summary_tolerates_a_corrupt_last_sent_date(store):
+    store = SQLiteStateStore(tmp_path / "summary.db")
     store.upsert_snapshot(LAST_SENT_KEY, "yesterday-ish")
     store.commit()
-    now = datetime.now(timezone.utc)
-    channel = await run_summary(store, now=now)
-    assert channel.broadcast.call_count == 3
-    assert store.load_snapshot(LAST_SENT_KEY) == now.astimezone(get_timezone()).date().isoformat()
+    for expected in (3, 0):
+        assert (await run_summary(store, now=now)).broadcast.call_count == expected
+        assert store.load_snapshot(LAST_SENT_KEY) == now.astimezone(get_timezone()).date().isoformat()
+        store.close()
+        store = SQLiteStateStore(tmp_path / "summary.db")
+    store.close()
 
 
 async def test_daily_summary_counts_runs_only_on_instruments_using_that_target(store):

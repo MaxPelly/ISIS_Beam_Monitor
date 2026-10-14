@@ -17,7 +17,7 @@ def encode(entries) -> str:
     return base64.b64encode(binascii.hexlify(zlib.compress(json.dumps(entries).encode())) + b"\0").decode()
 
 
-def test_parses_the_published_list():
+def test_parses_and_saves_the_published_list():
     listed = parse_instlist(SAMPLE)
     assert len(listed) == 57
     assert listed["PEARL"] == ("IN:PEARL:", "TS1")
@@ -26,6 +26,7 @@ def test_parses_the_published_list():
     assert listed["PEARL_SETUP"] == ("IN:PEARL_5B:", "TS1")  # not always IN:<NAME>:
     assert listed["HIFI-CRYOMAG"] == ("IN:HIFI-C11:", "Muons")
     assert all(target in ("TS1", "TS2", "Muons", None) for _, target in listed.values())
+    assert from_snapshot(json.loads(json.dumps(to_snapshot(listed)))) == listed  # saved and restored
 
 
 @pytest.mark.parametrize("payload", [
@@ -42,7 +43,7 @@ def test_unreadable_lists_are_empty_with_a_warning(payload, caplog):
     assert "Unreadable CS:INSTLIST" in caplog.text
 
 
-def test_unusable_entries_are_skipped():
+def test_unusable_entries_are_skipped_when_parsing_or_restoring():
     listed = parse_instlist(encode([
         {"name": "pearl", "pvPrefix": "IN:PEARL:", "targetStation": "MISC"},
         {"name": "BAD", "pvPrefix": "IN:BAD\nX:"},
@@ -50,11 +51,6 @@ def test_unusable_entries_are_skipped():
         "junk",
     ]))
     assert listed == {"PEARL": ("IN:PEARL:", None)}
-
-
-def test_snapshot_round_trip_skips_malformed_entries():
-    listed = parse_instlist(SAMPLE)
-    assert from_snapshot(json.loads(json.dumps(to_snapshot(listed)))) == listed
     assert from_snapshot({"A": ["IN:A:", "TS3"], "B": ["no colon", None], "C": "x", "D": ["IN:D:", None]}) == {
         "D": ("IN:D:", None)
     }

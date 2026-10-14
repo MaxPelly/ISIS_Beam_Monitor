@@ -21,14 +21,20 @@ def tracker(name="PEARL", **config):
     return InstrumentTracker(InstrumentConfig(name, 130.0, "TS1", **config), fake_channel(), lambda b: "high", 15)
 
 
-def test_beams_report_live_values_and_unknown_ones_as_unknown():
+def test_beams_news_and_health():
     state = state_with()
+    assert build(state, {}, 60, NOW)["mcr"] == {"news": "", "seen_at": None}  # not the placeholder
     state.update_beam_state("TS1", 152.34, "high")
+    state.update_mcr_news("Beam on.")
+    state.update_health("beam", "connected")
     status = build(state, {"TS1": NOW - timedelta(hours=1)}, 60, NOW)
     ts1, ts2 = status["beams"][:2]
     assert (ts1["current"], ts1["power"], ts1["since"]) == (152.34, "high", "2026-10-13T11:00:00+00:00")
     assert (ts2["current"], ts2["power"], ts2["since"]) == (None, "unknown", None)  # not 0: no reading yet
     assert [b["name"] for b in status["beams"]] == ["TS1", "TS2", "Muons"]
+    assert status["mcr"]["news"] == "Beam on." and status["mcr"]["seen_at"]
+    assert status["health"]["beam"] == "connected"
+    assert (status["v"], status["kind"], status["interval_s"]) == (1, "status", 60)
 
 
 def test_history_is_24h_in_10_minute_bins_on_fixed_boundaries():
@@ -51,30 +57,19 @@ def test_instruments_come_from_the_trackers():
     pearl.state.run_name, pearl.state.current_counts, pearl.state.rb_number = "x" * 300, 65.256, "2610403"
     pearl.runs.run_number, pearl.runs.run_state = "00127921", "RUNNING"  # as the PV pads it
     wish = tracker("WISH")
-    (p, w) = build(state_with(pearl, wish), {}, 60, NOW)["instruments"]
+    # E.g. MERLIN's IOC or the gateway is down: not the last counts as if live.
+    merlin = tracker("MERLIN")
+    merlin.state.current_counts = 50.0
+    merlin.runs.run_state = ""
+    (p, w, m) = build(state_with(pearl, wish, merlin), {}, 60, NOW)["instruments"]
     assert p == {"name": "PEARL", "beam": "TS1", "run_number": "127921", "run_state": "RUNNING",
                  "title": "x" * MAX_TITLE, "started_at": None, "counts": 65.26, "target": 130.0, "auto": True,
                  "rb": "2610403"}
     assert w["counts"] is None  # nothing read yet
+    assert m["counts"] is None  # while its run state is unknown
 
 
-def test_instruments_past_the_push_sites_limit_are_left_out():
-    trackers = [tracker(f"I{n}") for n in range(MAX_INSTRUMENTS + 1)]
-    assert len(build(state_with(*trackers), {}, 60, NOW)["instruments"]) == MAX_INSTRUMENTS
-
-
-def test_mcr_news_and_health():
-    state = state_with()
-    assert build(state, {}, 60, NOW)["mcr"] == {"news": "", "seen_at": None}  # not the placeholder
-    state.update_mcr_news("Beam on.")
-    state.update_health("beam", "connected")
-    status = build(state, {}, 60, NOW)
-    assert status["mcr"]["news"] == "Beam on." and status["mcr"]["seen_at"]
-    assert status["health"]["beam"] == "connected"
-    assert (status["v"], status["kind"], status["interval_s"]) == (1, "status", 60)
-
-
-def test_a_long_status_stays_well_under_the_push_sites_limit():
+def test_a_long_status_stays_within_the_push_sites_limits():
     """20 instruments with the longest titles and news; the site takes up to 64 KB."""
     trackers = [tracker(f"INSTRUMENT{n:02d}") for n in range(20)]
     for t in trackers:
@@ -86,6 +81,10 @@ def test_a_long_status_stays_well_under_the_push_sites_limit():
             state.history[name].append((NOW - timedelta(minutes=minutes), 123.456, "medium"))
     assert len(json.dumps(build(state, {}, 60, NOW), ensure_ascii=False).encode()) < 48 * 1024
 
+    # Instruments past the site's limit are left out.
+    trackers = [tracker(f"I{n}") for n in range(MAX_INSTRUMENTS + 1)]
+    assert len(build(state_with(*trackers), {}, 60, NOW)["instruments"]) == MAX_INSTRUMENTS
+
 
 # ---------------------------------------------------------------------------
 # StatusPublisher
@@ -95,10 +94,10 @@ import asyncio  # noqa: E402
 import contextlib  # noqa: E402
 import hashlib  # noqa: E402
 import hmac  # noqa: E402
+import itertools  # noqa: E402
 from unittest.mock import MagicMock, patch  # noqa: E402
 
 import aiohttp  # noqa: E402
-import pytest  # noqa: E402
 from aiohttp import web  # noqa: E402
 from aiohttp.test_utils import TestServer  # noqa: E402
 
@@ -141,6 +140,7 @@ async def publishing(url, interval=3600.0, build=lambda: {"n": 1}, debounce=0.02
 
 
 async def test_the_status_is_sent_signed_at_start_and_every_interval():
+    """To <ingest URL>/status (the receiver serves only that), as is the next test's with a trailing slash."""
     async with receiver() as server:
         async with publishing(str(server.make_url("/ingest")), interval=0.02):
             await wait_until(lambda: len(server.received) >= 3)
@@ -177,12 +177,13 @@ def test_refusals_are_warned_of_once_and_recovery_noted(caplog):
     assert caplog.text.count("takes the status again") == 1
 
 
-async def test_a_failing_build_is_logged_and_retried(caplog):
-    build = MagicMock(side_effect=[RuntimeError("bug"), {"n": 2}])
+async def test_a_failing_build_or_unencodable_status_is_logged_and_retried(caplog):
+    # (A lone surrogate, e.g. from a bug, can't be encoded.)
+    build = MagicMock(side_effect=itertools.chain([RuntimeError("bug"), {"t": "\ud800"}], itertools.repeat({"n": 2})))
     async with receiver() as server:
-        async with publishing(str(server.make_url("/ingest")), interval=0.05, build=build):
+        async with publishing(str(server.make_url("/ingest")), interval=0.02, build=build):
             await wait_until(lambda: server.received)
-    assert "Failed to send the status" in caplog.text and server.received[0] == {"n": 2}
+    assert caplog.text.count("Failed to send the status") == 2 and server.received[0] == {"n": 2}
 
 
 def test_significant_changes_poke_the_publisher():
@@ -197,18 +198,14 @@ def test_significant_changes_poke_the_publisher():
     state.record_run_completed("MERLIN", NOW, "1", 5.0)  # not configured: no
     assert poke.call_count == 4
 
-
-@pytest.mark.parametrize("url", ["http://127.0.0.1:8765/ingest", "http://127.0.0.1:8765/ingest/"])
-def test_the_status_goes_to_the_ingest_url_plus_status(url):
-    assert StatusPublisher(url, SECRET, dict, 60, MagicMock()).url == "http://127.0.0.1:8765/ingest/status"
-
-
-async def test_an_unencodable_status_doesnt_stop_the_publisher(caplog):
-    build = MagicMock(side_effect=[{"t": "\ud800"}, {"n": 3}])  # e.g. a lone surrogate from a bug
-    async with receiver() as server:
-        async with publishing(str(server.make_url("/ingest")), interval=0.05, build=build):
-            await wait_until(lambda: server.received)
-    assert server.received[0] == {"n": 3}
+    # An instrument's run state and number, on a change.
+    sink = MagicMock(spec=DaemonState())
+    pearl = InstrumentTracker(InstrumentConfig("PEARL", 130.0, "TS1"), fake_channel(), lambda b: "high", 15, sink=sink)
+    for text in ("RUNNING", "RUNNING", "ENDING"):
+        pearl.handle_run_state(text)
+    for text in ("00010", "10", "00011"):
+        pearl.handle_run_number(text)
+    assert sink.on_change.call_count == 4
 
 
 def test_every_string_fits_the_push_sites_limits():
@@ -224,24 +221,6 @@ def test_every_string_fits_the_push_sites_limits():
     assert (len(inst["name"]), len(inst["beam"]), len(inst["run_number"]), len(inst["run_state"]),
             len(inst["rb"]), len(inst["title"]), len(status["mcr"]["news"])) == (32, 16, 32, 32, 32, 200, 1000)
     json.dumps(status, ensure_ascii=False).encode()  # no lone surrogates
-
-
-def test_counts_are_unknown_while_the_run_state_is():
-    """E.g. the instrument's IOC or the gateway is down: not the last counts as if live."""
-    pearl = tracker()
-    pearl.state.current_counts = 50.0
-    pearl.runs.run_state = ""
-    assert build(state_with(pearl), {}, 60, NOW)["instruments"][0]["counts"] is None
-
-
-async def test_run_state_and_number_changes_poke_the_publisher():
-    sink = MagicMock(spec=DaemonState())
-    pearl = InstrumentTracker(InstrumentConfig("PEARL", 130.0, "TS1"), fake_channel(), lambda b: "high", 15, sink=sink)
-    for text in ("RUNNING", "RUNNING", "ENDING"):
-        pearl.handle_run_state(text)
-    for text in ("00010", "10", "00011"):
-        pearl.handle_run_number(text)
-    assert sink.on_change.call_count == 4
 
 
 def test_render_text_shows_beams_instruments_and_news_in_local_time():

@@ -10,32 +10,44 @@ from isis_monitor.ipc import SERVER_LINE_LIMIT, IPCServer, ipc_request
 from isis_monitor.tests.helpers import never_answers, raw_request, serving, wait_until
 
 
-async def test_ipc_command(tmp_path):
-    async with serving(tmp_path) as server:
-        reply = await ipc_request(server.socket_path, {"method": "command", "name": "force_reconnect_all"})
-    assert reply == {"ok": True, "result": {"handled": "force_reconnect_all"}}
+async def test_requests_are_routed_to_their_handlers(tmp_path):
+    config_handler = AsyncMock(return_value={"config": {"x": 1}})
+    async with serving(tmp_path, config_handler=config_handler, status=lambda: {"kind": "status"}) as server:
+        command = await ipc_request(server.socket_path, {"method": "command", "name": "force_reconnect_all"})
+        get = await ipc_request(server.socket_path, {"method": "get_config"})
+        update = await ipc_request(server.socket_path, {"method": "update_config", "settings": {"a": "b"}})
+        status = await ipc_request(server.socket_path, {"method": "get_status"})
+        await wait_until(lambda: not server._clients)  # each on a connection of its own, now closed
+    assert command == {"ok": True, "result": {"handled": "force_reconnect_all"}}
+    assert get == {"ok": True, "config": {"x": 1}}
+    assert config_handler.await_args_list[0].args == ("get_config", {"method": "get_config"})
+    assert config_handler.await_args_list[1].args[1]["settings"] == {"a": "b"}
+    assert update["ok"] is True
+    assert status == {"ok": True, "status": {"kind": "status"}}
 
 
-async def test_ipc_malformed_json_and_oversized_payload(tmp_path):
+@pytest.mark.parametrize("line, error", [
+    (b"{bad_json\n", "invalid_json"),
+    (b"[" * 50_000 + b"\n", "invalid_json"),  # RecursionError
+    (b'{"method": "\xff"}\n', "invalid_json"),  # not UTF-8
+    (b"[1, 2]\n", "invalid_request"),
+    (b'{"method": "nope"}\n', "unknown_method"),
+    (b'{"method": "get_config"}\n', "unknown_method"),  # without a config handler
+    (b'{"method": "get_status"}\n', "unknown_method"),  # without a status builder
+])
+async def test_bad_requests_get_an_error_reply(tmp_path, line, error):
     async with serving(tmp_path) as server:
-        reply = await raw_request(server, b"{bad_json\n")
-        assert reply["ok"] is False and reply["error"] == "invalid_json"
-        assert (await raw_request(server, b"[" * 50_000 + b"\n"))["error"] == "invalid_json"  # RecursionError
-        # A request line over SERVER_LINE_LIMIT closes that connection.
+        assert await raw_request(server, line) == {"ok": False, "error": error}
+
+
+async def test_an_oversized_request_closes_the_connection(tmp_path):
+    async with serving(tmp_path) as server:
         reader, writer = await asyncio.open_unix_connection(str(server.socket_path))
         writer.write(b'{"padding": "' + b"A" * (SERVER_LINE_LIMIT + 10) + b'"}\n')
         await writer.drain()
         assert await asyncio.wait_for(reader.read(), timeout=1.0) == b""
         writer.close()
         await writer.wait_closed()
-
-
-async def test_invalid_and_unknown_requests(tmp_path):
-    async with serving(tmp_path) as server:
-        not_object = await raw_request(server, b"[1, 2]\n")
-        unknown = await raw_request(server, b'{"method": "nope"}\n')
-    assert not_object == {"ok": False, "error": "invalid_request"}
-    assert unknown == {"ok": False, "error": "unknown_method"}
 
 
 async def test_failing_command_returns_error_and_keeps_connection(tmp_path):
@@ -52,41 +64,8 @@ async def test_failing_command_returns_error_and_keeps_connection(tmp_path):
     assert status == {"ok": True, "status": {"still": "here"}}
 
 
-async def test_start_replaces_stale_socket_and_restricts_permissions(tmp_path):
-    stale = tmp_path / "d.sock"
-    stale.write_text("left over from a crash")
-    async with serving(tmp_path) as server:
-        assert stat.S_ISSOCK(server.socket_path.stat().st_mode)
-        assert stat.S_IMODE(server.socket_path.stat().st_mode) == 0o600
-
-
-async def test_connection_accepted_during_shutdown_is_closed(tmp_path):
-    server = IPCServer(tmp_path / "d.sock", AsyncMock())
-    server._closing = True
-    writer = MagicMock()
-    await server._handle_client(MagicMock(), writer)
-    writer.close.assert_called_once()
-    assert not server._clients
-
-
-async def test_config_methods_are_routed_to_config_handler(tmp_path):
-    config_handler = AsyncMock(return_value={"config": {"x": 1}})
-    async with serving(tmp_path, config_handler=config_handler) as server:
-        get = await ipc_request(server.socket_path, {"method": "get_config"})
-        update = await ipc_request(server.socket_path, {"method": "update_config", "settings": {"a": "b"}})
-    assert get["config"] == {"x": 1} and get["ok"] is True
-    assert config_handler.await_args_list[0].args == ("get_config", {"method": "get_config"})
-    assert config_handler.await_args_list[1].args[1]["settings"] == {"a": "b"}
-    assert update["ok"] is True
-
-
-async def test_config_methods_unknown_without_config_handler(tmp_path):
-    async with serving(tmp_path) as server:
-        reply = await ipc_request(server.socket_path, {"method": "get_config"})
-    assert (reply["ok"], reply["error"]) == (False, "unknown_method")
-
-
-async def test_socket_is_created_owner_only(tmp_path):
+async def test_start_replaces_a_stale_socket_with_an_owner_only_one(tmp_path):
+    (tmp_path / "d.sock").write_text("left over from a crash")
     modes = []
     real_start = asyncio.start_unix_server
 
@@ -98,12 +77,22 @@ async def test_socket_is_created_owner_only(tmp_path):
     old_umask = os.umask(0o022)
     try:
         with patch("isis_monitor.ipc.asyncio.start_unix_server", side_effect=spy):
-            async with serving(tmp_path):
-                pass
+            async with serving(tmp_path) as server:
+                assert stat.S_ISSOCK(server.socket_path.stat().st_mode)
         assert os.umask(0o022) == 0o022  # restored
     finally:
         os.umask(old_umask)
-    assert modes == [0o600]
+    assert modes == [0o600]  # from creation, not a chmod afterwards
+
+
+async def test_connection_accepted_during_shutdown_is_closed(tmp_path):
+    server = IPCServer(tmp_path / "d.sock", AsyncMock())
+    server._closing = True
+    writer = MagicMock()
+    await server._handle_client(MagicMock(), writer)
+    writer.close.assert_called_once()
+    assert not server._clients
+    await server.stop()  # never started: nothing to close
 
 
 async def test_stop_does_not_hang_on_a_client_that_stopped_reading(tmp_path):
@@ -140,43 +129,28 @@ async def test_stop_still_delivers_a_reply_already_written(tmp_path):
     assert reply["result"] == {"restart": "ok"}
 
 
-async def test_ipc_request_surfaces_garbage_from_the_daemon(tmp_path):
-    garbage = b"this is not json\n"
-
-    async def garbage_server(reader, writer):
-        writer.write(garbage)
-        await writer.drain()
-        writer.close()
-
-    srv = await asyncio.start_unix_server(garbage_server, path=str(tmp_path / "g.sock"))
-    async with srv:
-        with pytest.raises(json.JSONDecodeError):
-            await ipc_request(tmp_path / "g.sock", {"method": "get_status"})
-        garbage = b"[]\n"
-        with pytest.raises(ValueError, match="Not a reply"):
-            await ipc_request(tmp_path / "g.sock", {"method": "get_status"})
-
-
-async def test_ipc_request_gets_the_status_on_a_connection_of_its_own(tmp_path):
-    async with serving(tmp_path) as server:
-        server.status = lambda: {"kind": "status"}
-        assert await ipc_request(server.socket_path, {"method": "get_status"}) == {"ok": True, "status": {"kind": "status"}}
-        await wait_until(lambda: not server._clients)  # the connection's closed
-    async with serving(tmp_path) as server:  # without a status builder
-        assert (await ipc_request(server.socket_path, {"method": "get_status"}))["error"] == "unknown_method"
-
-
-async def test_ipc_request_fails_without_an_answer(tmp_path):
+async def test_ipc_request_fails_without_a_proper_answer(tmp_path):
     with pytest.raises(FileNotFoundError):
         await ipc_request(tmp_path / "none.sock", {"method": "get_status"})
 
-    async def hang_up(_reader, writer):
+    reply = b""
+
+    async def scripted(reader, writer):
+        await reader.readline()
+        writer.write(reply)
+        await writer.drain()
         writer.close()
 
-    server = await asyncio.start_unix_server(hang_up, path=str(tmp_path / "h.sock"))
-    async with server:
-        with pytest.raises(ConnectionError):  # reset, or closed without answering
-            await ipc_request(tmp_path / "h.sock", {"method": "get_status"})
+    async with await asyncio.start_unix_server(scripted, path=str(tmp_path / "g.sock")):
+        with pytest.raises(ConnectionError, match="without answering"):
+            await ipc_request(tmp_path / "g.sock", {"method": "get_status"})
+        reply = b"this is not json\n"
+        with pytest.raises(json.JSONDecodeError):
+            await ipc_request(tmp_path / "g.sock", {"method": "get_status"})
+        reply = b"[]\n"
+        with pytest.raises(ValueError, match="Not a reply"):
+            await ipc_request(tmp_path / "g.sock", {"method": "get_status"})
+
     with patch("isis_monitor.ipc.STOP_FLUSH_TIMEOUT", 0.05):
         async with serving(tmp_path, command_handler=never_answers) as server:
             with pytest.raises(TimeoutError, match="No reply to 'command' within"):
@@ -191,8 +165,6 @@ async def test_connections_from_other_users_are_refused(tmp_path, caplog):
                 await ipc_request(server.socket_path, {"method": "command", "name": "x"})
     assert f"Refused an IPC connection from user {os.getuid()}" in caplog.text
 
-
-async def test_the_peer_check_is_skipped_where_unsupported(tmp_path):
-    with patch("isis_monitor.ipc.socket", spec=[]):  # no SO_PEERCRED
+    with patch("isis_monitor.ipc.socket", spec=[]):  # no SO_PEERCRED: the check is skipped
         async with serving(tmp_path) as server:
             assert (await ipc_request(server.socket_path, {"method": "command", "name": "x"}))["ok"]
