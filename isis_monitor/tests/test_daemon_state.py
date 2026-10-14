@@ -68,6 +68,7 @@ def test_restore_from_snapshot():
     None,
     "",
     "{bad_json: True",
+    "[]",  # JSON, but not a snapshot
     json.dumps({"mcr_news": "Old News"}),  # from before run completions were saved
     json.dumps({"run_completions": {"not": "a list"}}),
 ])

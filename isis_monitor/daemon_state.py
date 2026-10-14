@@ -163,6 +163,8 @@ class DaemonState:
         try:
             snap = json.loads(raw)
         except json.JSONDecodeError:
+            snap = None
+        if not isinstance(snap, dict):
             logger.warning("Corrupt daemon state snapshot, starting fresh.")
             return
         beam_states = snap.get("beam_states", {})
