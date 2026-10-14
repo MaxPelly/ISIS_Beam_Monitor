@@ -152,13 +152,13 @@ async def state_persistence_loop(config, state: DaemonState, store: SQLiteStateS
             state.trim_history_before(ts - HISTORY_WINDOW)
             snap = json.dumps(state.snapshot())
 
-            def _persist():
+            def _persist(rows, cutoff, snap):
                 store.write_samples(rows)
                 store.prune_older_than(cutoff)
                 store.upsert_snapshot("daemon_state", snap)
                 store.commit()
 
-            await store.run(_persist)
+            await store.run(_persist, rows, cutoff, snap)
         except Exception:  # not just sqlite3.Error: no failure here may stop the daemon
             logger.exception("Failed to persist daemon state; will retry next interval")
 
@@ -303,7 +303,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
         # within one CLOSE_TIMEOUT.
         notifiers = dict.fromkeys(n for ch in channels for n in ch.notifiers)
         results = await asyncio.gather(*(n.close(CLOSE_TIMEOUT) for n in notifiers), return_exceptions=True)
-        for notifier, result in zip(notifiers, results):
+        for notifier, result in zip(notifiers, results, strict=True):
             if isinstance(result, Exception):
                 logger.error(f"Closing {type(notifier).__name__} failed: {result!r}")
         await session.close()
@@ -320,4 +320,4 @@ def restart_process() -> None:
         os.execve(sys.executable, [sys.executable, *sys.orig_argv[1:]], {**os.environ, RESTARTED_ENV: "1"})
     except OSError as exc:  # e.g. the interpreter was removed by a venv rebuild
         print(f"Failed to restart daemon: {exc}", file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from None

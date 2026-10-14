@@ -61,7 +61,7 @@ def _fit_rate(samples: Sequence[Tuple[datetime, float]]) -> float:
     denom = sum((x - mean_x) ** 2 for x in xs)
     if denom == 0:
         return 0.0
-    numer = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    numer = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys, strict=True))
     return numer / denom
 
 

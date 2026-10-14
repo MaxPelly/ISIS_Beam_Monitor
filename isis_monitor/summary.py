@@ -94,7 +94,7 @@ def _downsample(values: List[float], n: int) -> List[float]:
     if len(values) <= n:
         return values
     bounds = [len(values) * i // n for i in range(n + 1)]
-    return [sum(values[a:b]) / (b - a) for a, b in zip(bounds, bounds[1:])]
+    return [sum(values[a:b]) / (b - a) for a, b in zip(bounds, bounds[1:], strict=False)]
 
 
 def _instruments_by_channel(state: DaemonState) -> Dict[str, List[str]]:

@@ -21,6 +21,7 @@ dev = [
     "pytest-asyncio",
     "pytest-mock",
     "pytest-cov",
+    "ruff",
 ]
 
 [tool.setuptools.packages.find]
@@ -34,3 +35,10 @@ version = {attr = "isis_monitor.__version__"}
 asyncio_mode = "auto"
 # Keep the push_site submodule's tests (and dependencies) out of this run.
 testpaths = ["isis_monitor/tests"]
+
+[tool.ruff]
+extend-exclude = ["push_site"]  # a separate project, with its own checks
+
+[tool.ruff.lint]
+select = ["E9", "F", "I", "B"]
+ignore = ["B027"]  # Notifier's hooks are no-ops unless a subclass needs them

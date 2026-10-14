@@ -43,7 +43,7 @@ def make_status_session(*statuses: int, headers=None):
         for status in statuses
     ]
     contexts = [MagicMock() for _ in statuses]
-    for ctx, resp in zip(contexts, session.responses):
+    for ctx, resp in zip(contexts, session.responses, strict=True):
         ctx.__aenter__.return_value = resp
     session.post.side_effect = contexts
     return session

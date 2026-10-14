@@ -138,7 +138,7 @@ def main():
             config.push_secret = read_push_secret(config)
     except ConfigError as e:
         print(f"Configuration error: {e}", file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from None
 
     set_timezone(config.notifications_timezone)
 
@@ -164,10 +164,10 @@ def main():
             asyncio.run(run_reconnect(config))
     except LockHeldError as exc:  # anything else keeps its traceback
         print(str(exc), file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from None
     except (KeyboardInterrupt, asyncio.CancelledError):
         if args.mode != "daemon":
-            raise SystemExit(130)  # interrupted, like any command
+            raise SystemExit(130) from None  # interrupted, like any command
         print("\nStopping monitors...")
 
 

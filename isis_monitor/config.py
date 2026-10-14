@@ -364,11 +364,11 @@ def _validate(config: AppConfig, config_path: Path) -> None:
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
             raise ValueError
     except ValueError:
-        raise ConfigError(f"[NOTIFICATIONS] summary_time must be 'HH:MM', got '{config.summary_time}'")
+        raise ConfigError(f"[NOTIFICATIONS] summary_time must be 'HH:MM', got '{config.summary_time}'") from None
     try:
         ZoneInfo(config.notifications_timezone)
     except (KeyError, ValueError, OSError):  # ZoneInfoNotFoundError is a KeyError
-        raise ConfigError(f"[NOTIFICATIONS] timezone '{config.notifications_timezone}' is not a known timezone")
+        raise ConfigError(f"[NOTIFICATIONS] timezone '{config.notifications_timezone}' is not a known timezone") from None
     for name, (low, high, low_excluded) in _BOUNDS.items():
         value = getattr(config, name)
         if not (low < value if low_excluded else low <= value) or not value <= high:  # also rejects nan
