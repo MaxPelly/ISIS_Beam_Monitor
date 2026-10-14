@@ -168,3 +168,19 @@ async def test_connections_from_other_users_are_refused(tmp_path, caplog):
     with patch("isis_monitor.ipc.socket", spec=[]):  # no SO_PEERCRED: the check is skipped
         async with serving(tmp_path) as server:
             assert (await ipc_request(server.socket_path, {"method": "command", "name": "x"}))["ok"]
+
+
+async def test_an_idle_connection_is_closed(tmp_path):
+    with patch("isis_monitor.ipc.IDLE_TIMEOUT", 0.05):
+        async with serving(tmp_path) as server:
+            reader, writer = await asyncio.open_unix_connection(str(server.socket_path))
+            assert await asyncio.wait_for(reader.read(), 2) == b""  # closed, without a request
+            writer.close()
+            await wait_until(lambda: not server._clients)
+
+
+def test_a_peer_that_cant_be_identified_is_refused():
+    from isis_monitor.ipc import _peer_uid
+    writer = MagicMock()
+    writer.get_extra_info.return_value.getsockopt.side_effect = OSError("gone")
+    assert _peer_uid(writer) == -1  # not ours, so refused

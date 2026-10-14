@@ -22,6 +22,9 @@ CLIENT_LINE_LIMIT = 1024 * 1024
 # How long stop() lets clients take already-buffered replies before cutting
 # off any that aren't reading (e.g. a suspended terminal), so shutdown can't hang.
 STOP_FLUSH_TIMEOUT = 1.0
+# A connection that sends no request for this long is closed: each command
+# sends its one request straight away.
+IDLE_TIMEOUT = 30.0
 REQUEST_TIMEOUT = 10.0  # a stuck daemon mustn't hang a command
 
 
@@ -101,7 +104,7 @@ class IPCServer:
             return
         self._clients.add(writer)
         try:
-            while line := await reader.readline():
+            while line := await asyncio.wait_for(reader.readline(), IDLE_TIMEOUT):
                 try:
                     req = json.loads(line)
                 except (ValueError, RecursionError):  # e.g. JSONDecodeError, or "[[[[…"
@@ -117,8 +120,8 @@ class IPCServer:
                             reply = {"ok": False, "error": "internal_error", "detail": str(exc)}
                 writer.write(_encode({"ok": True, **reply}))
                 await writer.drain()
-        except (ConnectionError, ValueError):
-            pass  # client went away, or sent a line over SERVER_LINE_LIMIT
+        except (ConnectionError, ValueError, TimeoutError):
+            pass  # client went away, sent a line over SERVER_LINE_LIMIT, or nothing for IDLE_TIMEOUT
         finally:
             self._clients.discard(writer)
             writer.close()
@@ -131,7 +134,11 @@ def _peer_uid(writer: asyncio.StreamWriter) -> Optional[int]:
     sock = writer.get_extra_info("socket")
     if sock is None or not hasattr(socket, "SO_PEERCRED"):
         return None
-    _pid, uid, _gid = struct.unpack("iII", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("iII")))
+    try:
+        creds = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("iII"))
+    except OSError:  # e.g. the peer has already gone
+        return -1  # refused: who it was can't be told
+    _pid, uid, _gid = struct.unpack("iII", creds)
     return uid
 
 
