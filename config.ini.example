@@ -1,101 +1,121 @@
+# ISIS Beam Monitor configuration: the annotated example, with every setting.
+# README.md's "Configuration reference" has the same settings as a table.
+# Commented-out settings show their defaults. A blank number means its default;
+# relative paths are relative to this file's directory. Instruments and
+# [NOTIFICATIONS] can also be edited with `isis-monitor config`, which rewrites
+# this file without its comments (keeping the old one as config.ini.bak).
+
 [DATA]
+# Both URLs below are ISIS's real public endpoints, not placeholders.
+# Required: the MCR news text feed.
 mcr_news_url = https://www.isis.stfc.ac.uk/gallery/beam-status/mcrnews.txt
+# The PVWS WebSocket that beam and instrument PVs are read from. Blank watches
+# neither (with a warning).
 isis_websocket_url = wss://ndaextweb4.nd.rl.ac.uk/pvws/pv
-# Optional link shown as an "Open MCR news" button on MCR notification cards.
+# Link shown as an "Open MCR news" button on MCR cards; blank for none.
 # mcr_page_url = https://www.isis.stfc.ac.uk/gallery/beam-status/
 
 [WEBHOOKS]
-# Webhook URLs should be kept secret. Consider restricting permissions on this file (e.g. chmod 600)
-# to prevent other users from reading it. Leave a URL blank to disable that channel's Teams notifier.
-# Each must be an https:// URL.
-news_teams_url =
+# Teams webhook URLs, each https://; blank disables that channel's Teams cards.
+# Whoever has a URL can post to it, so keep this file private (e.g. chmod 600).
+# Beam cards and the daily summary.
 beam_teams_url =
+# Every instrument's run and experiment cards.
 experiment_teams_url =
+# MCR news cards.
+news_teams_url =
 
 [PUSH]
-# Optional: also POST every notification as HMAC-signed JSON to this URL, e.g. the
-# push_site submodule (mobile push notifications). Leave blank to disable. The
-# daemon's status, for the push site's Status page, goes to this URL plus /status.
-# Plain http:// is fine to this host; to another, use https:// (a warning says so).
+# Optional: also POST every notification as HMAC-signed JSON to this URL, e.g.
+# the push_site submodule (mobile push notifications), and the daemon's status,
+# for the push site's Status page, to this URL plus /status. Blank disables it.
+# http:// or https://; plain http:// to another host is warned about.
 # url = http://127.0.0.1:8765/ingest
-# File holding the shared secret (at least 32 characters, e.g. from
-# `openssl rand -hex 32`); keep it unreadable by others (the push site's
-# README grants its own user read access by ACL). Relative to this file's
-# directory; with the push_site submodule, the site's own copy is shared.
+# Required with url: the file holding the shared secret, 32 to 4096 characters,
+# e.g. `(umask 077; openssl rand -hex 32 > push.secret)`. Only the daemon reads
+# it; keep it unreadable by others (a world-readable file is warned about).
+# With the push_site submodule, use the site's own copy.
 # secret_file = push_site/push.secret
-# Seconds before each attempt is abandoned (0.5-30). A slow receiver only
+# Seconds before each push attempt is abandoned (0.5-30). A slow receiver only
 # delays later push notifications, not the Teams cards.
 # timeout = 2
 
-# One section per monitored instrument; run notifications for all of them go
-# to experiment_teams_url, with the instrument name in the card title.
-#   notify_counts  (required) the run's target, in total µA·h collected; the
-#                  "run about to finish" card is sent [NOTIFICATIONS]
-#                  finish_warning_minutes before it's expected to be reached.
-#                  "auto, <number>" sets each run's target from the median of
-#                  the experiment's recent runs (ignoring very short ones),
-#                  using <number> until at least 3 runs have been seen; the
-#                  history restarts when IN:<NAME>:DAE:_RBNUMBER changes
-#   beam_target    (optional) TS1, TS2 or Muons: the beam reported on run cards and
-#                  checked before stall warnings. By default, the instrument's target
-#                  station from ISIS's instrument list (CS:INSTLIST), or [PVS]
-#                  instrument_target if it isn't listed on TS1, TS2 or MUON
-#   channel        (optional) Teams payload channel for this instrument's cards:
-#                  experiment (default) = "Experiment Updates", or instrument =
-#                  the instrument's name
-# Progress is read from <prefix>DAE:TOTALUAMPS, the run name from <prefix>DAE:WDTITLE,
-# and the run state, run number and RB number from <prefix>DAE:RUNSTATE_STR,
-# RUNNUMBER and _RBNUMBER. The prefix is the instrument's from CS:INSTLIST, which
-# is usually IN:<NAME>: (used until the list arrives, or if it doesn't name it).
-# Instruments and [NOTIFICATIONS] can also be edited with `isis-monitor config`; saving
-# there rewrites this file without its comments (the old file is kept as .bak).
-[INSTRUMENT:PEARL]
-notify_counts = 130
-
-# [INSTRUMENT:WISH]
-# notify_counts = auto, 200
-# beam_target = TS2
-# channel = instrument
-
 [PVS]
-# The beam_target for instruments that don't set one and that CS:INSTLIST doesn't
-# put on TS1, TS2 or MUON (TS1, TS2 or Muons).
+# The beam_target (TS1, TS2 or Muons) of instruments that don't set one and
+# that CS:INSTLIST doesn't put on TS1, TS2 or MUON.
 # instrument_target = TS1
 
+[TIMEOUTS_INTERVALS]
+# Seconds between MCR news polls (5-86400).
+# mcr_poll_interval = 60
+# Seconds before retrying a lost PVWS connection (0.5-3600).
+# beam_reconnect_interval = 5
+# Seconds before a Teams send is abandoned (1-300).
+# webhook_timeout = 10
+
 [DAEMON]
-# Relative paths here and in [LOGGING] and [PUSH] are relative to this file's directory.
-# SQLite database path for persisted history/state.
+# SQLite database of history and state.
 # db_path = beam_monitor.db
-# Unix domain socket the other commands (config, status, stop…) connect to. Keep it out of shared
-# directories such as /tmp, where another user could create it first.
+# Unix socket the other commands (status, config, stop...) reach the daemon on.
+# At most 107 bytes once made absolute: if this checkout is deep, set a short
+# absolute path. Keep it out of shared directories such as /tmp, where another
+# user could create it first.
 # socket_path = isis_beam_monitor.sock
-# Single-instance lock file for daemon mode.
+# Lock that keeps to one daemon per config.
 # lock_file = isis_beam_monitor.lock
 # Seconds between beam history samples, which is also how often state is
 # saved (1-3600).
 # sample_interval = 60
-# Days of beam history kept in the database (1-365); the daemon keeps the last
-# 24h in memory, for the status and the daily summary.
+# Days of beam history kept in the database (whole days, 1-365).
 # retention_days = 7
 
 [LOGGING]
-# The daemon logs to stderr; under systemd, read it with journalctl.
+# DEBUG, INFO, WARNING or ERROR. The daemon logs to stderr; under systemd,
+# read it with `journalctl -u isis-beam-monitor`.
 # level = INFO
-# Also write a rotating log file (5 MB x 3). Not needed under systemd.
+# Also log to this rotating file (5 MB x 3); blank for none. Not needed under systemd.
 # file = monitor.log
 
-[TIMEOUTS_INTERVALS]
-# Seconds between MCR news polls (5-86400).
-# mcr_poll_interval = 60.0
-# Seconds before retrying a lost beam WebSocket (0.5-3600).
-# beam_reconnect_interval = 5.0
-# Seconds before a Teams webhook send is abandoned (1-300).
-# webhook_timeout = 10.0
+[NOTIFICATIONS]
+# IANA timezone for card timestamps and summary_time.
+# timezone = Europe/London
+# Seconds a beam state change must last before its card is sent (0-3600);
+# filters out flickers.
+# debounce_seconds = 20
+# Minutes the µA·h collected can stay flat, while the instrument's beam is on
+# and its DAE running, before a stall warning (above 0, at most 10080 = 7 days).
+# stall_minutes = 15
+# Minutes before a run is expected to reach its notify_counts that the "run
+# about to finish" card is sent (0-10080; 0 = once it's reached).
+# finish_warning_minutes = 15
+# HH:MM, in the timezone above, the daily beam-uptime summary is sent at.
+# summary_time = 08:00
 
-# One optional section per beam target: TS1, TS2 and Muons (any case; Muon works too).
-#   pv          its beam current PV, in µA
-#   boundaries  power cutoffs in µA, in increasing order: off at or below the
-#               first, low below the second, medium below the third, else high
+# One section per monitored instrument (at least one is required). The name may
+# contain letters, digits, _ and -, and is upper-cased. Its PVs are
+# <prefix>DAE:TOTALUAMPS (µA·h collected), WDTITLE, RUNSTATE_STR, RUNNUMBER and
+# _RBNUMBER, where the prefix is the instrument's from CS:INSTLIST, usually
+# IN:<NAME>: (used until the list arrives, or if it doesn't name it).
+[INSTRUMENT:PEARL]
+# Required: the run's target in total µA·h collected; the "run about to finish"
+# card is sent finish_warning_minutes before it's expected to be reached.
+# "auto, 130" sets each run's target from the median of the experiment's recent
+# runs (ignoring very short ones), using 130 until 3 runs have been seen; the
+# history restarts when the experiment's RB number changes.
+notify_counts = 130
+# TS1, TS2 or Muons: the beam reported on run cards and checked before stall
+# warnings. Unset, it's the instrument's target station from CS:INSTLIST, or
+# [PVS] instrument_target if that isn't TS1, TS2 or MUON.
+# beam_target = TS1
+# The Teams payload channel of its cards: experiment = "Experiment Updates",
+# or instrument = the instrument's name.
+# channel = experiment
+
+# One optional section per beam target: TS1, TS2 and Muons (any case; Muon too).
+#   pv          its beam current PV, in µA (each beam's must differ)
+#   boundaries  power cutoffs in µA, 3 numbers in increasing order (equal
+#               allowed): off at or below the first, low below the second,
+#               medium below the third, else high
 [BEAM:TS1]
 # pv = AC:TS1:BEAM:CURR
 # boundaries = 0, 50, 140
@@ -107,18 +127,3 @@ notify_counts = 130
 [BEAM:Muons]
 # pv = AC:MUON:BEAM:CURR
 # boundaries = 0, 2, 5
-
-[NOTIFICATIONS]
-# Timezone for card timestamps and for summary_time.
-# timezone = Europe/London
-# How long a beam state change must persist before a card is sent, in
-# seconds (0-3600). Filters out brief flickers rather than reporting every one.
-# debounce_seconds = 20
-# How many minutes the µA·h collected can stay flat, while the instrument's
-# beam is on, before a stall warning is sent (at most 10080, i.e. 7 days).
-# stall_minutes = 15
-# How many minutes before a run is expected to reach its notify_counts the
-# "run about to finish" card is sent (0-10080; 0 = only once it's passed).
-# finish_warning_minutes = 15
-# Time (HH:MM, in the timezone above) the daily beam-uptime summary is sent at.
-# summary_time = 08:00

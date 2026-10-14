@@ -10,6 +10,7 @@
 Description=ISIS Beam Monitor daemon
 After=network-online.target isis-push-site.service
 # The push site, if installed, is started first so startup cards reach it.
+# Both lines are harmless if it isn't: systemd ignores a missing wanted unit.
 Wants=network-online.target isis-push-site.service
 # Never give up restarting (a start limit could leave it down for good after a
 # brief outage); RestartSteps backs off from 5s to 5min instead.
