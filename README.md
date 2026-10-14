@@ -232,29 +232,39 @@ venv at `.venv`) and `MONITOR_USER`. Without the push site, delete its
 `LoadCredential=` and `SupplementaryGroups=` lines. To install it, run from the
 checkout as the user the daemon should run as:
 
-```bash
-python3 -m venv .venv && .venv/bin/pip install -e .
-sudo install -d -m 700 -o "$USER" -g "$USER" /etc/isis-beam-monitor
-install -m 600 config.ini.example /etc/isis-beam-monitor/config.ini   # then edit it
-sed -e "/^#/!s|/path/to/ISIS_Beam_Monitor|$PWD|g" -e "/^#/!s|MONITOR_USER|$USER|g" \
-  deploy/isis-beam-monitor.service | sudo tee /etc/systemd/system/isis-beam-monitor.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now isis-beam-monitor.service
-sudo systemctl status isis-beam-monitor.service
-```
+1. Install the code and the config:
+   ```bash
+   python3 -m venv .venv && .venv/bin/pip install -e .
+   sudo install -d -m 700 -o "$USER" -g "$USER" /etc/isis-beam-monitor
+   install -m 600 config.ini.example /etc/isis-beam-monitor/config.ini
+   ```
+2. Fill in `/etc/isis-beam-monitor/config.ini`, putting the daemon's files where the
+   unit lets it write:
+   ```ini
+   [DAEMON]
+   db_path = /var/lib/isis-beam-monitor/beam_monitor.db
+   socket_path = /run/isis-beam-monitor/isis_beam_monitor.sock
+   lock_file = /run/isis-beam-monitor/isis_beam_monitor.lock
 
-In `config.ini`, put the daemon's files where the unit lets it write:
+   [LOGGING]
+   # Optional: journald has the log too
+   file = /var/log/isis-beam-monitor/monitor.log
+   ```
+   Moving an existing install? Stop it first and copy its `beam_monitor.db` into
+   `/var/lib/isis-beam-monitor/` (owned by the daemon's user), or the daemon starts
+   afresh, without its history or the runs and experiments under way.
+3. Install the unit and start it:
+   ```bash
+   sed -e "/^#/!s|/path/to/ISIS_Beam_Monitor|$PWD|g" -e "/^#/!s|MONITOR_USER|$USER|g" \
+     deploy/isis-beam-monitor.service | sudo tee /etc/systemd/system/isis-beam-monitor.service
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now isis-beam-monitor.service
+   sudo systemctl status isis-beam-monitor.service
+   ```
 
-```ini
-[DAEMON]
-db_path = /var/lib/isis-beam-monitor/beam_monitor.db
-socket_path = /run/isis-beam-monitor/isis_beam_monitor.sock
-lock_file = /run/isis-beam-monitor/isis_beam_monitor.lock
-
-[LOGGING]
-# Optional: journald has the log too
-file = /var/log/isis-beam-monitor/monitor.log
-```
+The commands (`status`, `config`, `stop`) find the daemon through the paths in that
+config, so they work only while it runs under systemd, which creates
+`/run/isis-beam-monitor`.
 
 ### Troubleshooting
 
@@ -262,7 +272,7 @@ file = /var/log/isis-beam-monitor/monitor.log
 - **`Configuration error: …`**: the named setting is missing or out of range; see the [configuration reference](#configuration-reference).
 - **`[DAEMON] socket_path … is longer than a Unix socket path can be`**: Unix socket paths are limited to 107 bytes, and a relative `socket_path` is made absolute from the config file's directory, so a deep checkout can exceed it. Set a shorter absolute `socket_path`.
 - **`Lock file already held`**: another daemon is running with this config (or another config shares its `lock_file`).
-- **`No answer from the daemon`**: check the daemon is running, and that the command runs as the daemon's user (it refuses any other, even root, e.g. `sudo -u MONITOR_USER .venv/bin/isis-monitor status config.ini`) with the same config file.
+- **`No answer from the daemon`**: check the daemon is running, and that the command runs as the daemon's user (it refuses any other, even root, e.g. `sudo -u MONITOR_USER /path/to/ISIS_Beam_Monitor/.venv/bin/isis-monitor status /etc/isis-beam-monitor/config.ini`) with the same config file.
 - **No live updates**: check the log for PVWS or MCR news errors; `isis-monitor reconnect path/to/config.ini` forces a reconnect.
 
 ## Releases

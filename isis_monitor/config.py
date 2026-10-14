@@ -153,8 +153,8 @@ class AppConfig:
     beam_teams_url: str = _ini("WEBHOOKS", "")
     experiment_teams_url: str = _ini("WEBHOOKS", "")
 
-    # Optional signed-JSON webhook for every channel (e.g. the push_site
-    # submodule); a blank url disables it.
+    # Optional signed-JSON webhook for every channel (e.g. the push site), over
+    # HTTP(S) or a Unix socket (unix:/path); a blank url disables it.
     push_url: str = _ini("PUSH", "", "url")
     # Unset, the daemon reads systemd's push-secret credential (LoadCredential=).
     push_secret_file: str = _ini("PUSH", "", "secret_file")
@@ -393,6 +393,9 @@ def _validate(config: AppConfig, config_path: Path) -> None:
             if not config.push_url.startswith("unix:/"):
                 raise ConfigError("[PUSH] url unix: must be followed by the socket's absolute path, "
                                   "e.g. unix:/run/isis-push-site/ingest.sock")
+            if len(os.fsencode(config.push_url.removeprefix("unix:"))) > MAX_SOCKET_PATH:
+                raise ConfigError(f"[PUSH] url's socket path is longer than a Unix socket path can be "
+                                  f"({MAX_SOCKET_PATH} bytes)")
         elif not config.push_url.startswith(("http://", "https://")):
             raise ConfigError("[PUSH] url must start with http://, https:// or unix:")
         if config.push_url.startswith("http://") and not _is_loopback(urlsplit(config.push_url).hostname or ""):

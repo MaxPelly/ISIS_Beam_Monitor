@@ -60,8 +60,8 @@ news_teams_url =
 # SQLite database of history and state.
 # db_path = beam_monitor.db
 # Unix socket the other commands (status, config, stop...) reach the daemon on.
-# At most 107 bytes once made absolute: if this checkout is deep, set a short
-# absolute path. Keep it out of shared directories such as /tmp, where another
+# At most 107 bytes once made absolute: if this file's directory is deep, set a
+# short absolute path. Keep it out of shared directories such as /tmp, where another
 # user could create it first.
 # socket_path = isis_beam_monitor.sock
 # Lock that keeps to one daemon per config.

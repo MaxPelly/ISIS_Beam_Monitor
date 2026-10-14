@@ -4,13 +4,13 @@ All notable changes to the monitor are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/); a release is a `vX.Y.Z` tag, and
 its notes are copied from the matching section below. The push site has its
 own versions and changelog; each release here notes the push site version it
-works with (up to 2.0.0, the one its `push_site` submodule pointed at).
+works with (before 2.1.0, the version its `push_site` submodule pointed at).
 
 ## [Unreleased]
 
 Works with push site 2.0.0, which must be installed by then (see its README).
 
-- **Breaking (deployment):** the `push_site` submodule is gone: the push site is installed on its own. `deploy/isis-beam-monitor.service` keeps the checkout read-only and the daemon's files outside it: the config in `/etc/isis-beam-monitor` (the daemon's user's, for `isis-monitor config`), the database in `/var/lib/isis-beam-monitor`, the socket and lock in `/run/isis-beam-monitor` and the log file in `/var/log/isis-beam-monitor`, with those paths set in `config.ini` (see the README). With the push site, the unit gives the daemon the site's secret as its `push-secret` credential and the `isis-ingest` group for the site's socket.
+- **Breaking (deployment):** the `push_site` submodule is gone: the push site is installed on its own. `deploy/isis-beam-monitor.service` keeps the checkout read-only and the daemon's files outside it: the config in `/etc/isis-beam-monitor` (the daemon's user's, for `isis-monitor config`), the database in `/var/lib/isis-beam-monitor`, the socket and lock in `/run/isis-beam-monitor` and the log file in `/var/log/isis-beam-monitor`, with those paths set in `config.ini` (see the README). Copy the old `beam_monitor.db` to the new `db_path` before starting it, or the daemon starts afresh. With the push site, the unit gives the daemon the site's secret as its `push-secret` credential and the `isis-ingest` group for the site's socket.
 - `[PUSH] url` can be `unix:` and a socket's absolute path, e.g. `unix:/run/isis-push-site/ingest.sock`: notifications go to `/ingest` and the status to `/ingest/status` over that socket, as push site 2.0.0 and later require.
 - `[PUSH] secret_file` is optional: unset, the daemon reads systemd's `push-secret` credential (`LoadCredential=push-secret:<file>`), so the secret file can stay root's.
 - `[DAEMON] sample_interval` must be at least 10s (was 1s): each status sent to the push site bins the last 24h of samples, which at 1s took most of a second.

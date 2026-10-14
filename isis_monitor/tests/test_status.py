@@ -172,6 +172,7 @@ async def test_a_receiver_that_is_down_or_refuses_doesnt_stop_publishing(caplog)
         async with publishing(str(server.make_url("/ingest")), interval=0.02):
             await wait_until(lambda: len(server.received) >= 2)
     assert caplog.text.count("Push site refuses the status: HTTP 404") == 1  # once, not every send
+    assert caplog.text.count("Can't reach the push site at http://127.0.0.1:9/ingest/status") == 1
 
 
 def test_refusals_are_warned_of_once_and_recovery_noted(caplog):

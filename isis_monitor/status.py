@@ -126,7 +126,7 @@ class StatusPublisher:
         self.secret, self.build, self.interval = secret, build, interval
         self.session, self.timeout = session, timeout
         self._changed = asyncio.Event()
-        self._refused: Optional[int] = None  # the HTTP status the site last refused one with
+        self._refused: Optional[int] = None  # the HTTP status the site last refused one with, 0 if unreachable
 
     def poke(self) -> None:
         self._changed.set()
@@ -141,11 +141,15 @@ class StatusPublisher:
 
     def _took(self, status: int) -> None:
         """Warns once when the site starts refusing the status (e.g. 400 for one it
-        can't read, 401 for a wrong secret, 404 for an older site), and when it
-        takes it again; 409 (not newer than the last, e.g. after a clock step) is routine."""
+        can't read, 401 for a wrong secret, 404 for an older site) or can't be
+        reached (status 0, e.g. its socket missing or not this user's to use),
+        and when it takes it again; 409 (not newer than the last, e.g. after a
+        clock step) is routine."""
         refused = None if status in (204, 409) else status
         if refused != self._refused:
-            if refused:
+            if refused == 0:
+                logger.warning(f"Can't reach the push site at {self.url} to send the status; its Status page won't update")
+            elif refused:
                 logger.warning(f"Push site refuses the status: HTTP {status}; its Status page won't update")
             else:
                 logger.info("Push site takes the status again")
@@ -163,6 +167,7 @@ class StatusPublisher:
                 self._took(resp.status)
         except (aiohttp.ClientError, TimeoutError) as exc:
             logger.debug(f"Failed to send the status: {exc!r}")
+            self._took(0)
         except Exception:  # a bug: logged, and the next send tries again
             logger.exception("Failed to send the status")
 
