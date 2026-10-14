@@ -104,22 +104,28 @@ def test_compute_summary_treats_unknown_as_off():
 # daily_summary_loop
 # ---------------------------------------------------------------------------
 
+TICKS = 5  # clock reads before run_summary stops the loop
+
+
 async def run_summary(store, state=None, now=None, **overrides):
     """Run daily_summary_loop briefly with its clock stopped at `now` (default: the
     real time), so a run can't straddle midnight; summary_time defaults to that minute.
     Returns the channel."""
     now = now or datetime.now(timezone.utc)
     overrides.setdefault("summary_time", now.astimezone(get_timezone()).strftime("%H:%M"))
-    clock = MagicMock(now=lambda tz: now.astimezone(tz))
     channel = fake_channel("Beam")
     stop_event = asyncio.Event()
+    reads = 0
 
-    async def stop_soon():
-        await asyncio.sleep(0.05)
-        stop_event.set()
+    def read_clock(tz):  # stops the loop after a few ticks
+        nonlocal reads
+        reads += 1
+        if reads >= TICKS:
+            stop_event.set()
+        return now.astimezone(tz)
 
-    with patch("isis_monitor.summary.SUMMARY_CHECK_INTERVAL", 0.01), patch("isis_monitor.summary.datetime", clock):
-        asyncio.create_task(stop_soon())
+    with patch("isis_monitor.summary.SUMMARY_CHECK_INTERVAL", 0.001), \
+            patch("isis_monitor.summary.datetime", MagicMock(now=read_clock)):
         await daily_summary_loop(make_config(**overrides), state or DaemonState(), store, channel, stop_event)
     return channel
 

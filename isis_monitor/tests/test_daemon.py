@@ -247,9 +247,9 @@ async def test_state_persistence_loop_samples_only_while_the_beam_feed_is_connec
         state.update_health("beam", "connected")
         await wait_until(lambda: len(state.history["TS1"]) >= 1)
         state.update_health("beam", "disconnected")
-        await asyncio.sleep(0.05)  # let any sample already under way finish
+        await asyncio.sleep(0.03)  # let any sample already under way finish
         sampled = len(state.history["TS1"])
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.03)
         assert len(state.history["TS1"]) == sampled
     finally:
         stop.set()

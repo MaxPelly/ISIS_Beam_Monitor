@@ -127,7 +127,7 @@ async def receiver(status=204):
 
 
 @contextlib.asynccontextmanager
-async def publishing(url, interval=3600.0, build=lambda: {"n": 1}, debounce=0.05):
+async def publishing(url, interval=3600.0, build=lambda: {"n": 1}, debounce=0.02):
     async with aiohttp.ClientSession() as session:
         publisher = StatusPublisher(url, SECRET, build, interval, session, timeout=1)
         with patch.object(StatusPublisher, "DEBOUNCE", debounce):
@@ -142,28 +142,28 @@ async def publishing(url, interval=3600.0, build=lambda: {"n": 1}, debounce=0.05
 
 async def test_the_status_is_sent_signed_at_start_and_every_interval():
     async with receiver() as server:
-        async with publishing(str(server.make_url("/ingest")), interval=0.05):
+        async with publishing(str(server.make_url("/ingest")), interval=0.02):
             await wait_until(lambda: len(server.received) >= 3)
     assert server.received[0] == {"n": 1}
 
 
 async def test_a_change_sends_soon_but_at_most_once_per_debounce():
     async with receiver() as server:
-        async with publishing(str(server.make_url("/ingest/")), debounce=0.05) as publisher:
+        async with publishing(str(server.make_url("/ingest/")), debounce=0.02) as publisher:
             await wait_until(lambda: len(server.received) == 1)  # at start
             for _ in range(5):
                 publisher.poke()
             await wait_until(lambda: len(server.received) == 2)
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
             assert len(server.received) == 2  # the pokes were one send
 
 
 async def test_a_receiver_that_is_down_or_refuses_doesnt_stop_publishing(caplog):
     caplog.set_level("DEBUG")
-    async with publishing("http://127.0.0.1:9/ingest", interval=0.05):
+    async with publishing("http://127.0.0.1:9/ingest", interval=0.02):
         await wait_until(lambda: caplog.text.count("Failed to send the status") >= 2)
     async with receiver(status=404) as server:  # an older push site, without /ingest/status
-        async with publishing(str(server.make_url("/ingest")), interval=0.05):
+        async with publishing(str(server.make_url("/ingest")), interval=0.02):
             await wait_until(lambda: len(server.received) >= 2)
     assert caplog.text.count("Push site refuses the status: HTTP 404") == 1  # once, not every send
 
