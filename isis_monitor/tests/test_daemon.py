@@ -100,14 +100,11 @@ async def test_run_until_stopped_propagates_outer_cancellation():
 
 async def test_install_signal_handlers_sets_stop_event():
     stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    daemon.install_signal_handlers(stop)
-    try:
-        os.kill(os.getpid(), signal.SIGTERM)
-        await asyncio.wait_for(stop.wait(), 1)
-    finally:
-        loop.remove_signal_handler(signal.SIGINT)
-        loop.remove_signal_handler(signal.SIGTERM)
+    with patch.object(asyncio.get_running_loop(), "add_signal_handler") as add:
+        daemon.install_signal_handlers(stop)
+    assert [c.args[0] for c in add.call_args_list] == [signal.SIGINT, signal.SIGTERM]
+    add.call_args_list[1].args[1]()  # as SIGTERM would, without signalling pytest
+    assert stop.is_set()
 
 
 # ---------------------------------------------------------------------------

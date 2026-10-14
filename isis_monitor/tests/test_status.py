@@ -5,7 +5,6 @@ from zoneinfo import ZoneInfo
 from isis_monitor.config import InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.instrument import InstrumentTracker
-from isis_monitor import messages
 from isis_monitor.status import HISTORY_POINTS, MAX_INSTRUMENTS, MAX_TITLE, build, render_text
 from isis_monitor.tests.helpers import fake_channel
 
@@ -245,8 +244,7 @@ async def test_run_state_and_number_changes_poke_the_publisher():
     assert sink.on_change.call_count == 4
 
 
-def test_render_text_shows_beams_instruments_and_news_in_local_time(monkeypatch):
-    monkeypatch.setattr(messages, "_display_tz", ZoneInfo("Europe/London"))
+def test_render_text_shows_beams_instruments_and_news_in_local_time():
     state = state_with(tracker(auto_counts=True), tracker("WISH", channel="instrument"))
     pearl = state.instruments()["PEARL"]
     state.instruments = lambda: {"PEARL": {**pearl, "run_name": "y" * 50, "run_number": "127921",

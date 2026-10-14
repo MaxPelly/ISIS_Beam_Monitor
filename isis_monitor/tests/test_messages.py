@@ -32,12 +32,9 @@ def test_fmt_time_converts_utc_to_uk_local():
 
 
 def test_set_timezone_changes_fmt_time():
-    try:
-        set_timezone("America/New_York")
-        assert fmt_time(DT) == "Wed 23 Sep 09:05"
-        assert get_timezone().key == "America/New_York"
-    finally:
-        set_timezone("Europe/London")  # restore the default for other tests
+    set_timezone("America/New_York")  # conftest restores the default
+    assert fmt_time(DT) == "Wed 23 Sep 09:05"
+    assert get_timezone().key == "America/New_York"
 
 
 # ---------------------------------------------------------------------------
