@@ -1142,3 +1142,13 @@ async def test_run_daemon_publishes_no_status_when_dummy_or_without_a_push_url(t
         async with daemon(config, argparse.Namespace(dummy=dummy, notify_current=False)):
             pass
     publisher.assert_not_called()
+
+
+
+async def test_a_failing_state_save_on_shutdown_still_closes_the_notifiers(tmp_path, caplog):
+    config = _config(tmp_path, beam_teams_url="https://127.0.0.1:9/beam")
+    with patch.object(main.Notifier, "close", autospec=True) as close, \
+            patch.object(main.SQLiteStateStore, "upsert_snapshot", side_effect=sqlite3.OperationalError("disk I/O")):
+        async with daemon(config, argparse.Namespace(dummy=False, notify_current=False)):
+            pass
+    assert close.await_count == 1 and "Failed to stop the IPC server or save the state" in caplog.text

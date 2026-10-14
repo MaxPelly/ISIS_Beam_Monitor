@@ -360,15 +360,18 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("Shutting down daemon")
         state.update_health("daemon", "stopping")
-        await ipc_server.stop()
-        snap = json.dumps(state.snapshot())
+        try:
+            await ipc_server.stop()
+            snap = json.dumps(state.snapshot())
 
-        def _close_db():
-            store.upsert_snapshot("daemon_state", snap)
-            store.commit()
-            store.close()
+            def _close_db():
+                store.upsert_snapshot("daemon_state", snap)
+                store.commit()
+                store.close()
 
-        await store.run(_close_db)
+            await store.run(_close_db)
+        except Exception:  # still send what's queued and close the rest
+            logger.exception("Failed to stop the IPC server or save the state")
         # Each notifier once (the push notifier is in every channel), all
         # within one CLOSE_TIMEOUT.
         notifiers = dict.fromkeys(n for ch in channels for n in ch.notifiers)
