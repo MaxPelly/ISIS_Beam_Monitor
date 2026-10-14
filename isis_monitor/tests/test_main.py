@@ -613,6 +613,7 @@ def test_parse_args_modes():
     assert (args.mode, args.dummy, args.notify_current) == ("daemon", True, None)
     assert main.parse_args(["tui", "c.ini"]).mode == "tui"
     assert main.parse_args(["stop", "c.ini"]).mode == "stop"
+    assert main.parse_args(["config", "c.ini"]).mode == "config"
     with pytest.raises(SystemExit):
         main.parse_args([])
 
@@ -678,7 +679,9 @@ def test_only_the_daemon_writes_the_log_file(tmp_path, mode, log_file, handlers)
     assert (tmp_path / "monitor.log").exists() is (main.RotatingFileHandler in (handlers or []))
 
 
-@pytest.mark.parametrize("mode, target", [("daemon", "run_daemon"), ("tui", "run_tui"), ("stop", "run_stop")])
+@pytest.mark.parametrize("mode, target", [
+    ("daemon", "run_daemon"), ("tui", "run_tui"), ("stop", "run_stop"), ("config", "run_config"),
+])
 def test_main_dispatches_each_mode(tmp_path, mode, target):
     with patch(f"main.{target}", new_callable=AsyncMock, return_value=False) as runner:
         run_main(mode, _ini(tmp_path))
@@ -796,6 +799,30 @@ async def test_concurrent_updates_only_one_is_applied(tmp_path):
     assert ("debounce_seconds = 30" in text) != ("summary_time = 09:30" in text)
 
 
+async def test_config_command_edits_and_saves_over_ipc(tmp_path, capsys):
+    async with daemon_with_file(tmp_path) as (task, _client, ini):
+        with patch("builtins.input", side_effect=["1", "UTC", "s", "y"]):
+            await main.run_config(_config(tmp_path))
+        assert await asyncio.wait_for(task, 5) is True  # restarting to apply it
+    assert "timezone = UTC" in ini.read_text()
+    assert "Saved. The daemon is restarting to apply it." in capsys.readouterr().out
+
+
+async def test_config_command_quits_without_saving_when_input_closes(tmp_path, capsys):
+    async with daemon_with_file(tmp_path) as (task, _client, ini):
+        before = ini.read_text()
+        with patch("builtins.input", side_effect=["1", "UTC", EOFError]):
+            await main.run_config(_config(tmp_path))
+        assert not task.done()
+    assert ini.read_text() == before
+    assert "Input closed; your changes were discarded." in capsys.readouterr().out
+
+
+async def test_config_command_without_a_daemon(tmp_path, capsys):
+    await main.run_config(_config(tmp_path))
+    assert "Could not reach the daemon" in capsys.readouterr().out
+
+
 async def test_daemon_rejects_invalid_config_and_keeps_running(tmp_path):
     async with daemon_with_file(tmp_path) as (task, client, ini):
         before = ini.read_text()
@@ -906,7 +933,7 @@ async def test_run_tui_c_hands_the_terminal_to_the_config_editor_and_back(tmp_pa
             await wait_until(lambda: "=== Configuration ===" in capsys.readouterr().out)
             assert termios_mock.tcsetattr.call_count == 1  # line mode for the editor
 
-            os.write(keys, b"q\n")  # quit the editor without changes
+            os.write(keys, b"q\n\n")  # quit the editor without changes, then Enter
             await wait_until(lambda: tui.start.call_count == 2)
             assert tty_mock.setcbreak.call_count == 2  # back to key-at-a-time
 
@@ -1024,7 +1051,7 @@ async def test_keys_typed_ahead_of_the_editor_are_passed_to_it(tmp_path, capsys)
             await wait_until(lambda: "  2) debounce_seconds        30" in capsys.readouterr().out)
             os.write(keys, b"q\n")
             await wait_until(lambda: "Discard your changes?" in capsys.readouterr().out)
-            os.write(keys, b"y\n")
+            os.write(keys, b"y\n\n")
             await wait_until(lambda: tui.start.call_count == 2)
             os.write(keys, b"q")
             await asyncio.wait_for(task, 2)

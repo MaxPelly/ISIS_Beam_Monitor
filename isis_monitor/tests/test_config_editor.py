@@ -178,10 +178,10 @@ async def test_run_config_editor_quit_sends_nothing():
      "Could not load the config: bad file"),
 ])
 async def test_run_config_editor_reports_load_failures(request_mock, message):
-    term = Terminal("")
+    term = Terminal()
     await run_config_editor(request_mock, term.read_line, term.write)
     assert message in term.text
-    assert term.prompts == ["Press Enter to return to the monitor..."]
+    assert term.prompts == []
 
 
 async def test_run_config_editor_keeps_edits_when_connection_is_lost_on_save():
@@ -192,7 +192,7 @@ async def test_run_config_editor_keeps_edits_when_connection_is_lost_on_save():
         {"ok": True, "restarting": True},
     ])
     term = Terminal("1", "UTC", "s", "y",  # fails: connection lost
-                    "s", "y", "")           # saved again after reconnecting
+                    "s", "y")               # saved again once the daemon is back
     await run_config_editor(request, term.read_line, term.write)
     assert "Save failed: daemon went away. Your changes are kept" in term.text
     retry = request.await_args_list[2].args[0]

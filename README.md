@@ -220,9 +220,9 @@ the beam currents (coloured by state), the instruments and the MCR news, stacked
 vertically. The layout follows the terminal as it is resized until `v` picks one
 by hand.
 
-### Editing the configuration from the TUI
+### Editing the configuration
 
-Press `c` to pause the display and open a numbered menu of the notification settings
+Run `python main.py config path/to/config.ini` (or press `c` in the TUI) to open a numbered menu of the notification settings
 (`timezone`, `debounce_seconds`, `stall_minutes`,
 `finish_warning_minutes`, `summary_time`) and the
 instruments (name, notify threshold, beam target, Teams channel). Type a number to edit
@@ -231,12 +231,12 @@ delete one, `s` to review the changes and save, or `q` to leave without saving.
 
 On save the daemon validates the new settings (nothing is written if they're invalid, and
 you return to the menu to fix them), writes `config.ini`, and restarts itself in place (same
-PID, so it works under systemd or when run by hand); the TUI reconnects automatically.
+PID, so it works under systemd or when run by hand).
 Things to know:
 
 - The file is rewritten by Python's `configparser`, so **comments are lost**. The previous
   version is kept as `config.ini.bak`, and `config.ini.example` documents every setting.
-- If the file changed since the editor opened it (a hand edit, or another TUI saving
+- If the file changed since the editor opened it (a hand edit, or another editor saving
   first), the save is refused rather than overwriting those changes; reopen the editor.
 - Saving drops unknown keys from instrument sections and writes an explicit `channel`
   for every instrument. `beam_target` is only written when it's set; choose `auto` to
@@ -247,7 +247,7 @@ Things to know:
   `-n/--notify_current` is not re-applied on these restarts.
 - Other settings (webhooks, paths, boundaries, …) are still edited by hand; restart the
   daemon afterwards (e.g. `systemctl restart isis-beam-monitor`, or `python main.py stop`
-  and start it again). A later TUI save also applies them, since it re-reads the file first.
+  and start it again). A later save from the editor also applies them, since it re-reads the file first.
 
 ### Daemon options
 

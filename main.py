@@ -629,7 +629,7 @@ async def run_tui(config, stop_event: asyncio.Event):
         # Whichever client is live now: the connection may have been
         # replaced (e.g. by a daemon restart) while the editor was open.
         if client is None:
-            raise RuntimeError("Not connected to the daemon")
+            raise ConnectionError("Not connected to the daemon")
         return await client.request(payload)
 
     async def edit_config() -> None:
@@ -640,6 +640,7 @@ async def run_tui(config, stop_event: asyncio.Event):
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         try:
             await run_config_editor(request, read_line, print)
+            await read_line("Press Enter to return to the monitor...")
         finally:
             typed_ahead = ""  # not owed to the next editor session
             tty.setcbreak(fd)
@@ -683,6 +684,18 @@ async def run_stop(config) -> None:
         print(f"Daemon responded: {result}")
 
 
+async def run_config(config) -> None:
+    """Edit the running daemon's config on the terminal; the daemon saves it and restarts."""
+    async def read_line(prompt: str) -> Optional[str]:
+        # Blocking is fine: nothing else runs, and each request has its own connection.
+        try:
+            return input(prompt)
+        except EOFError:
+            return None
+
+    await run_config_editor(lambda payload: ipc_request(Path(config.daemon_socket_path), payload), read_line, print)
+
+
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ISIS Beam and MCR News Monitor")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -691,6 +704,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     for mode, help_text in (
         ("daemon", "Run the long-lived daemon process"),
         ("tui", "Run the TUI client attached to daemon"),
+        ("config", "Edit the running daemon's instruments and notification settings"),
         ("stop", "Gracefully shut down a running daemon"),
     ):
         subparsers.add_parser(mode, help=help_text).add_argument(
@@ -736,6 +750,8 @@ def main():
             asyncio.run(run_tui(config, stop_event))
         elif args.mode == "stop":
             asyncio.run(run_stop(config))
+        elif args.mode == "config":
+            asyncio.run(run_config(config))
     except LockHeldError as exc:  # anything else keeps its traceback
         print(str(exc))
         raise SystemExit(1)
