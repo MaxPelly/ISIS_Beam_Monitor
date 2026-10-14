@@ -139,8 +139,7 @@ def configure_logging(mode: str, config) -> None:
     handlers = [logging.StreamHandler()]
     if config.log_file:
         handlers.append(RotatingFileHandler(config.log_file, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT))
-    level = getattr(logging, config.log_level.upper(), logging.WARNING)
-    logging.basicConfig(level=level, format=LOG_FORMAT, handlers=handlers)
+    logging.basicConfig(level=config.log_level, format=LOG_FORMAT, handlers=handlers)
 
 
 def install_signal_handlers(stop_event: asyncio.Event) -> None:

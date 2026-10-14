@@ -657,9 +657,8 @@ def test_main_daemon_refuses_second_instance(tmp_path, capsys):
 
 def test_configure_logging_sets_the_daemons_level(tmp_path):
     with patch("main.logging.basicConfig") as basic:
-        main.configure_logging("daemon", _config(tmp_path, log_level="debug", log_file=""))
-        main.configure_logging("daemon", _config(tmp_path, log_level="nonsense", log_file=""))
-    assert [c.kwargs["level"] for c in basic.call_args_list] == [logging.DEBUG, logging.WARNING]
+        main.configure_logging("daemon", _config(tmp_path, log_level="DEBUG", log_file=""))
+    assert basic.call_args.kwargs["level"] == "DEBUG"
 
 
 @pytest.mark.parametrize("mode, log_file, handlers", [

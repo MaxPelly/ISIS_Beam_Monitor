@@ -144,6 +144,7 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     ("[TIMEOUTS_INTERVALS]\nmcr_poll_interval = soon\n", r"\[TIMEOUTS_INTERVALS\] mcr_poll_interval"),
     ("[DAEMON]\nretention_days = 1.5\n", r"\[DAEMON\] retention_days"),
     (NOTIF + "debounce_seconds = soon\n", r"\[NOTIFICATIONS\] debounce_seconds"),
+    ("[LOGGING]\nlevel = verbose\n", r"\[LOGGING\] level must be one of DEBUG, INFO, WARNING, ERROR"),
     # [BEAM:*] sections
     ("[BEAM:TS1]\nboundaries = 0, a, 2\n", r"\[BEAM:TS1\] boundaries could not convert"),
     ("[BEAM:TS1]\nboundaries = 0.0, 50.0\n", "exactly 3"),

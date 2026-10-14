@@ -28,6 +28,7 @@ BEAM_SECTION_PREFIX = "BEAM:"
 # sends the instrument's own name.
 CHANNEL_MODES = ("experiment", "instrument")
 
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 INSTRUMENT_SECTION_PREFIX = "INSTRUMENT:"
 INSTRUMENT_KEYS = ("notify_counts", "beam_target", "channel")  # besides the name, from the section
 # [NOTIFICATIONS] keys the TUI may edit, mapped to their AppConfig field.
@@ -369,6 +370,8 @@ def _validate(config: AppConfig, config_path: Path) -> None:
     if not config.isis_websocket_url:
         config.warnings.append("[DATA] isis_websocket_url is empty, so beams and instruments aren't watched")
     _check_choice("PVS", "instrument_target", config.instrument_target, BEAM_NAMES)
+    config.log_level = config.log_level.strip().upper()
+    _check_choice("LOGGING", "level", config.log_level, LOG_LEVELS)
     try:
         hour, minute = (int(x) for x in config.summary_time.split(":"))
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
