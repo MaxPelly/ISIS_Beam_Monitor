@@ -51,7 +51,7 @@ _BOUNDS = {
     "beam_reconnect_interval": (0.5, 3600, False),
     "webhook_timeout": (1, 300, False),
     "push_timeout": (0.5, 30, False),
-    "sample_interval": (1, 3600, False),
+    "sample_interval": (10, 3600, False),  # each status bins the last 24h of samples
     "retention_days": (1, 365, False),
     "debounce_seconds": (0, 3600, False),
     "stall_minutes": (0, _WEEK_MINUTES, True),

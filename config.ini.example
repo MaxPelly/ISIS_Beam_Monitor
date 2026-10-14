@@ -65,7 +65,7 @@ news_teams_url =
 # Lock that keeps to one daemon per config.
 # lock_file = isis_beam_monitor.lock
 # Seconds between beam history samples, which is also how often state is
-# saved (1-3600).
+# saved (10-3600).
 # sample_interval = 60
 # Days of beam history kept in the database (whole days, 1-365).
 # retention_days = 7

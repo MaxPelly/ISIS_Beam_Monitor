@@ -77,7 +77,7 @@ Times are in seconds unless the key says minutes.
 | `[DAEMON]` | `db_path` | `beam_monitor.db` | path | SQLite database of history and state. |
 | | `socket_path` | `isis_beam_monitor.sock` | path of at most 107 bytes once made absolute | Unix socket the other commands use to reach the daemon. Keep it out of shared directories such as `/tmp`. |
 | | `lock_file` | `isis_beam_monitor.lock` | path | Lock that keeps to one daemon per config. |
-| | `sample_interval` | 60 | 1 to 3600 | Seconds between beam history samples, which is also how often state is saved. |
+| | `sample_interval` | 60 | 10 to 3600 | Seconds between beam history samples, which is also how often state is saved. |
 | | `retention_days` | 7 | whole number, 1 to 365 | Days of beam history kept in the database. |
 | `[LOGGING]` | `level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (any case) | The daemon's log level. It always logs to stderr (journald under systemd). |
 | | `file` | blank | path | Also log to this rotating file (5 MB × 3); blank for none. |

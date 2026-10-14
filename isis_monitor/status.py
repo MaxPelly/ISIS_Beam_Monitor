@@ -56,9 +56,9 @@ def _history(samples, now: datetime) -> dict:
     for ts, current, power in reversed(samples):  # newest first, so it can stop at 24h
         if ts < start:
             break
-        bins[min(int((ts - start) / width), HISTORY_POINTS - 1)].append((current, _text(power, SHORT)))
+        bins[min(int((ts - start) / width), HISTORY_POINTS - 1)].append((current, power))
     values = [
-        [_number(sum(c for c, _ in b) / len(b)), Counter(p for _, p in b).most_common(1)[0][0]] if b
+        [_number(sum(c for c, _ in b) / len(b)), _text(Counter(p for _, p in b).most_common(1)[0][0], SHORT)] if b
         else [None, "unknown"]
         for b in bins
     ]
