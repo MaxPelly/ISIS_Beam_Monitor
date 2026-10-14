@@ -8,16 +8,20 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
-- The `push_site` submodule points at push site v1.1.2 (the Status page shows when it was updated, and its script and styles can't be served stale from a cache).
+## [1.3.0rc3] - 2026-10-14
 
+1.3.0rc2 with the fixes from the 14 Oct review, so the shadow week runs on the run detection 1.3.0 will ship. Includes push site v1.1.3 (deploy it first). No config change and no reset of saved state: from rc2 it carries on where it left off.
+
+- The `push_site` submodule points at push site v1.1.3 (1.1.2's Status page, which shows when it was updated and whose script and styles can't be served stale from a cache, plus 1.1.3's unknown and offline states).
 - The shadow run detection also records a run first seen as it ends (e.g. after a reconnect), takes a run's final total the same way whatever order PVWS replays it in, makes a run that's only just begun the new experiment's when the RB number changes, ignores a run number that goes back to one already completed, and after a reconnect waits for the run number however long it takes.
-
 - Config warnings (unknown keys, an `http://` push URL, a readable secret file) now reach the log file: they're logged once the daemon's logging is set up, rather than lost before it.
 - An unknown `[LOGGING] level` now stops the daemon from starting, naming the allowed levels, instead of quietly logging at WARNING.
 - A push site that refuses the status (e.g. HTTP 401 or 413) is warned of once, and its taking the status again is logged.
 - On shutdown the notifiers are closed even if stopping the IPC server or saving the state fails.
-- An instrument left out of a non-empty `CS:INSTLIST` falls back to `[PVS] instrument_target` rather than keeping the station from an older list; a list over 1 MB uncompressed is refused as unreadable.
+- An instrument left out of a non-empty `CS:INSTLIST` falls back to its `beam_target`, else `[PVS] instrument_target`, rather than keeping the station from an older list; a list over 1 MB uncompressed is refused as unreadable.
 - The status sends at most 64 instruments, the push site's limit.
+- fun_mode's saved uptime records are no longer deleted on start: 1.2.0 and later already did so. Going from an earlier release straight to this one leaves them in the database, unused.
+- Tags ending in `aN`, `bN` or `rcN` are published as GitHub pre-releases, so they don't become "Latest".
 
 ## [1.3.0rc2] - 2026-10-13
 
