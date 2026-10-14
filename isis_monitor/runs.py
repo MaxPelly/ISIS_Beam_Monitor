@@ -39,6 +39,9 @@ CREDITED_STATES = ACTIVE_STATES | {"ENDING"}
 # A run is only started once it's been under way this long, which absorbs
 # repeated and reordered updates. Real runs as short as 2.6s were seen.
 SETTLE = timedelta(seconds=1)
+# An RB number change this soon after a run began makes it the new experiment's
+# first run (counts arrive within a second of RUNNING, so they can't tell).
+NEW_EXPERIMENT_WINDOW = timedelta(seconds=30)
 REPLAY_TIMEOUT = timedelta(seconds=10)  # after a resubscribe, at most this long without RUNNUMBER and RUNSTATE
 START_TIME_FORMAT = "%a %d-%b-%Y %H:%M:%S"  # DAE:STARTTIME, UK local time, e.g. "Tue 13-Oct-2026 10:49:43"
 # notify_counts = auto: a run's target is the median of the experiment's last
@@ -315,10 +318,12 @@ class RunTracker:
         if rb == self.rb:
             return
         old, partial = self.rb, True  # the first seen had begun before
+        run = self.run
+        in_progress = run and self.last_completed != run.number and run.exp_gen == self.exp_gen
+        # Only just begun, it's the new experiment's first run (and gets its target).
+        just_begun = in_progress and run.number == self.run_number and now - run.started_at <= NEW_EXPERIMENT_WINDOW
         if old:
-            run = self.run
-            in_progress = run and self.last_completed != run.number and run.exp_gen == self.exp_gen
-            extra = run.last_counts if in_progress and run.last_counts > 0 else 0.0
+            extra = run.last_counts if in_progress and not just_begun and run.last_counts > 0 else 0.0
             runs = self.exp_runs + (extra > 0)
             if old != "0" and runs and self.exp_since:
                 logger.info(f"{self._log}: experiment {old} finished: {runs} runs, {self.exp_uah + extra:.1f} µA·h")
@@ -327,13 +332,10 @@ class RunTracker:
                                                       self.exp_partial or unwatched or extra > 0, now)
             partial = unwatched
         logger.info(f"{self._log}: RB number {old or '(none)'} -> {rb}")
-        run = self.run
-        just_begun = (run and run.number == self.run_number and self.last_completed != run.number
-                      and run.exp_gen == self.exp_gen and run.last_counts <= 0)
         self.rb, self.exp_gen, self.exp_partial = rb, self.exp_gen + 1, partial
         self.exp_since, self.exp_runs, self.exp_uah = now, 0, 0.0
         self.run_totals.clear()
-        if just_begun:  # nothing collected yet: it's the new experiment's first run (and target)
+        if just_begun:
             run.exp_gen = self.exp_gen
             run.target, run.auto_runs = self._target()
 

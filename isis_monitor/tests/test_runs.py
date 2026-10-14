@@ -499,13 +499,19 @@ def test_a_replayed_ending_of_a_later_run_isnt_taken_as_the_runs_final():
     assert r.log[1:] == [("done", "00010", None)]
 
 
-def test_an_rb_change_just_after_begin_makes_the_run_the_new_experiments():
-    """No counts yet, so the run in progress is the new experiment's first (and gets its target)."""
+@pytest.mark.parametrize("rb_at, new_experiments", [(29, True), (27 + 31, False)])
+def test_an_rb_change_just_after_begin_makes_the_run_the_new_experiments(rb_at, new_experiments):
+    """Within NEW_EXPERIMENT_WINDOW of its begin, though counts have come (with beam on they
+    do within a second), the run in progress is the new experiment's first, with its target."""
     r = running(auto=True)
     r.tracker.run_totals.extend([20.0] * 3)
-    r(*NEXT_RUN).settle()
+    r(*NEXT_RUN, (28, "TOTALUAMPS", 0.02)).settle()
     assert r.tracker.run.target == 20.0
-    r((29, "_RBNUMBER", "456"), (40, "TOTALUAMPS", 3.0), (50, "RUNSTATE_STR", "ENDING"),
+    if not new_experiments:  # later, it's the old one's
+        r((rb_at, "_RBNUMBER", "456"))
+        assert ("experiment", "123", 2, 8.02, True) in r.log and r.tracker.run.target == 20.0
+        return
+    r((rb_at, "_RBNUMBER", "456"), (40, "TOTALUAMPS", 3.0), (50, "RUNSTATE_STR", "ENDING"),
       (51, "RUNNUMBER", "00012"), (51, "RUNSTATE_STR", "SETUP")).settle()
     assert ("experiment", "123", 1, 8.0, True) in r.log  # run 11 isn't counted in it
     assert (r.tracker.exp_runs, r.tracker.exp_uah) == (1, 3.0)  # but in the new one
