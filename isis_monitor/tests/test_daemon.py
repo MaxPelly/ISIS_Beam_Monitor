@@ -316,8 +316,8 @@ async def test_run_daemon_serves_ipc_and_shuts_down_cleanly_with_a_client_attach
             assert await ts1_power() == "high"
             await wait_until(lambda: _persisted_samples(tmp_path / "state.db"))
 
-            bogus = (await request({"method": "command", "name": "bogus"}))["result"]
-            assert bogus == {"error": "unknown_command", "name": "bogus"}
+            bogus = await request({"method": "command", "name": "bogus"})
+            assert bogus == {"ok": False, "error": "unknown_command", "name": "bogus"}
 
             _reader, attached = await asyncio.open_unix_connection(config.daemon_socket_path)
             shutdown = await request({"method": "command", "name": "shutdown"})

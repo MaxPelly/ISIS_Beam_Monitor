@@ -804,6 +804,10 @@ async def test_reconnect_repopulates_beam_states_marked_unknown(mock_config, moc
     beam_channel.broadcast.assert_called_once()  # just the startup card
 
 
+def test_request_reconnect_without_a_pvws_url_says_so(mock_config, mock_channels):
+    assert ws_monitor(mock_config, mock_channels, "").request_reconnect() is None
+
+
 async def test_request_reconnect_while_connected_reconnects_immediately(mock_config, mock_channels):
     sink = MagicMock()
     async with FakePVWS() as server:

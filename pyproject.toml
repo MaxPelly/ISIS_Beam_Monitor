@@ -27,6 +27,7 @@ dev = [
 [tool.setuptools.packages.find]
 # Not deploy/ or the push_site submodule, which is a separate project.
 include = ["isis_monitor*"]
+exclude = ["isis_monitor.tests*"]
 
 [tool.setuptools.dynamic]
 version = {attr = "isis_monitor.__version__"}

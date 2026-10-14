@@ -342,7 +342,11 @@ class BeamMonitor:
             await asyncio.sleep(COLLECTION_CHECK_INTERVAL)
             await self._check_collection_progress(datetime.now(timezone.utc))
 
-    def request_reconnect(self) -> bool:
+    def request_reconnect(self) -> Optional[bool]:
+        """Whether a reconnect was requested now (False: one already is), or
+        None without a PVWS URL to connect to."""
+        if not self.data_url:
+            return None
         if self._force_reconnect.is_set():
             return False
         self._force_reconnect.set()

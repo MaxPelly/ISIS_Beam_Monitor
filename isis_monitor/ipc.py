@@ -88,7 +88,8 @@ class IPCServer:
         if method == "get_status" and self.status is not None:
             return {"status": self.status()}
         if method == "command":
-            return {"result": await self.command_handler(str(req.get("name", "")))}
+            result = await self.command_handler(str(req.get("name", "")))
+            return {"ok": False, **result} if "error" in result else {"result": result}
         if method in ("get_config", "update_config") and self.config_handler is not None:
             return await self.config_handler(method, req)
         return {"ok": False, "error": "unknown_method"}

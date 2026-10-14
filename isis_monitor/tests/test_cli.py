@@ -20,6 +20,7 @@ from isis_monitor.tests.helpers import (
     (cli.run_stop, {"shutdown": "ok"}, "Shutdown signal sent — daemon is stopping cleanly.\n"),
     (cli.run_stop, {"something": "else"}, "Daemon responded: {'something': 'else'}\n"),
     (cli.run_reconnect, {"beam": True, "mcr": False}, "PVWS: reconnecting\nMCR news: already reconnecting\n"),
+    (cli.run_reconnect, {"beam": None, "mcr": True}, "PVWS: not configured\nMCR news: reconnecting\n"),
 ])
 async def test_commands_report_the_daemons_reply(tmp_path, capsys, runner, result, out):
     async with serving(tmp_path, command_handler=AsyncMock(return_value=result)):
@@ -39,7 +40,7 @@ async def _unknown_command(_name):
     (cli.run_stop, None, "No answer from the daemon"),  # None: no daemon at all
     (cli.run_stop, {"command_handler": _failing}, "Daemon returned an error: internal_error"),
     (cli.run_stop, {"command_handler": never_answers}, "No reply to 'command' within"),
-    (cli.run_reconnect, {"command_handler": _unknown_command}, "Daemon returned an error: {'error': 'unknown_command'}"),
+    (cli.run_reconnect, {"command_handler": _unknown_command}, "Daemon returned an error: unknown_command"),
     (cli.run_status, {}, "Daemon returned an error: unknown_method"),  # no status builder
     (cli.run_config, None, "Could not reach the daemon"),
 ])
@@ -64,15 +65,20 @@ def test_parse_args_modes():
         cli.parse_args([])
 
 
-def test_main_logs_config_warnings_once_logging_is_set_up(tmp_path, caplog):
+def test_the_daemon_logs_config_warnings_once_logging_is_set_up(tmp_path, caplog):
     ini = Path(write_ini(tmp_path))
     ini.write_text(ini.read_text() + "[NOTIFICATIONS]\nfun_mode = true\n")
     order = []
     with patch("isis_monitor.cli.configure_logging", side_effect=lambda *a: order.append("logging")), \
-            patch("isis_monitor.cli.run_stop", new_callable=AsyncMock), patch.object(cli.sys, "argv", ["isis-monitor", "stop", str(ini)]):
+            patch("isis_monitor.cli.run_daemon", new_callable=AsyncMock, return_value=False), \
+            patch.object(cli.sys, "argv", ["isis-monitor", "daemon", str(ini)]):
         caplog.handler.emit = lambda record, emit=caplog.handler.emit: (order.append("warning"), emit(record))
         cli.main()
     assert order[0] == "logging" and set(order[1:]) == {"warning"} and "[NOTIFICATIONS] fun_mode" in caplog.text
+    caplog.clear()
+    with patch("isis_monitor.cli.run_stop", new_callable=AsyncMock):
+        run_cli("stop", str(ini))
+    assert "fun_mode" not in caplog.text  # only the daemon repeats them
 
 
 def test_main_daemon_refuses_second_instance(tmp_path, capsys):

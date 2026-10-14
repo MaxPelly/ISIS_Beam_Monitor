@@ -84,7 +84,7 @@ async def run_reconnect(config) -> None:
     if not response.get("ok") or set(result) != {"beam", "mcr"}:
         fail(f"Daemon returned an error: {response.get('error') or result}")
     for name, label in (("beam", "PVWS"), ("mcr", "MCR news")):
-        print(f"{label}: {'reconnecting' if result[name] else 'already reconnecting'}")
+        print(f"{label}: {({True: 'reconnecting', False: 'already reconnecting', None: 'not configured'})[result[name]]}")
 
 
 async def run_config(config) -> None:
@@ -149,8 +149,9 @@ def main():
     set_timezone(config.notifications_timezone)
 
     configure_logging(args.mode, config)
-    for warning in config.warnings:  # once, now they can reach the log
-        logger.warning(warning)
+    if args.mode == "daemon":  # once, now they can reach the log (the other commands needn't repeat them)
+        for warning in config.warnings:
+            logger.warning(warning)
 
     stop_event = asyncio.Event()
 

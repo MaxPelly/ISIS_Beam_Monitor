@@ -124,7 +124,7 @@ async def test_unknown_command_and_closed_input():
     assert "Unknown command: zz" in term.text
     assert "Unknown command: ²" in term.text and "Unknown command: d ²" in term.text
     assert result is None  # input closed afterwards
-    assert "discarded" not in term.text  # nothing had changed
+    assert "discarded" not in term.text and "Input closed; nothing saved." in term.text  # nothing had changed
 
 
 def test_describe_changes_covers_renames_and_order():

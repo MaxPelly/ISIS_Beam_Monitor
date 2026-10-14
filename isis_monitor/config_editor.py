@@ -170,8 +170,8 @@ async def edit_settings(
             elif command:
                 write(f"Unknown command: {command}")
     except _InputClosed:
-        if describe_changes(original, current):
-            write("Input closed; your changes were discarded.")
+        write("Input closed; your changes were discarded." if describe_changes(original, current)
+              else "Input closed; nothing saved.")
         return None
 
 
