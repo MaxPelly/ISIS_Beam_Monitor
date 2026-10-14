@@ -121,8 +121,10 @@ class StatusPublisher:
     DEBOUNCE = 5.0
 
     def __init__(self, url: str, secret: bytes, build: Callable[[], dict], interval: float,
-                 session: aiohttp.ClientSession, timeout: float = 2.0):
+                 session: aiohttp.ClientSession, timeout: float = 2.0, where: str = ""):
+        """`where` names the site in the log, if not `url` (e.g. a Unix socket's path)."""
         self.url = url.rstrip("/") + "/status"
+        self.where = where or self.url
         self.secret, self.build, self.interval = secret, build, interval
         self.session, self.timeout = session, timeout
         self._changed = asyncio.Event()
@@ -148,7 +150,7 @@ class StatusPublisher:
         refused = None if status in (204, 409) else status
         if refused != self._refused:
             if refused == 0:
-                logger.warning(f"Can't reach the push site at {self.url} to send the status; its Status page won't update")
+                logger.warning(f"Can't reach the push site at {self.where} to send the status; its Status page won't update")
             elif refused:
                 logger.warning(f"Push site refuses the status: HTTP {status}; its Status page won't update")
             else:

@@ -250,9 +250,13 @@ checkout as the user the daemon should run as:
    # Optional: journald has the log too
    file = /var/log/isis-beam-monitor/monitor.log
    ```
-   Moving an existing install? Stop it first and copy its `beam_monitor.db` into
-   `/var/lib/isis-beam-monitor/` (owned by the daemon's user), or the daemon starts
-   afresh, without its history or the runs and experiments under way.
+   Moving an existing install? Stop it first and copy its database across, or the
+   daemon starts afresh, without its history or the runs and experiments under way
+   (systemd adopts the directory):
+   ```bash
+   sudo install -d -m 700 -o "$USER" -g "$USER" /var/lib/isis-beam-monitor
+   cp -p /old/checkout/beam_monitor.db /var/lib/isis-beam-monitor/
+   ```
 3. Install the unit and start it:
    ```bash
    sed -e "/^#/!s|/path/to/ISIS_Beam_Monitor|$PWD|g" -e "/^#/!s|MONITOR_USER|$USER|g" \

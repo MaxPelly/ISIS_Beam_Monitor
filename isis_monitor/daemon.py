@@ -286,6 +286,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
     if config.push_url and not args.dummy:
         publisher = StatusPublisher(
             push_url(config), config.push_secret, current_status, config.sample_interval, push, config.push_timeout,
+            where=config.push_url,
         )
         state.on_change = publisher.poke
         loops.append(publisher.run)
