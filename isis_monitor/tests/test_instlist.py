@@ -33,6 +33,7 @@ def test_parses_the_published_list():
     base64.b64encode(b"zz").decode(),  # not hex
     base64.b64encode(b"00ff").decode(),  # not zlib
     encode({"name": "PEARL"}),  # not a list
+    pytest.param(encode(["x" * (1 << 20)]), id="too big uncompressed"),
     12,
 ])
 def test_unreadable_lists_are_empty_with_a_warning(payload, caplog):

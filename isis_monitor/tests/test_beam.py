@@ -1673,10 +1673,11 @@ async def test_a_configured_beam_target_wins_over_instlist(mock_config, mock_cha
 
 async def test_an_unlisted_instrument_keeps_its_pvs_with_one_warning(mock_config, mock_channels, caplog):
     m = listed_monitor(mock_config, mock_channels)
+    await m._handle_update(instlist(("PEARL", "IN:PEARL:", "MUON")))
     for _ in range(2):
         await m._handle_update(instlist(("WISH", "IN:WISH:", "TS2")))
     assert caplog.text.count("PEARL isn't in CS:INSTLIST") == 1
-    assert PEARL_UAMPS in m.routes and tracker(m).beam_target == "TS2"
+    assert PEARL_UAMPS in m.routes and tracker(m).beam_target == "TS2"  # not Muons from the older list
 
 
 async def test_an_unreadable_instlist_changes_nothing(mock_config, mock_channels):

@@ -10,6 +10,7 @@ from typing import Dict, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 INSTLIST_PV = "CS:INSTLIST"
+MAX_JSON = 1 << 20  # bytes, decompressed; the real list is about 10 KB
 # Its targetStation values; others (e.g. MISC) aren't on one beam target.
 _STATIONS = {"TS1": "TS1", "TS2": "TS2", "MUON": "Muons"}
 _PREFIX_RE = re.compile(r"[A-Za-z0-9_\-:]+:")
@@ -23,7 +24,11 @@ def parse_instlist(b64: object) -> Instruments:
     skipped; {} (with a warning) if the whole thing can't be read."""
     try:
         raw = base64.b64decode(str(b64)).rstrip(b"\0")
-        entries = json.loads(zlib.decompress(binascii.unhexlify(raw)))
+        inflate = zlib.decompressobj()
+        text = inflate.decompress(binascii.unhexlify(raw), MAX_JSON)
+        if inflate.unconsumed_tail:
+            raise ValueError(f"over {MAX_JSON} bytes uncompressed")
+        entries = json.loads(text)
         if not isinstance(entries, list):
             raise ValueError(f"expected a list, got {type(entries).__name__}")
     except (ValueError, zlib.error) as exc:  # binascii.Error and JSONDecodeError are ValueErrors
