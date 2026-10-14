@@ -110,6 +110,9 @@ def replay_fixture(name, **kwargs):
     ("osiris_late_nan", [("start", "00158187", "silent")]),
     ("polaris_saving", [("start", "00167061", "silent")]),
     ("polref_nan", []),  # its IOC comes back between runs
+    # Connected while a run was ending: adopted quietly then, so its end (and total) is recorded.
+    ("gem_connect_in_ending", [("start", "00102942", "silent"), ("done", "00102942", 13.094),
+                               ("start", "00102943", "00102942")]),
 ])
 def test_recorded_sequences(name, decisions):
     assert replay_fixture(name).log == decisions
@@ -157,7 +160,8 @@ def running(**kwargs):
 
 
 def test_duplicate_updates_change_nothing():
-    r = running()(*RUNNING[1:4], *RUNNING[1:4], *NEXT_RUN, *NEXT_RUN).settle()
+    """PVWS sometimes delivers an update twice, back to back."""
+    r = running()(*[u for u in RUNNING[1:4] + NEXT_RUN for _ in (1, 2)]).settle()
     assert r.log[1:] == [("done", "00010", 8.0), ("start", "00011", "00010")]
 
 
@@ -176,10 +180,14 @@ def test_a_resubscribe_replay_in_any_order_completes_the_run_once(order):
     assert r.tracker.run.last_counts == 0.5
 
 
-def test_a_run_that_ended_unseen_takes_its_final_counts_from_between_runs():
-    r = running()
-    r.tracker.resubscribed(r.at(100).now)
-    r((100, "TOTALUAMPS", 9.5), (100, "RUNSTATE_STR", "SETUP"), (100, "RUNNUMBER", "00011")).settle()
+@pytest.mark.parametrize("order", [
+    [(100, "TOTALUAMPS", 9.5), (100, "RUNSTATE_STR", "SETUP"), (100, "RUNNUMBER", "00011")],
+    [(100, "RUNNUMBER", "00011"), (100, "RUNSTATE_STR", "SETUP"), (100, "TOTALUAMPS", 9.5)],
+    [(100, "RUNNUMBER", "00011"), (100, "TOTALUAMPS", 9.5), (100, "RUNSTATE_STR", "SETUP")],
+])
+def test_a_run_that_ended_unseen_takes_its_final_counts_from_between_runs(order):
+    """Whatever order the replay brings them in: it's decided once both PVs are back."""
+    r = reconnect(running())(*order).settle()
     assert r.log[1:] == [("done", "00010", 9.5)]
 
 
@@ -219,12 +227,18 @@ def test_a_partial_update_is_skipped():
     assert not r.tracker.replaying and r.tracker.run_number == "00010"
 
 
-def test_a_run_ended_within_the_settle_is_logged_not_started(caplog):
+def test_a_run_ending_while_its_start_settles_is_still_recorded():
+    """Adopted (quietly: it's already over) as it ends, so its end is recorded."""
+    r = running()(*NEXT_RUN[:5], (27, "RUNSTATE_STR", "RUNNING"), (27.2, "TOTALUAMPS", 0.4),
+                  (27.5, "RUNSTATE_STR", "ENDING"), (28, "RUNNUMBER", "00012"), (28, "RUNSTATE_STR", "SETUP")).settle()
+    assert r.log[1:] == [("done", "00010", 8.0), ("start", "00011", "silent"), ("done", "00011", 0.4)]
+
+
+def test_a_run_that_never_got_under_way_is_only_logged(caplog):
     caplog.set_level("INFO")
-    r = running()(*NEXT_RUN[:5], (27, "RUNSTATE_STR", "RUNNING"), (27.5, "RUNSTATE_STR", "ENDING"),
-                  (28, "RUNNUMBER", "00012"), (28, "RUNSTATE_STR", "SETUP")).settle()
+    r = running()(*NEXT_RUN[:5], (26, "RUNSTATE_STR", "SETUP"), (28, "RUNNUMBER", "00012")).settle()
     assert r.log[1:] == [("done", "00010", 8.0)]
-    assert "run 00011 ended before it was announced" in caplog.text
+    assert "ended before it was announced" not in caplog.text  # it never began
 
 
 def test_a_start_time_from_before_the_run_isnt_taken_as_its():
@@ -397,8 +411,11 @@ def test_a_restart_in_pause_credits_the_re_sent_counts():
 @pytest.mark.parametrize("updates, final", [
     # The DAE is between runs and its counts came first: they're the run's final total.
     ([(40, "TOTALUAMPS", 12.0), (40, "RUNSTATE_STR", "SETUP"), (40, "RUNNUMBER", "00011")], 12.0),
-    # Counts not back yet (still NaN): unknown, not the stale 8.0.
-    ([(40, "RUNSTATE_STR", "SETUP"), (40, "RUNNUMBER", "00011"), (41, "TOTALUAMPS", 12.0)], None),
+    # Counts back after the others, still in SETUP: they're the final too, not the stale 8.0.
+    ([(40, "RUNSTATE_STR", "SETUP"), (40, "RUNNUMBER", "00011"), (41, "TOTALUAMPS", 12.0)], 12.0),
+    # The next run began before any counts came: unknown.
+    ([(40, "RUNSTATE_STR", "SETUP"), (40, "RUNNUMBER", "00011"), (41, "RUNSTATE_STR", "BEGINNING"),
+      (41, "TOTALUAMPS", 0.0)], None),
 ])
 def test_a_run_that_ends_during_an_outage(updates, final):
     r = running()((30, "RUNNUMBER", "NaN"), (30, "RUNSTATE_STR", "NaN"), (30, "TOTALUAMPS", "NaN"), *updates).settle()
@@ -443,3 +460,35 @@ def test_a_timer_that_fires_early_waits_out_the_rest():
     handlers["RUNSTATE_STR"](update("RUNSTATE_STR", "RUNNING"), T0)
     tracker.tick(T0 + SETTLE / 2)
     assert tracker.run is None and scheduled[-1] == pytest.approx((SETTLE / 2).total_seconds() + 0.05)
+
+
+
+def test_a_run_first_seen_ending_after_a_reconnect_is_recorded():
+    r = reconnect(running())((100, "RUNNUMBER", "00011"), (100, "RUNSTATE_STR", "ENDING"), (100, "TOTALUAMPS", 4.0),
+                             (120, "RUNNUMBER", "00012"), (120, "RUNSTATE_STR", "SETUP")).settle()
+    # Run 10's final is unknown (11 came and went unseen); 11 is adopted as it ends.
+    assert r.log[1:] == [("done", "00010", None), ("start", "00011", "silent"), ("done", "00011", 4.0)]
+
+
+def test_an_rb_change_just_after_begin_makes_the_run_the_new_experiments():
+    """No counts yet, so the run in progress is the new experiment's first (and gets its target)."""
+    r = running(auto=True)(*NEXT_RUN).settle()
+    r((29, "_RBNUMBER", "456"), (40, "TOTALUAMPS", 3.0), (50, "RUNSTATE_STR", "ENDING"),
+      (51, "RUNNUMBER", "00012"), (51, "RUNSTATE_STR", "SETUP")).settle()
+    assert ("experiment", "123", 1, 8.0, True) in r.log  # run 11 isn't counted in it
+    assert (r.tracker.exp_runs, r.tracker.exp_uah) == (1, 3.0)  # but in the new one
+
+
+def test_a_run_number_going_back_is_ignored(caplog):
+    r = running()(*NEXT_RUN).settle()
+    r((40, "RUNNUMBER", "00010"), (41, "RUNNUMBER", "00011")).settle()
+    assert [d for d in r.log if d[0] == "done"] == [("done", "00010", 8.0)]  # not recounted
+    assert "ignoring run number 00010, not after 00010" in caplog.text
+
+
+def test_counts_arent_credited_after_a_replay_timeout_without_the_run_number():
+    r = reconnect(running())
+    r((100, "RUNSTATE_STR", "RUNNING"))
+    r.at(100 + REPLAY_TIMEOUT.total_seconds())  # gave up waiting
+    r((112, "TOTALUAMPS", 50.0))
+    assert not r.tracker.replaying and r.tracker.run.last_counts == 8.0

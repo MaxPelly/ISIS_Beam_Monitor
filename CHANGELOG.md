@@ -8,6 +8,8 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+- The shadow run detection also records a run first seen as it ends (e.g. after a reconnect), takes a run's final total the same way whatever order PVWS replays it in, makes a run that's only just begun the new experiment's when the RB number changes, and ignores a run number that goes backwards.
+
 ## [1.3.0rc2] - 2026-10-13
 
 1.3.0rc1 plus the status publisher, for the push site's new Status page. Includes push site v1.1.0, which must be running first (an older push site refuses the status, which is only logged at debug). No config change, and no reset of saved state beyond rc1's: from rc1 it carries on where it left off, while from 1.2.0 the rc1 notes apply.

@@ -144,6 +144,7 @@ class RunTracker:
         self.rb_resync = True  # the first RB number after (re)subscribing may have changed unwatched
         self._pending: Optional[Tuple[str, datetime]] = None  # (number, since) of a start that's settling
         self._under_way = ""  # the number last seen under way, for logging a run that ended unannounced
+        self._final_due = False  # a run ended unseen, and its final counts are still to come
         self._timer = None
         self._unknown_states: set = set()
 
@@ -168,16 +169,40 @@ class RunTracker:
 
     def _seen(self, now: datetime) -> None:
         if self.replaying and self._seen_number and self._seen_state:
-            self.replaying = False
-            run = self.run
-            if run and run.number == self.run_number:  # what was re-sent meanwhile is this run's
-                # A STARTTIME that changed under the same number is a re-begin;
-                # checked first, as the counts re-sent are then the new attempt's.
-                if run.start_text and self.start_text and self.start_text != run.start_text:
-                    self._rebegin(now)
-                run.title = self.title or run.title
-                if self.counts is not None and self.credited():
-                    run.last_counts = self.counts
+            self._replayed(now)
+
+    def _replayed(self, now: datetime) -> None:
+        """The replay is over (or timed out): settle what it delivered, in
+        whatever order it came."""
+        self.replaying, self._replay_deadline = False, None
+        run = self.run
+        if run and run.number != self.run_number and self.last_completed != run.number:
+            self._end_unseen(now)
+        elif run and run.number == self.run_number:  # what was re-sent meanwhile is this run's
+            # A STARTTIME that changed under the same number is a re-begin;
+            # checked first, as the counts re-sent are then the new attempt's.
+            if run.start_text and self.start_text and self.start_text != run.start_text:
+                self._rebegin(now)
+            run.title = self.title or run.title
+            if self.counts is not None and self.credited():
+                run.last_counts = self.counts
+        self._maybe_start(now, adopt_ending=True)
+
+    def _end_unseen(self, now: datetime, waited: bool = False) -> None:
+        """Complete a run whose number moved on unseen. While the DAE is in
+        SETUP for the next number its counts are still this run's final (they
+        only reset at BEGIN), unless more than one run passed; if none have
+        come yet, the next ones are, unless a run begins first (`waited`)."""
+        run = self.run
+        between = _follows(run.number, self.run_number) and self.run_state == "SETUP"
+        if between and self.counts is None and not waited:
+            self._final_due = True  # see on_counts and on_run_state
+            return
+        self._final_due = False
+        final = between and self.counts is not None and self.counts >= run.last_counts
+        if final:
+            run.last_counts = self.counts
+        self._complete(now, final_known=final)
 
     def on_run_number(self, value: Any, now: datetime) -> None:
         number = pv_text(value)
@@ -186,21 +211,17 @@ class RunTracker:
             self._suspend()
             return
         self._seen_number = True
-        if number != self.run_number:
+        if self.last_completed and not _after(number, self.last_completed):
+            # E.g. an IOC that went back: recounting a run would duplicate it.
+            if number != self.run_number:
+                logger.warning(f"{self._log}: ignoring run number {number}, not after {self.last_completed}")
+        elif number != self.run_number:
+            if self._final_due:  # another run passed before its final counts came
+                self._end_unseen(now, waited=True)
             old, self.run_number = self.run_number, number
             run = self.run
-            if run and run.number == old and self.last_completed != old:
-                if self.replaying:
-                    # It ended unseen. Its counts are final once the DAE is
-                    # between runs (they only reset at BEGIN); otherwise the
-                    # last ones credited may be short.
-                    final = (_follows(old, number) and self.run_state in IDLE_STATES
-                             and self.counts is not None and self.counts >= run.last_counts)
-                    if final:
-                        run.last_counts = self.counts
-                    self._complete(now, final_known=final)
-                else:
-                    self._complete(now, final_known=True)
+            if run and run.number == old and self.last_completed != old and not self.replaying:
+                self._complete(now, final_known=True)  # (while replaying: see _replayed)
             elif old and self._under_way == old and not (run and run.number == old):
                 logger.info(f"{self._log}: run {old} ended before it was announced")
         self._seen(now)
@@ -214,6 +235,8 @@ class RunTracker:
             return
         self.run_state = state.upper()
         self._seen_state = True
+        if self._final_due and self.run_state != "SETUP":  # begun: the counts are the next run's
+            self._end_unseen(now, waited=True)
         if self.run_state not in ACTIVE_STATES:
             self._seen_idle, self._start_text_fresh = True, False
             if self.run_state not in IDLE_STATES and self.run_state not in self._unknown_states:
@@ -232,8 +255,8 @@ class RunTracker:
     def credited(self) -> bool:
         """Whether counts now belong to the run (see on_counts)."""
         run = self.run
-        return (not self.replaying and run is not None and run.number == self.run_number
-                and self.run_state in CREDITED_STATES)
+        return (not self.replaying and self._seen_number and run is not None
+                and run.number == self.run_number and self.run_state in CREDITED_STATES)
 
     def on_counts(self, value: Any, now: datetime) -> bool:
         """TOTALUAMPS: kept for display, and credited to the run when it's
@@ -247,6 +270,8 @@ class RunTracker:
             self.counts = None  # the IOC is down; they may move on unseen
             return False
         self.counts = counts
+        if self._final_due and not self.replaying:
+            self._end_unseen(now)
         if not self.credited():
             return False
         run = self.run
@@ -294,16 +319,22 @@ class RunTracker:
                                                       self.exp_partial or unwatched or extra > 0, now)
             partial = unwatched
         logger.info(f"{self._log}: RB number {old or '(none)'} -> {rb}")
+        run = self.run
+        just_begun = (run and self.last_completed != run.number and run.exp_gen == self.exp_gen
+                      and run.last_counts <= 0)
         self.rb, self.exp_gen, self.exp_partial = rb, self.exp_gen + 1, partial
         self.exp_since, self.exp_runs, self.exp_uah = now, 0, 0.0
         self.run_totals.clear()
+        if just_begun:  # nothing collected yet: it's the new experiment's first run (and target)
+            run.exp_gen = self.exp_gen
+            run.target, run.auto_runs = self._target()
 
     def tick(self, now: datetime) -> None:
         """Run when a timer fires: give up waiting for a replay, or start a settled run."""
         if self.replaying and self._replay_deadline and now >= self._replay_deadline:
             logger.warning(f"{self._log}: no RUNNUMBER and RUNSTATE within {REPLAY_TIMEOUT.seconds}s of "
                            "resubscribing; carrying on without them")
-            self.replaying, self._replay_deadline = False, None
+            self._replayed(now)
         self._maybe_start(now)
 
     def cancel(self) -> None:
@@ -324,11 +355,20 @@ class RunTracker:
         self.cancel()
         self._timer = call_later(delay.total_seconds() + 0.05, lambda: self.tick(datetime.now(timezone.utc)))
 
-    def _maybe_start(self, now: datetime) -> None:
-        """Start a run once it's been under way under a new number for SETTLE."""
+    def _maybe_start(self, now: datetime, adopt_ending: bool = False) -> None:
+        """Start a run once it's been under way under a new number for SETTLE.
+        A new number first seen ending (just after a replay, or while its
+        start was settling) is a run that began unseen: adopted at once, so
+        its end is still recorded."""
         run = self.run
-        if (self.replaying or not self.run_number or self.run_state not in STARTED_STATES
-                or (run is not None and run.number == self.run_number)):
+        if self.replaying or not self.run_number or (run is not None and run.number == self.run_number):
+            self._pending = None
+            return
+        if self.run_state == "ENDING" and (adopt_ending or (self._pending and self._pending[0] == self.run_number)):
+            self._pending = None
+            self._start(now)
+            return
+        if self.run_state not in STARTED_STATES:
             self._pending = None
             return
         self._under_way = self.run_number
@@ -344,10 +384,9 @@ class RunTracker:
     def _start(self, now: datetime) -> None:
         previous = self.run
         if previous and self.last_completed != previous.number:  # its end wasn't seen, e.g. the daemon was down
+            self._final_due = False
             self._complete(now, final_known=False)
-        inst = self.instrument
-        target, auto_runs = auto_target(self.run_totals, inst.notify_counts) if inst.auto_counts \
-            else (inst.notify_counts, 0)
+        target, auto_runs = self._target()
         # One from before the DAE was last between runs is an earlier run's.
         start_text = self.start_text if self._start_text_fresh else None
         started_at = (parse_start_time(start_text, now) if start_text else None) or now
@@ -355,12 +394,16 @@ class RunTracker:
             self.run_number, self.title, started_at, start_text, self.exp_gen, target, auto_runs,
             last_counts=self.counts if self.counts is not None and self.run_state in CREDITED_STATES else -1.0,
         )
-        silent = previous is None and not self.restored and not self._seen_idle
+        silent = (previous is None and not self.restored and not self._seen_idle) or self.run_state == "ENDING"
         if previous and not _follows(previous.number, self.run_number):
             previous = None  # runs were missed (its final_known says whether its total is)
         logger.info(f"{self._log}: run {self.run_number} began{' (adopted)' if silent else ''}: {self.title!r}")
         if self.listener:
             self.listener.run_started(self.run, previous, silent)
+
+    def _target(self) -> Tuple[float, int]:
+        inst = self.instrument
+        return auto_target(self.run_totals, inst.notify_counts) if inst.auto_counts else (inst.notify_counts, 0)
 
     def _complete(self, now: datetime, final_known: bool) -> None:
         run = self.run
@@ -430,10 +473,16 @@ class RunTracker:
         self.run_totals = deque(totals if self.instrument.auto_counts else (), maxlen=AUTO_HISTORY)
         self.run, self.restored = run, True
         if run and not same_target:
-            inst = self.instrument
-            run.target, run.auto_runs = auto_target(self.run_totals, inst.notify_counts) if inst.auto_counts \
-                else (inst.notify_counts, 0)
+            run.target, run.auto_runs = self._target()
             run.end_notified = False
+
+
+def _after(number: str, previous: str) -> bool:
+    """Whether a run number is later than another (True if either isn't a number)."""
+    try:
+        return int(number) > int(previous)
+    except ValueError:
+        return True
 
 
 def _follows(previous: str, number: str) -> bool:
