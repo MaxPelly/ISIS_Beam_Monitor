@@ -222,6 +222,12 @@ def test_a_resubscribe_replay_that_never_comes_times_out():
     assert not r.tracker.replaying  # without the run state
 
 
+def test_a_replay_without_the_run_state_carries_on_at_the_timeout():
+    r = reconnect(running())((100, "RUNNUMBER", "00010"))
+    r.at(100 + REPLAY_TIMEOUT.total_seconds())
+    assert not r.tracker.replaying
+
+
 def test_a_partial_update_is_skipped():
     r = running()
     r.handlers["RUNNUMBER"]({"severity": "MAJOR"}, r.now)
@@ -483,6 +489,14 @@ def test_a_final_still_due_when_another_run_passes_is_unknown():
     r((50, "RUNNUMBER", "NaN"), (50, "RUNSTATE_STR", "NaN"), (50, "TOTALUAMPS", "NaN"),
       (200, "TOTALUAMPS", 30.0), (200, "RUNSTATE_STR", "SETUP"), (200, "RUNNUMBER", "00012")).settle()
     assert r.log[1:] == [("done", "00010", None)]  # not run 11's 30 µA·h
+
+
+def test_a_replayed_ending_of_a_later_run_isnt_taken_as_the_runs_final():
+    """Run 10 ended and 11 ran unseen; the replay lands in 11's ENDING, and SETUP comes before 12."""
+    r = reconnect(running())((100, "RUNSTATE_STR", "ENDING"), (100, "RUNNUMBER", "00011"), (100, "TOTALUAMPS", 30.0),
+                             (100, "STARTTIME", "Tue 13-Oct-2026 10:30:00"),  # not run 10's
+                             (102, "RUNSTATE_STR", "SETUP"), (102, "RUNNUMBER", "00012")).settle()
+    assert r.log[1:] == [("done", "00010", None)]
 
 
 def test_an_rb_change_just_after_begin_makes_the_run_the_new_experiments():

@@ -194,8 +194,10 @@ class RunTracker:
         only reset at BEGIN), unless more than one run passed; if none have
         come yet, the next ones are. ENDING may be this run's (its SETUP not
         yet re-sent) or the next run's, so that waits for SETUP too. Once
-        another run begins or ends first (`waited`), its final is unknown."""
+        another run begins or ends first (`waited`), or a STARTTIME other
+        than its own shows one did, its final is unknown."""
         run = self.run
+        waited = waited or bool(run.start_text and self.start_text and self.start_text != run.start_text)
         follows = _follows(run.number, self.run_number)
         if follows and not waited and (self.run_state == "ENDING" or (self.run_state == "SETUP" and self.counts is None)):
             self._final_due = True  # see on_counts, on_run_state and on_run_number
@@ -215,7 +217,8 @@ class RunTracker:
             return
         was_seen, self._seen_number = self._seen_number, True
         if number == self.last_completed and number != self.run_number:
-            # E.g. an IOC that went back: recounting a run would duplicate it.
+            # E.g. an IOC that went back by one: recounting a run would duplicate it. (Further
+            # back is taken as the DAE renumbered, so is followed.)
             logger.warning(f"{self._log}: ignoring run number {number}, already completed")
         elif number != self.run_number:
             old = self.run_number
