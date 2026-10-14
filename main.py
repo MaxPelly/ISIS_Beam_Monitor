@@ -30,7 +30,7 @@ from isis_monitor.config import (
     read_push_secret,
     update_config_file,
 )
-from isis_monitor.daemon_state import MCR_NEWS_PLACEHOLDER, DaemonState
+from isis_monitor.daemon_state import HISTORY_WINDOW, MCR_NEWS_PLACEHOLDER, DaemonState
 from isis_monitor.status import StatusPublisher, build as build_status, render_text as render_status
 from isis_monitor.ipc import IPCServer, ipc_request
 from isis_monitor.mcr import MCRNewsMonitor
@@ -170,7 +170,7 @@ async def state_persistence_loop(config, state: DaemonState, store: SQLiteStateS
             # would count as beam time in the daily summary; leave a gap instead.
             rows = state.sample_all_currents(ts) if state.health["beam"] == "connected" else []
             cutoff = ts - timedelta(days=config.retention_days)
-            state.trim_history_before(cutoff)
+            state.trim_history_before(ts - HISTORY_WINDOW)
             snap = json.dumps(state.snapshot())
 
             def _persist():
@@ -189,13 +189,13 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
     install_signal_handlers(stop_event)
 
     state = DaemonState(
-        history_maxlen=int(86400 * config.retention_days / config.sample_interval),
+        history_maxlen=int(HISTORY_WINDOW.total_seconds() / config.sample_interval) + 1,
         instrument_names=[inst.name for inst in config.instruments],
     )  # health starts as "starting"
 
     def _init_db():
         store = SQLiteStateStore(Path(config.daemon_db_path))
-        cutoff = datetime.now(timezone.utc) - timedelta(days=config.retention_days)
+        cutoff = datetime.now(timezone.utc) - HISTORY_WINDOW
         return store, store.load_snapshot("daemon_state"), store.load_recent_samples(cutoff)
 
     store, raw_snap, recent_samples = await asyncio.to_thread(_init_db)

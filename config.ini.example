@@ -74,8 +74,8 @@ notify_counts = 130
 # Seconds between beam history samples, which is also how often state is
 # saved (1-3600).
 # sample_interval = 60
-# Beam history retention window in days (1-365, but at most 100,000 samples per beam
-# are kept in memory, so about 69 days at the default 60s sample_interval).
+# Days of beam history kept in the database (1-365); the daemon keeps the last
+# 24h in memory, for the status and the daily summary.
 # retention_days = 7
 
 [LOGGING]

@@ -226,14 +226,16 @@ async def test_teams_channel_field_is_unchanged_for_every_kind_of_card(tmp_path)
 # ---------------------------------------------------------------------------
 
 async def test_state_persistence_loop_samples_trims_and_persists(tmp_path):
-    config = _config(tmp_path, sample_interval=0.01, retention_days=1)
+    config = _config(tmp_path, sample_interval=0.01, retention_days=2)
     state = DaemonState()
     state.update_health("beam", "connected")
     state.update_beam_state("TS1", 150.0, "high")
-    stale = datetime.now(timezone.utc) - timedelta(days=2)
-    state.append_beam_sample("TS2", 1.0, "low", ts=stale)
+    now = datetime.now(timezone.utc)
+    stale, yesterday = now - timedelta(days=3), now - timedelta(hours=25)
+    for ts in (stale, yesterday):
+        state.append_beam_sample("TS2", 1.0, "low", ts=ts)
     store = SQLiteStateStore(tmp_path / "state.db")
-    store.write_samples([(stale, "TS2", 1.0, "low")])
+    store.write_samples([(stale, "TS2", 1.0, "low"), (yesterday, "TS2", 1.0, "low")])
     store.commit()
     stop = asyncio.Event()
 
@@ -243,9 +245,9 @@ async def test_state_persistence_loop_samples_trims_and_persists(tmp_path):
     await asyncio.wait_for(task, 1)
 
     rows = store.load_recent_samples(stale - timedelta(days=1))
-    assert all(r["timestamp"] > stale.isoformat() for r in rows)  # stale row pruned
-    assert {r["target"] for r in rows} == {"TS1"}  # TS2 and Muons have no reading
-    assert all(ts > stale for ts, _, _ in state.history["TS2"])  # stale sample trimmed
+    assert [r["target"] for r in rows if r["timestamp"] <= yesterday.isoformat()] == ["TS2"]  # kept 2 days
+    assert {r["target"] for r in rows if r["timestamp"] > yesterday.isoformat()} == {"TS1"}  # TS2, Muons: no reading
+    assert not state.history["TS2"]  # only the last 24h kept in memory
     assert json.loads(store.load_snapshot("daemon_state"))["beam_states"]["TS1"]["power"] == "high"
     store.close()
 

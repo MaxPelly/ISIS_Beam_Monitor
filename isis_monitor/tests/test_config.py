@@ -154,7 +154,6 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     ("[TIMEOUTS_INTERVALS]\nwebhook_timeout = 0\n", "webhook_timeout must be between 1 and 300"),
     ("[DAEMON]\nsample_interval = nan\n", r"\[DAEMON\] sample_interval must be between"),
     ("[DAEMON]\nretention_days = 100000000\n", "retention_days must be between"),
-    ("[DAEMON]\nretention_days = 30\nsample_interval = 1\n", "samples per beam"),
     # [INSTRUMENT:*] sections
     ("[INSTRUMENT:]\n", "needs an instrument name"),
     ("[INSTRUMENT:PE ARL]\nnotify_counts = 5\n", "may only contain"),

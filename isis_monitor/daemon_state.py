@@ -13,6 +13,9 @@ from isis_monitor.config import BEAM_NAMES
 logger = logging.getLogger(__name__)
 
 MCR_NEWS_PLACEHOLDER = "Waiting for initial MCR news..."
+# Beam history kept in memory: as much as the status and the daily summary
+# read. The database keeps [DAEMON] retention_days.
+HISTORY_WINDOW = timedelta(hours=24)
 
 # How far back run completions are kept in the snapshot: the daily summary
 # covers runs over the last 24h, so older ones don't survive a restart.
@@ -43,7 +46,7 @@ class DaemonState:
 
     def __init__(
         self,
-        history_maxlen: int = 10_080,
+        history_maxlen: int = 1441,
         instrument_names: Iterable[str] = (),
     ):
         self.beam_states: Dict[str, Dict[str, object]] = {

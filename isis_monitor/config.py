@@ -57,8 +57,6 @@ _BOUNDS = {
     "stall_minutes": (0, _WEEK_MINUTES, True),
     "finish_warning_minutes": (0, _WEEK_MINUTES, False),
 }
-# The daemon keeps retention_days of samples per beam in memory.
-MAX_HISTORY_SAMPLES = 100_000
 # The name becomes part of the derived run-name PV, so it must be one PV segment.
 _INSTRUMENT_NAME_RE = re.compile(r"[A-Z0-9_-]+")
 
@@ -377,12 +375,6 @@ def _validate(config: AppConfig, config_path: Path) -> None:
             meta = next(f.metadata for f in fields(AppConfig) if f.name == name)
             limits = f"above {low} and at most {high}" if low_excluded else f"between {low} and {high}"
             raise ConfigError(f"[{meta['section']}] {meta['key'] or name} must be {limits}, got {value}")
-    samples = 86400 * config.retention_days / config.sample_interval
-    if samples > MAX_HISTORY_SAMPLES:
-        raise ConfigError(
-            f"[DAEMON] retention_days / sample_interval would keep {samples:.0f} samples per beam "
-            f"in memory (at most {MAX_HISTORY_SAMPLES}); shorten retention or lengthen the interval"
-        )
     for name in ("news_teams_url", "beam_teams_url", "experiment_teams_url"):
         # The URL is a secret (whoever has it can post), so never send it in the clear.
         if getattr(config, name) and not getattr(config, name).lower().startswith("https://"):
