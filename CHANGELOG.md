@@ -8,6 +8,7 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+- `main.py status <config.ini>` prints the daemon's status as plain text: each beam with its last 24h as a sparkline, each instrument's run and progress, the MCR news and health; `--json` prints the status page's JSON instead. `main.py reconnect <config.ini>` makes the daemon reconnect to PVWS and re-read the MCR news, like the TUI's `r` key.
 - `main.py config <config.ini>` opens the config editor on its own, without the TUI. It talks to the running daemon like the TUI's `c` key did, with a fresh connection for each request.
 ## [1.3.0rc3] - 2026-10-14
 

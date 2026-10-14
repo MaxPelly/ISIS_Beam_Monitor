@@ -608,12 +608,43 @@ async def test_run_stop_error_reply_exits_1(tmp_path, capsys):
     assert "internal_error" in capsys.readouterr().out
 
 
+async def test_status_command_prints_the_daemons_status(tmp_path, capsys):
+    async with daemon_with_file(tmp_path):
+        await main.run_status(_config(tmp_path))
+        assert capsys.readouterr().out.startswith("ISIS Beam Monitor v")
+        await main.run_status(_config(tmp_path), as_json=True)
+    status = json.loads(capsys.readouterr().out)
+    assert status["kind"] == "status" and [b["name"] for b in status["beams"]] == ["TS1", "TS2", "Muons"]
+
+
+@pytest.mark.parametrize("result, out", [
+    ({"beam": True, "mcr": False}, "PVWS: reconnecting\nMCR news: already reconnecting\n"),
+])
+async def test_reconnect_command(tmp_path, capsys, result, out):
+    async with serving(tmp_path, command_handler=AsyncMock(return_value=result)) as server:
+        await main.run_reconnect(_config(tmp_path))
+        assert capsys.readouterr().out == out
+        server.command_handler = AsyncMock(return_value={"error": "unknown_command"})
+        with pytest.raises(SystemExit):
+            await main.run_reconnect(_config(tmp_path))
+    assert "Daemon returned an error: {'error': 'unknown_command'}" in capsys.readouterr().out
+
+
+async def test_status_command_reports_an_error_reply(tmp_path, capsys):
+    async with serving(tmp_path):  # no status builder, so get_status is unknown
+        with pytest.raises(SystemExit):
+            await main.run_status(_config(tmp_path))
+    assert "Daemon returned an error: unknown_method" in capsys.readouterr().out
+
+
 def test_parse_args_modes():
     args = main.parse_args(["daemon", "c.ini", "--dummy"])
     assert (args.mode, args.dummy, args.notify_current) == ("daemon", True, None)
     assert main.parse_args(["tui", "c.ini"]).mode == "tui"
     assert main.parse_args(["stop", "c.ini"]).mode == "stop"
     assert main.parse_args(["config", "c.ini"]).mode == "config"
+    assert main.parse_args(["status", "c.ini", "--json"]).json is True
+    assert main.parse_args(["reconnect", "c.ini"]).mode == "reconnect"
     with pytest.raises(SystemExit):
         main.parse_args([])
 
@@ -681,6 +712,7 @@ def test_only_the_daemon_writes_the_log_file(tmp_path, mode, log_file, handlers)
 
 @pytest.mark.parametrize("mode, target", [
     ("daemon", "run_daemon"), ("tui", "run_tui"), ("stop", "run_stop"), ("config", "run_config"),
+    ("status", "run_status"), ("reconnect", "run_reconnect"),
 ])
 def test_main_dispatches_each_mode(tmp_path, mode, target):
     with patch(f"main.{target}", new_callable=AsyncMock, return_value=False) as runner:

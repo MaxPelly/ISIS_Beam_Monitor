@@ -203,6 +203,15 @@ Run the daemon (long-running monitor, notifications, persistence, IPC server):
 python main.py daemon path/to/config.ini [OPTIONS]
 ```
 
+Print the daemon's status (beams with their last 24h, instruments, MCR news and health),
+or its JSON with `--json`; make it reconnect to PVWS and the MCR news; or stop it:
+
+```bash
+python main.py status path/to/config.ini [--json]
+python main.py reconnect path/to/config.ini
+python main.py stop path/to/config.ini
+```
+
 Run the TUI client (attach/detach as needed, same host via SSH):
 
 ```bash
@@ -291,7 +300,7 @@ sudo systemctl status isis-beam-monitor.service
 
 - **`Lock file already held`**: another daemon instance is running (or stale lock path configured).
 - **TUI cannot connect**: ensure the daemon is running and the TUI uses the same config file (both use `[DAEMON] socket_path`).
-- **No live updates**: check the daemon's log (`journalctl -u isis-beam-monitor`, its terminal, or `[LOGGING] file` if set) for websocket/news source errors; use `r` in TUI to force reconnect.
+- **No live updates**: check the daemon's log (`journalctl -u isis-beam-monitor`, its terminal, or `[LOGGING] file` if set) for websocket/news source errors; `python main.py reconnect config.ini` (or `r` in the TUI) forces a reconnect.
 
 ## Releases
 

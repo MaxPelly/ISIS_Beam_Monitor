@@ -35,7 +35,7 @@ from isis_monitor.config import (
     update_config_file,
 )
 from isis_monitor.daemon_state import MCR_NEWS_PLACEHOLDER, DaemonState
-from isis_monitor.status import StatusPublisher, build as build_status
+from isis_monitor.status import StatusPublisher, build as build_status, render_text as render_status
 from isis_monitor.ipc import IPCClient, IPCServer, ipc_request
 from isis_monitor.mcr import MCRNewsMonitor
 from isis_monitor.messages import Notification, set_timezone
@@ -684,6 +684,26 @@ async def run_stop(config) -> None:
         print(f"Daemon responded: {result}")
 
 
+async def run_status(config, as_json: bool = False) -> None:
+    """Print the daemon's status: as the status page shows it, or its JSON."""
+    response = await request_or_exit(config, {"method": "get_status"})
+    if not response.get("ok"):
+        print(f"Daemon returned an error: {response.get('error')}")
+        raise SystemExit(1)
+    print(json.dumps(response["status"], indent=2, ensure_ascii=False) if as_json else render_status(response["status"]))
+
+
+async def run_reconnect(config) -> None:
+    """Make the daemon reconnect to PVWS and re-read the MCR news."""
+    response = await request_or_exit(config, {"method": "command", "name": "force_reconnect_all"})
+    result = response.get("result", {})
+    if not response.get("ok") or set(result) != {"beam", "mcr"}:
+        print(f"Daemon returned an error: {response.get('error') or result}")
+        raise SystemExit(1)
+    for name, label in (("beam", "PVWS"), ("mcr", "MCR news")):
+        print(f"{label}: {'reconnecting' if result[name] else 'already reconnecting'}")
+
+
 async def run_config(config) -> None:
     """Edit the running daemon's config on the terminal; the daemon saves it and restarts."""
     async def read_line(prompt: str) -> Optional[str]:
@@ -705,6 +725,8 @@ def parse_args(argv=None) -> argparse.Namespace:
         ("daemon", "Run the long-lived daemon process"),
         ("tui", "Run the TUI client attached to daemon"),
         ("config", "Edit the running daemon's instruments and notification settings"),
+        ("status", "Print the running daemon's status"),
+        ("reconnect", "Make the running daemon reconnect to PVWS and the MCR news"),
         ("stop", "Gracefully shut down a running daemon"),
     ):
         subparsers.add_parser(mode, help=help_text).add_argument(
@@ -714,6 +736,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                                help="Send a notification for the current news immediately.")
     daemon_parser.add_argument("-d", "--dummy", action=argparse.BooleanOptionalAction,
                                help="Use a dummy notifier that logs to console instead of sending webhooks.")
+
+    subparsers.choices["status"].add_argument("--json", action="store_true", help="Print the status as JSON.")
 
     return parser.parse_args(argv)
 
@@ -752,6 +776,10 @@ def main():
             asyncio.run(run_stop(config))
         elif args.mode == "config":
             asyncio.run(run_config(config))
+        elif args.mode == "status":
+            asyncio.run(run_status(config, args.json))
+        elif args.mode == "reconnect":
+            asyncio.run(run_reconnect(config))
     except LockHeldError as exc:  # anything else keeps its traceback
         print(str(exc))
         raise SystemExit(1)

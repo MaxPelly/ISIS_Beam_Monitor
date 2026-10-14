@@ -1,10 +1,12 @@
 import json
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from isis_monitor.config import InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.instrument import InstrumentTracker
-from isis_monitor.status import HISTORY_POINTS, MAX_INSTRUMENTS, MAX_TITLE, build
+from isis_monitor import messages
+from isis_monitor.status import HISTORY_POINTS, MAX_INSTRUMENTS, MAX_TITLE, build, render_text
 from isis_monitor.tests.helpers import fake_channel
 
 NOW = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)
@@ -241,3 +243,25 @@ async def test_run_state_and_number_changes_poke_the_publisher():
     for text in ("00010", "10", "00011"):
         pearl.handle_run_number(text)
     assert sink.on_change.call_count == 4
+
+
+def test_render_text_shows_beams_instruments_and_news_in_local_time(monkeypatch):
+    monkeypatch.setattr(messages, "_display_tz", ZoneInfo("Europe/London"))
+    state = state_with(tracker(auto_counts=True), tracker("WISH", channel="instrument"))
+    pearl = state.instruments()["PEARL"]
+    state.instruments = lambda: {"PEARL": {**pearl, "run_name": "y" * 50, "run_number": "127921",
+                                           "run_state": "RUNNING", "counts": 65.2},
+                                 "WISH": {"beam_target": "TS1"}}
+    state.update_beam_state("TS1", 152.34, "high")
+    state.update_mcr_news("Beam on")
+    for minutes, current in ((-60, 100.0), (-50, 200.0)):  # two of the last 48 half-hours; the rest are gaps
+        state.history["TS1"].append((NOW + timedelta(minutes=minutes), current, "high"))
+    text = render_text(build(state, {"TS1": NOW - timedelta(hours=1)}, 60, NOW))
+    lines = text.splitlines()
+    assert lines[0].startswith("ISIS Beam Monitor v") and "at Tue 13 Oct 13:00:00 (daemon starting" in lines[0]
+    assert lines[2].startswith("TS1     152.3 µA  high    since 12:00  ") and lines[2].endswith("▁█")
+    assert lines[3] == "TS2         ? µA  unknown"
+    assert lines[7].split()[:5] == ["PEARL", "TS1", "127921", "RUNNING", "65.2/≈130"] and lines[7].endswith("y" * 39 + "…")
+    assert lines[8].split() == ["WISH", "TS1", "-", "?", "?"]
+    assert lines[-2:] == [f"MCR news (since {state.mcr_news_at.astimezone(ZoneInfo('Europe/London')):%a %d %b %H:%M}):",
+                          "Beam on"]

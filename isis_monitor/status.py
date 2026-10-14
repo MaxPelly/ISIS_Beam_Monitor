@@ -18,6 +18,7 @@ import aiohttp
 from isis_monitor import __version__
 from isis_monitor.config import BEAM_NAMES
 from isis_monitor.daemon_state import MCR_NEWS_PLACEHOLDER, DaemonState
+from isis_monitor.messages import get_timezone, sparkline_chars
 from isis_monitor.notifiers import signed_json
 
 logger = logging.getLogger(__name__)
@@ -164,3 +165,38 @@ class StatusPublisher:
             logger.debug(f"Failed to send the status: {exc!r}")
         except Exception:  # a bug: logged, and the next send tries again
             logger.exception("Failed to send the status")
+
+
+SPARK_BINS = 3  # 10-minute bins per sparkline character: 48 characters for 24h
+TITLE_WIDTH = 40
+
+
+def render_text(status: dict) -> str:
+    """The status as plain text for a terminal, times in the configured timezone."""
+    def local(text: Optional[str], fmt: str = "%H:%M") -> str:
+        return datetime.fromisoformat(text).astimezone(get_timezone()).strftime(fmt) if text else "?"
+
+    def number(value: Optional[float], digits: int = 1) -> str:
+        return "?" if value is None else f"{value:.{digits}f}"
+
+    health = ", ".join(f"{k} {v}" for k, v in status["health"].items())
+    lines = [f"ISIS Beam Monitor v{status['monitor_version']} at {local(status['generated_at'], '%a %d %b %H:%M:%S')}"
+             f" ({health})", ""]
+    for beam in status["beams"]:
+        values = [v for v, _ in beam["history"]["values"]]
+        groups = [values[i:i + SPARK_BINS] for i in range(0, len(values), SPARK_BINS)]
+        means = [None if not (known := [v for v in g if v is not None]) else sum(known) / len(known) for g in groups]
+        floor = min((m for m in means if m is not None), default=0.0)  # gaps mustn't stretch the scale
+        chars = sparkline_chars([floor if m is None else m for m in means], len(means))
+        spark = "".join(" " if m is None else c for m, c in zip(means, chars))
+        since = f"since {local(beam['since'])}" if beam["since"] else ""
+        lines.append(f"{beam['name']:<6}{number(beam['current']):>7} µA  {beam['power']:<8}{since:<13}{spark}".rstrip())
+    lines += ["", f"{'Instrument':<12}{'Beam':<6}{'Run':<10}{'State':<11}{'µA·h':>13}  Title"]
+    for inst in status["instruments"]:
+        target = "" if inst["target"] is None else f"/{'≈' if inst['auto'] else ''}{inst['target']:.0f}"
+        title = inst["title"] if len(inst["title"]) <= TITLE_WIDTH else inst["title"][:TITLE_WIDTH - 1] + "…"
+        lines.append(f"{inst['name']:<12}{inst['beam']:<6}{inst['run_number'] or '-':<10}{inst['run_state'] or '?':<11}"
+                     f"{number(inst['counts']) + target:>13}  {title}".rstrip())
+    seen = f" (since {local(status['mcr']['seen_at'], '%a %d %b %H:%M')})" if status["mcr"]["seen_at"] else ""
+    lines += ["", f"MCR news{seen}:", status["mcr"]["news"] or "(none yet)"]
+    return "\n".join(lines)
