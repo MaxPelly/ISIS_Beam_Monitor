@@ -37,8 +37,8 @@ news_teams_url =
 # reads systemd's push-secret credential (LoadCredential=push-secret:<file>).
 # Create it e.g. `(umask 077; openssl rand -hex 32 > push.secret)`. Only the daemon reads
 # it; keep it unreadable by others (a world-readable file is warned about).
-# With the push_site submodule, use the site's own copy.
-# secret_file = push_site/push.secret
+# For the push site, leave it unset: the unit gives the daemon its secret.
+# secret_file = push.secret
 # Seconds before each push attempt is abandoned (0.5-30). A slow receiver only
 # delays later push notifications, not the Teams cards.
 # timeout = 2

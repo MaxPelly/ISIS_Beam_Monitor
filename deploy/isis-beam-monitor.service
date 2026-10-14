@@ -1,6 +1,15 @@
-# ISIS Beam Monitor daemon.
-# EDIT before installing: /path/to/ISIS_Beam_Monitor (the checkout, with a
-# venv in .venv) and MONITOR_USER (the user that owns it). From the checkout:
+# ISIS Beam Monitor daemon. Its checkout (with its venv in .venv) is read-only
+# to it; everything it writes is outside, in directories systemd gives it:
+#   /etc/isis-beam-monitor/config.ini      the config, which `isis-monitor config`
+#                                          rewrites (the directory is MONITOR_USER's)
+#   /var/lib/isis-beam-monitor             its database (StateDirectory)
+#   /run/isis-beam-monitor                 its IPC socket and lock file (RuntimeDirectory)
+#   /var/log/isis-beam-monitor             its log file, if [LOGGING] file is set (LogsDirectory)
+# with those paths set in config.ini (see the README). With the push site
+# installed, it also gets the site's secret as its push-secret credential and
+# joins the isis-ingest group, to reach the site's ingest socket.
+# EDIT before installing: /path/to/ISIS_Beam_Monitor (the checkout) and
+# MONITOR_USER (the user the daemon runs as). From the checkout:
 #   sed -e "/^#/!s|/path/to/ISIS_Beam_Monitor|$PWD|g" -e "/^#/!s|MONITOR_USER|$USER|g" \
 #     deploy/isis-beam-monitor.service | sudo tee /etc/systemd/system/isis-beam-monitor.service
 #   sudo systemctl daemon-reload && sudo systemctl enable --now isis-beam-monitor
@@ -20,8 +29,17 @@ StartLimitIntervalSec=0
 Type=simple
 User=MONITOR_USER
 WorkingDirectory=/path/to/ISIS_Beam_Monitor
-ExecStart=/path/to/ISIS_Beam_Monitor/.venv/bin/isis-monitor daemon /path/to/ISIS_Beam_Monitor/config.ini
+ExecStart=/path/to/ISIS_Beam_Monitor/.venv/bin/isis-monitor daemon /etc/isis-beam-monitor/config.ini
 Environment=PYTHONUNBUFFERED=1
+StateDirectory=isis-beam-monitor
+StateDirectoryMode=0700
+RuntimeDirectory=isis-beam-monitor
+RuntimeDirectoryMode=0700
+LogsDirectory=isis-beam-monitor
+LogsDirectoryMode=0700
+# Without the push site, delete these two lines (and [PUSH] from config.ini).
+LoadCredential=push-secret:/etc/isis-push-site/ingest.secret
+SupplementaryGroups=isis-ingest
 # on-failure rather than always, so `isis-monitor stop` (a clean exit) stays stopped.
 # Config edits from `isis-monitor config` restart the daemon in place (same PID), which systemd doesn't see.
 Restart=on-failure
@@ -31,13 +49,13 @@ RestartMaxDelaySec=5min
 UMask=0077
 MemoryMax=512M
 
-# Sandboxing. The daemon writes its database, log, config (`isis-monitor config`
-# edits, with a .bak), IPC socket and lock file in the repo, and needs nothing in /tmp.
+# Sandboxing. Besides the directories above, it writes only its config
+# (`isis-monitor config` edits, with a .bak), and needs nothing in /tmp.
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/path/to/ISIS_Beam_Monitor
+ReadWritePaths=/etc/isis-beam-monitor
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectProc=invisible

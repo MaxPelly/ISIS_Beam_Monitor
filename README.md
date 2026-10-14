@@ -11,7 +11,7 @@ This is a Python application that monitors the status of the ISIS beam, experime
 - **MCR News**: Fetches the latest Main Control Room (MCR) news and classifies each update's severity (good/attention/warning) by keyword, with an optional "Open MCR news" link.
 - **Daily Summary**: Sends a per-target uptime/trip/sparkline summary card once a day at a configurable time, with the runs and µA·h of each instrument on that target over the last 24h.
 - **Microsoft Teams Integration**: Sends rich Adaptive Cards directly to configured Teams webhook URLs.
-- **Signed Webhook (optional)**: Can also POST every notification as HMAC-signed JSON, e.g. to the optional `push_site` for mobile push notifications (see [Signed webhook](#signed-webhook-push) below).
+- **Signed Webhook (optional)**: Can also POST every notification as HMAC-signed JSON, e.g. to the optional ISIS Push Site for mobile push notifications (see [Signed webhook](#signed-webhook-push) below).
 - **Dummy Notifier**: Includes a logging-based dummy notifier for testing and development without sending actual webhooks.
 - **Concurrent Execution**: Uses `asyncio` to run beam and news monitors concurrently for real-time responsiveness.
 - **Status**: With `[PUSH] url` set, the push site's Status page shows each beam with its last 24h, each instrument's run and progress towards its notify threshold (µA·h), the MCR news and the daemon's health. `isis-monitor status` prints the same on the host.
@@ -132,23 +132,20 @@ daily summary and the auto target history.
 ### Signed webhook (`[PUSH]`)
 
 Sends every notification, on all three channels, as HMAC-signed JSON to one URL as
-well as to Teams. It's meant for the optional `push_site` submodule (mobile push
-notifications), but any receiver that checks the signature will work. It also sends the
-daemon's status (beams, instruments, MCR news, health), signed the same way, to the URL
-plus `/status` (e.g. `/ingest/status`) every `[DAEMON] sample_interval` and soon after a
-change, for the push site's Status page (push site 1.1.0 or later).
+well as to Teams. It's meant for the optional companion
+[ISIS Push Site](https://github.com/MaxPelly/ISIS_Push_Site) (mobile push notifications,
+v2.0.0 or later), but any receiver that checks the signature will work. It also sends
+the daemon's status (beams, instruments, MCR news, health), signed the same way, to the
+URL plus `/status` (e.g. `/ingest/status`) every `[DAEMON] sample_interval` and soon
+after a change, for the push site's Status page.
 
-The push site is a separate repository, included here as the `push_site` git submodule.
-A plain clone leaves it empty, and the monitor works without it. To use it:
-
-```bash
-git submodule update --init push_site   # or clone with --recurse-submodules
-```
-
-`push_site/README.md` then covers setting it up, sharing the secret with it, and
-inviting people's phones. Create the secret owner-only, e.g.
-`(umask 077; openssl rand -hex 32 > push.secret)`; with the submodule, point
-`secret_file` at the site's own copy, `push_site/push.secret`.
+The push site is installed on its own; its README covers setting it up, sharing the
+secret with the monitor, and inviting people's phones. With its standard layout, set
+`url = unix:/run/isis-push-site/ingest.sock` and leave `secret_file` unset: the unit
+in `deploy/isis-beam-monitor.service` gives the daemon the site's secret as its
+`push-secret` credential and puts it in the `isis-ingest` group, which can reach the
+socket. Another receiver needs a secret file of its own, created owner-only, e.g.
+`(umask 077; openssl rand -hex 32 > push.secret)`.
 
 Each request has an `X-Timestamp` header (Unix seconds) and an `X-Signature` header:
 the hex HMAC-SHA256 of `<timestamp>.<body>` under the secret (the file's contents with
@@ -162,7 +159,7 @@ or `Summary`) and `monitor_version`. A retry keeps the same `id`.
 
 The live display is the push site's Status page: each beam with its last 24h, each
 instrument's run and progress, the MCR news and the daemon's health, from the status
-the daemon pushes to `[PUSH] url` plus `/status`. See `push_site/README.md` for
+the daemon pushes to `[PUSH] url` plus `/status`. See the push site's README for
 setting it up. Without the push site, `isis-monitor status` shows the same on the host.
 
 ## Usage
@@ -223,21 +220,40 @@ isis-monitor daemon config.ini --dummy
 
 ### Running as a service (systemd)
 
-`deploy/isis-beam-monitor.service` runs the daemon in a systemd sandbox that
-can only write to the checkout. It restarts after a crash with backoff, but
-stays stopped after `isis-monitor stop /path/to/ISIS_Beam_Monitor/config.ini`
-(run as the daemon's user). Its paths and user are placeholders:
-`/path/to/ISIS_Beam_Monitor` (the checkout, with the dependencies installed
-in a venv at `.venv`) and `MONITOR_USER`. To fill them in and install it,
-run from the checkout as the user the daemon should run as:
+`deploy/isis-beam-monitor.service` runs the daemon in a systemd sandbox where its
+checkout is read-only. It keeps its config in `/etc/isis-beam-monitor` (owned by the
+daemon's user, so `isis-monitor config` can rewrite it), its database in
+`/var/lib/isis-beam-monitor`, its socket and lock in `/run/isis-beam-monitor` and its
+log file, if any, in `/var/log/isis-beam-monitor`; systemd creates the last three. It
+restarts after a crash with backoff, but stays stopped after
+`isis-monitor stop /etc/isis-beam-monitor/config.ini` (run as the daemon's user). Its
+placeholders are `/path/to/ISIS_Beam_Monitor` (the checkout, with the dependencies in a
+venv at `.venv`) and `MONITOR_USER`. Without the push site, delete its
+`LoadCredential=` and `SupplementaryGroups=` lines. To install it, run from the
+checkout as the user the daemon should run as:
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e .
+sudo install -d -m 700 -o "$USER" -g "$USER" /etc/isis-beam-monitor
+install -m 600 config.ini.example /etc/isis-beam-monitor/config.ini   # then edit it
 sed -e "/^#/!s|/path/to/ISIS_Beam_Monitor|$PWD|g" -e "/^#/!s|MONITOR_USER|$USER|g" \
   deploy/isis-beam-monitor.service | sudo tee /etc/systemd/system/isis-beam-monitor.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now isis-beam-monitor.service
 sudo systemctl status isis-beam-monitor.service
+```
+
+In `config.ini`, put the daemon's files where the unit lets it write:
+
+```ini
+[DAEMON]
+db_path = /var/lib/isis-beam-monitor/beam_monitor.db
+socket_path = /run/isis-beam-monitor/isis_beam_monitor.sock
+lock_file = /run/isis-beam-monitor/isis_beam_monitor.lock
+
+[LOGGING]
+# Optional: journald has the log too
+file = /var/log/isis-beam-monitor/monitor.log
 ```
 
 ### Troubleshooting
@@ -253,8 +269,7 @@ sudo systemctl status isis-beam-monitor.service
 
 Versions follow [Semantic Versioning](https://semver.org/) and are set in `isis_monitor/__init__.py` (`__version__`), which is shown at the foot of every Teams card and by `isis-monitor --version`. The push site is versioned separately in its own repo. To release:
 
-1. If the push site has changed, release it first, then point the submodule at its tag: `git -C push_site fetch --tags && git -C push_site checkout vX.Y.Z && git add push_site`.
-2. Move the `[Unreleased]` entries in `CHANGELOG.md` into a new `## [X.Y.Z] - YYYY-MM-DD` section, noting the push site version, and set `__version__` to `X.Y.Z`.
-3. Commit on the release branch, then tag and push both: `git tag -a vX.Y.Z -m vX.Y.Z && git push origin HEAD vX.Y.Z`.
+1. Move the `[Unreleased]` entries in `CHANGELOG.md` into a new `## [X.Y.Z] - YYYY-MM-DD` section, noting the push site version it works with, and set `__version__` to `X.Y.Z`.
+2. Commit on the release branch, then tag and push both: `git tag -a vX.Y.Z -m vX.Y.Z && git push origin HEAD vX.Y.Z`.
 
 The release workflow checks the tag matches `__version__`, runs the tests and publishes a GitHub release with that section's notes.

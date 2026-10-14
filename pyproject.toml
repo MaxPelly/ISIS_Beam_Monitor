@@ -25,7 +25,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-# Not deploy/ or the push_site submodule, which is a separate project.
+# Not deploy/.
 include = ["isis_monitor*"]
 exclude = ["isis_monitor.tests*"]
 
@@ -34,14 +34,10 @@ version = {attr = "isis_monitor.__version__"}
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-# Keep the push_site submodule's tests (and dependencies) out of this run.
 testpaths = ["isis_monitor/tests"]
 
 [tool.coverage.run]
 omit = ["isis_monitor/tests/*"]  # the gate measures the monitor, not its tests
-
-[tool.ruff]
-extend-exclude = ["push_site"]  # a separate project, with its own checks
 
 [tool.ruff.lint]
 select = ["E9", "F", "I", "B"]
