@@ -14,29 +14,29 @@ This is a Python application that monitors the status of the ISIS beam, experime
 - **Signed Webhook (optional)**: Can also POST every notification as HMAC-signed JSON, e.g. to the optional `push_site` for mobile push notifications (see `[PUSH]` below).
 - **Dummy Notifier**: Includes a logging-based dummy notifier for testing and development without sending actual webhooks.
 - **Concurrent Execution**: Uses `asyncio` to run beam and news monitors concurrently for real-time responsiveness.
-- **Status**: With `[PUSH] url` set, the push site's Status page shows each beam with its last 24h, each instrument's run and progress towards its notify threshold (µA·h), the MCR news and the daemon's health. `main.py status` prints the same on the host.
-- **Config Editor**: `main.py config` edits the instruments and notification settings of the running daemon, which validates, saves and restarts itself to apply them.
+- **Status**: With `[PUSH] url` set, the push site's Status page shows each beam with its last 24h, each instrument's run and progress towards its notify threshold (µA·h), the MCR news and the daemon's health. `isis-monitor status` prints the same on the host.
+- **Config Editor**: `isis-monitor config` edits the instruments and notification settings of the running daemon, which validates, saves and restarts itself to apply them.
 
 ## Requirements
 
-Ensure you have Python 3.12+ installed.
-Install the required dependencies using pip:
+Ensure you have Python 3.12+ installed. Install the monitor and its dependencies
+from the checkout, which also installs the `isis-monitor` command:
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
 
-For development and testing, install the development dependencies:
+For development and testing, include the development dependencies:
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -e '.[dev]'
 ```
 
 Run the tests, optionally with a coverage report (branch coverage, listing uncovered lines):
 
 ```bash
 pytest
-pytest --cov=isis_monitor --cov=main --cov-branch --cov-report=term-missing
+pytest --cov=isis_monitor --cov-branch --cov-report=term-missing
 ```
 
 ## Configuration
@@ -190,21 +190,21 @@ or `Summary`) and `monitor_version`. A retry keeps the same `id`.
 Run the daemon (long-running monitor, notifications, persistence, IPC server):
 
 ```bash
-python main.py daemon path/to/config.ini [OPTIONS]
+isis-monitor daemon path/to/config.ini [OPTIONS]
 ```
 
 Print the daemon's status (beams with their last 24h, instruments, MCR news and health),
 or its JSON with `--json`; make it reconnect to PVWS and the MCR news; or stop it:
 
 ```bash
-python main.py status path/to/config.ini [--json]
-python main.py reconnect path/to/config.ini
-python main.py stop path/to/config.ini
+isis-monitor status path/to/config.ini [--json]
+isis-monitor reconnect path/to/config.ini
+isis-monitor stop path/to/config.ini
 ```
 
 ### Editing the configuration
 
-Run `python main.py config path/to/config.ini` to open a numbered menu of the notification settings
+Run `isis-monitor config path/to/config.ini` to open a numbered menu of the notification settings
 (`timezone`, `debounce_seconds`, `stall_minutes`,
 `finish_warning_minutes`, `summary_time`) and the
 instruments (name, notify threshold, beam target, Teams channel). Type a number to edit
@@ -228,7 +228,7 @@ Things to know:
 - Each restart re-sends the beam "Monitor online" cards, as any daemon start does.
   `-n/--notify_current` is not re-applied on these restarts.
 - Other settings (webhooks, paths, boundaries, …) are still edited by hand; restart the
-  daemon afterwards (e.g. `systemctl restart isis-beam-monitor`, or `python main.py stop`
+  daemon afterwards (e.g. `systemctl restart isis-beam-monitor`, or `isis-monitor stop`
   and start it again). A later save from the editor also applies them, since it re-reads the file first.
 
 ### Daemon options
@@ -242,20 +242,20 @@ Things to know:
 To run the daemon with a custom configuration file and dummy notifications for testing:
 
 ```bash
-python main.py daemon config.ini --dummy
+isis-monitor daemon config.ini --dummy
 ```
 
 ### Running as a service (systemd)
 
 `deploy/isis-beam-monitor.service` runs the daemon in a systemd sandbox that
 can only write to the checkout. It restarts after a crash with backoff, but
-stays stopped after `main.py stop`. Its paths and user are placeholders:
+stays stopped after `isis-monitor stop`. Its paths and user are placeholders:
 `/path/to/ISIS_Beam_Monitor` (the checkout, with the dependencies installed
 in a venv at `.venv`) and `MONITOR_USER`. To fill them in and install it,
 run from the checkout as the user the daemon should run as:
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3 -m venv .venv && .venv/bin/pip install -e .
 sed -e "/^#/!s|/path/to/ISIS_Beam_Monitor|$PWD|g" -e "/^#/!s|MONITOR_USER|$USER|g" \
   deploy/isis-beam-monitor.service | sudo tee /etc/systemd/system/isis-beam-monitor.service
 sudo systemctl daemon-reload
@@ -267,11 +267,11 @@ sudo systemctl status isis-beam-monitor.service
 
 - **`Lock file already held`**: another daemon instance is running (or stale lock path configured).
 - **`No answer from the daemon`**: ensure the daemon is running and the command uses the same config file (both use `[DAEMON] socket_path`).
-- **No live updates**: check the daemon's log (`journalctl -u isis-beam-monitor`, its terminal, or `[LOGGING] file` if set) for websocket/news source errors; `python main.py reconnect config.ini` forces a reconnect.
+- **No live updates**: check the daemon's log (`journalctl -u isis-beam-monitor`, its terminal, or `[LOGGING] file` if set) for websocket/news source errors; `isis-monitor reconnect config.ini` forces a reconnect.
 
 ## Releases
 
-Versions follow [Semantic Versioning](https://semver.org/) and are set in `isis_monitor/__init__.py` (`__version__`), which is shown at the foot of every Teams card and by `python main.py --version`. The push site is versioned separately in its own repo. To release:
+Versions follow [Semantic Versioning](https://semver.org/) and are set in `isis_monitor/__init__.py` (`__version__`), which is shown at the foot of every Teams card and by `isis-monitor --version`. The push site is versioned separately in its own repo. To release:
 
 1. If the push site has changed, release it first, then point the submodule at its tag: `git -C push_site fetch --tags && git -C push_site checkout vX.Y.Z && git add push_site`.
 2. Move the `[Unreleased]` entries in `CHANGELOG.md` into a new `## [X.Y.Z] - YYYY-MM-DD` section, noting the push site version, and set `__version__` to `X.Y.Z`.

@@ -1,4 +1,4 @@
-"""Line-based config editor behind `main.py config`.
+"""Line-based config editor behind `isis-monitor config`.
 
 Works on the settings dict from the daemon's get_config (see
 config.editable_settings) and sends the result back with update_config.

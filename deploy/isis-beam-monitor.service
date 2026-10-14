@@ -19,10 +19,10 @@ StartLimitIntervalSec=0
 Type=simple
 User=MONITOR_USER
 WorkingDirectory=/path/to/ISIS_Beam_Monitor
-ExecStart=/path/to/ISIS_Beam_Monitor/.venv/bin/python /path/to/ISIS_Beam_Monitor/main.py daemon /path/to/ISIS_Beam_Monitor/config.ini
+ExecStart=/path/to/ISIS_Beam_Monitor/.venv/bin/isis-monitor daemon /path/to/ISIS_Beam_Monitor/config.ini
 Environment=PYTHONUNBUFFERED=1
-# on-failure rather than always, so `main.py stop` (a clean exit) stays stopped.
-# Config edits from `main.py config` restart the daemon in place (same PID), which systemd doesn't see.
+# on-failure rather than always, so `isis-monitor stop` (a clean exit) stays stopped.
+# Config edits from `isis-monitor config` restart the daemon in place (same PID), which systemd doesn't see.
 Restart=on-failure
 RestartSec=5
 RestartSteps=6
@@ -30,7 +30,7 @@ RestartMaxDelaySec=5min
 UMask=0077
 MemoryMax=512M
 
-# Sandboxing. The daemon writes its database, log, config (`main.py config`
+# Sandboxing. The daemon writes its database, log, config (`isis-monitor config`
 # edits, with a .bak), IPC socket and lock file in the repo, and needs nothing in /tmp.
 NoNewPrivileges=yes
 CapabilityBoundingSet=

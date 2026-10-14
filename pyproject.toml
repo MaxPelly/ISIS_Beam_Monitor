@@ -12,6 +12,9 @@ dependencies = [
     "websockets>=16,<18",
 ]
 
+[project.scripts]
+isis-monitor = "isis_monitor.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest",

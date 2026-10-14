@@ -361,7 +361,7 @@ def sparkline_chars(values: list[float], width: int) -> str:
     """Return a plain-text sparkline of `width` block characters, min-max normalised.
 
     Shared by the daily summary (plain text in a notification card) and
-    `main.py status`.
+    `isis-monitor status`.
     """
     if not values:
         return " " * width

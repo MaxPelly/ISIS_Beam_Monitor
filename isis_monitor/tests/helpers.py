@@ -2,10 +2,13 @@
 import asyncio
 import contextlib
 import json
-from unittest.mock import MagicMock
+from dataclasses import replace
+from unittest.mock import MagicMock, patch
 
 import websockets
 
+from isis_monitor import cli
+from isis_monitor.config import AppConfig
 from isis_monitor.ipc import IPCServer
 from isis_monitor.notifiers import NotificationChannel
 
@@ -95,3 +98,31 @@ async def raw_request(server, line: bytes) -> dict:
 
 async def never_answers(_name):
     await asyncio.sleep(3600)
+
+
+def app_config(tmp_path, **overrides) -> AppConfig:
+    """An AppConfig with everything the daemon writes under tmp_path."""
+    return replace(
+        AppConfig(
+            mcr_news_url="http://127.0.0.1:9/news",
+            daemon_db_path=str(tmp_path / "state.db"),
+            daemon_socket_path=str(tmp_path / "d.sock"),
+            daemon_lock_file=str(tmp_path / "d.lock"),
+            mcr_poll_interval=3600,
+        ),
+        **overrides,
+    )
+
+
+def write_ini(tmp_path) -> str:
+    """A minimal config file's path."""
+    ini = tmp_path / "c.ini"
+    ini.write_text(f"[DATA]\nmcr_news_url = http://x\n[DAEMON]\nlock_file = {tmp_path / 'd.lock'}\n"
+                   "[INSTRUMENT:PEARL]\nnotify_counts = 130\n")
+    return str(ini)
+
+
+def run_cli(*argv):
+    """cli.main() with the given command line, and logging setup stubbed out."""
+    with patch.object(cli.sys, "argv", ["isis-monitor", *argv]), patch("isis_monitor.cli.configure_logging"):
+        cli.main()

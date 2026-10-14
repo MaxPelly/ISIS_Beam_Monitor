@@ -8,11 +8,12 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
-- **Breaking:** the Rich TUI (`main.py tui`) is gone, and with it the `rich` dependency. The push site's Status page is the live display; on the host, `main.py status` prints the same, `main.py config` edits the config and `main.py reconnect` replaces the `r` key. The `[TUI]` and `[TUI_CLIENT]` sections are no longer used (a leftover one is listed in the unknown-settings warning); delete them.
+- **Breaking:** the monitor is an installed command, `isis-monitor daemon|config|status|reconnect|stop <config.ini>`, and `main.py` is gone. Install it with `pip install -e .` in the checkout (`pip install -e '.[dev]'` for the tests); `requirements.txt` and `requirements-dev.txt` are gone, the dependencies being only in `pyproject.toml`. A systemd unit's `ExecStart` becomes `<venv>/bin/isis-monitor daemon <config.ini>` (see `deploy/isis-beam-monitor.service`).
+- **Breaking:** the Rich TUI (`main.py tui`) is gone, and with it the `rich` dependency. The push site's Status page is the live display; on the host, `isis-monitor status` prints the same, `isis-monitor config` edits the config and `isis-monitor reconnect` replaces the `r` key. The `[TUI]` and `[TUI_CLIENT]` sections are no longer used (a leftover one is listed in the unknown-settings warning); delete them.
 - The daemon keeps only the last 24h of beam history in memory, which is all the status and the daily summary read, rather than `[DAEMON] retention_days` of it; `retention_days` is how long the database keeps it, and no longer has to fit 100,000 samples per beam.
 - The daemon's IPC socket is now request and reply only, one connection per command: `get_snapshot`, `get_history`, `get_logs` and `subscribe_updates` are gone, and `get_status` returns the status page's payload. On Linux it refuses a connection from any other user (even root), as well as being owner-only.
-- `main.py status <config.ini>` prints the daemon's status as plain text: each beam with its last 24h as a sparkline, each instrument's run and progress, the MCR news and health; `--json` prints the status page's JSON instead. `main.py reconnect <config.ini>` makes the daemon reconnect to PVWS and re-read the MCR news, like the TUI's `r` key.
-- `main.py config <config.ini>` opens the config editor on its own, without the TUI. It talks to the running daemon like the TUI's `c` key did, with a fresh connection for each request.
+- `isis-monitor status <config.ini>` prints the daemon's status as plain text: each beam with its last 24h as a sparkline, each instrument's run and progress, the MCR news and health; `--json` prints the status page's JSON instead. `isis-monitor reconnect <config.ini>` makes the daemon reconnect to PVWS and re-read the MCR news, like the TUI's `r` key.
+- `isis-monitor config <config.ini>` opens the config editor on its own, without the TUI. It talks to the running daemon like the TUI's `c` key did, with a fresh connection for each request.
 
 ## [1.3.0rc3] - 2026-10-14
 

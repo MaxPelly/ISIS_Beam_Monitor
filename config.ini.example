@@ -47,7 +47,7 @@ experiment_teams_url =
 # and the run state, run number and RB number from <prefix>DAE:RUNSTATE_STR,
 # RUNNUMBER and _RBNUMBER. The prefix is the instrument's from CS:INSTLIST, which
 # is usually IN:<NAME>: (used until the list arrives, or if it doesn't name it).
-# Instruments and [NOTIFICATIONS] can also be edited with `main.py config`; saving
+# Instruments and [NOTIFICATIONS] can also be edited with `isis-monitor config`; saving
 # there rewrites this file without its comments (the old file is kept as .bak).
 [INSTRUMENT:PEARL]
 notify_counts = 130
