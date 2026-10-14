@@ -316,7 +316,8 @@ MAX_PUSH_SECRET_BYTES = 4096  # the same limits as the push site, so both accept
 
 def read_push_secret(config: AppConfig) -> bytes:
     """The [PUSH] shared secret (surrounding whitespace dropped), or b"" when
-    push is disabled. Only the daemon needs it, so it isn't read by load_config()."""
+    push is disabled; a world-readable file adds to config.warnings. Only the
+    daemon needs it, so it isn't read by load_config()."""
     if not config.push_url:
         return b""
     path = Path(config.push_secret_file)
@@ -331,7 +332,7 @@ def read_push_secret(config: AppConfig) -> bytes:
             f"[PUSH] secret_file must hold {MIN_PUSH_SECRET_BYTES} to {MAX_PUSH_SECRET_BYTES} characters"
         )
     if world_readable:
-        logger.warning(f"[PUSH] secret_file {path} is world-readable; consider chmod o-r")
+        config.warnings.append(f"[PUSH] secret_file {path} is world-readable; consider chmod o-r")
     return secret
 
 

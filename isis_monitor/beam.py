@@ -211,12 +211,12 @@ class BeamMonitor:
         old, new = [], []
         for name, tracker in self.instruments.items():
             if name not in listed:
-                if listed:  # not a station from an older list it may have been on
-                    tracker.set_station(None)
-                if listed and name not in self._unlisted_warned:
-                    self._unlisted_warned.add(name)
-                    logger.warning(f"{name} isn't in CS:INSTLIST (a typo?); keeping {tracker.instrument.pv_prefix} "
-                                   "for its PVs")
+                if listed:  # not on the station of an older list it may have been on
+                    tracker.beam_target = tracker.instrument.beam_target or tracker.default_target
+                    if name not in self._unlisted_warned:
+                        self._unlisted_warned.add(name)
+                        logger.warning(f"{name} isn't in CS:INSTLIST (a typo?); keeping "
+                                       f"{tracker.instrument.pv_prefix} for its PVs, on {tracker.beam_target}")
                 continue
             prefix, station = listed[name]
             tracker.set_station(station)

@@ -360,7 +360,6 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
         logger.info("Shutting down daemon")
         state.update_health("daemon", "stopping")
         try:
-            await ipc_server.stop()
             snap = json.dumps(state.snapshot())
 
             def _close_db():
@@ -369,8 +368,9 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
                 store.close()
 
             await store.run(_close_db)
+            await ipc_server.stop()
         except Exception:  # still send what's queued and close the rest
-            logger.exception("Failed to stop the IPC server or save the state")
+            logger.exception("Failed to save the state or stop the IPC server")
         # Each notifier once (the push notifier is in every channel), all
         # within one CLOSE_TIMEOUT.
         notifiers = dict.fromkeys(n for ch in channels for n in ch.notifiers)
@@ -718,6 +718,8 @@ def main():
 
     try:
         config = load_config(args.config)
+        if args.mode == "daemon":
+            config.push_secret = read_push_secret(config)
     except ConfigError as e:
         print(f"Configuration error: {e}")
         raise SystemExit(1)
@@ -727,12 +729,6 @@ def main():
     configure_logging(args.mode, config)
     for warning in config.warnings:  # once, now they can reach the log
         logger.warning(warning)
-    if args.mode == "daemon":
-        try:
-            config.push_secret = read_push_secret(config)
-        except ConfigError as e:
-            print(f"Configuration error: {e}")
-            raise SystemExit(1)
 
     stop_event = asyncio.Event()
 

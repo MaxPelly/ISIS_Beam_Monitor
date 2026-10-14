@@ -469,7 +469,7 @@ channel = Instrument
     assert [(i.name, i.channel) for i in config.instruments] == [("PEARL", "experiment"), ("WISH", "instrument")]
 
 
-def test_push_secret_is_read_and_checked(tmp_path, caplog):
+def test_push_secret_is_read_and_checked(tmp_path):
     secret_file = tmp_path / "push.secret"
     push = f"[PUSH]\nurl = http://127.0.0.1:8765/ingest\nsecret_file = {secret_file}\n"
     # load_config() doesn't need the secret (the TUI and stop modes never read it).
@@ -487,11 +487,11 @@ def test_push_secret_is_read_and_checked(tmp_path, caplog):
     secret_file.chmod(0o600)
     assert read_push_secret(config) == b"x" * 40  # surrounding whitespace dropped
     assert "x" * 40 not in repr(replace(config, push_secret=b"x" * 40))
-    assert "world-readable" not in caplog.text
+    assert not any("world-readable" in w for w in config.warnings)
 
     secret_file.chmod(0o644)
     read_push_secret(config)
-    assert "world-readable" in caplog.text
+    assert "world-readable" in config.warnings[-1]
 
 
 def test_push_disabled_by_default(tmp_path):

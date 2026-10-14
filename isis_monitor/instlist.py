@@ -26,7 +26,7 @@ def parse_instlist(b64: object) -> Instruments:
         raw = base64.b64decode(str(b64)).rstrip(b"\0")
         inflate = zlib.decompressobj()
         text = inflate.decompress(binascii.unhexlify(raw), MAX_JSON)
-        if inflate.unconsumed_tail:
+        if not inflate.eof:  # cut short, or too big
             raise ValueError(f"over {MAX_JSON} bytes uncompressed")
         entries = json.loads(text)
         if not isinstance(entries, list):

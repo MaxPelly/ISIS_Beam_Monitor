@@ -1676,7 +1676,7 @@ async def test_an_unlisted_instrument_keeps_its_pvs_with_one_warning(mock_config
     await m._handle_update(instlist(("PEARL", "IN:PEARL:", "MUON")))
     for _ in range(2):
         await m._handle_update(instlist(("WISH", "IN:WISH:", "TS2")))
-    assert caplog.text.count("PEARL isn't in CS:INSTLIST") == 1
+    assert caplog.text.count("PEARL isn't in CS:INSTLIST") == 1 and "MUON" not in caplog.text
     assert PEARL_UAMPS in m.routes and tracker(m).beam_target == "TS2"  # not Muons from the older list
 
 
