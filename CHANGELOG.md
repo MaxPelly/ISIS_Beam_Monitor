@@ -8,6 +8,8 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+- The `push_site` submodule points at push site v1.1.2 (the Status page shows when it was updated, and its script and styles can't be served stale from a cache).
+
 - The shadow run detection also records a run first seen as it ends (e.g. after a reconnect), takes a run's final total the same way whatever order PVWS replays it in, makes a run that's only just begun the new experiment's when the RB number changes, and ignores a run number that goes backwards.
 
 ## [1.3.0rc2] - 2026-10-13
