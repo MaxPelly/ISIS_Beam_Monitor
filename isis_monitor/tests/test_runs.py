@@ -217,7 +217,9 @@ def test_a_resubscribe_replay_that_never_comes_times_out():
     r = running()
     r.tracker.resubscribed(r.at(50).now)
     r.at(50 + REPLAY_TIMEOUT.total_seconds())
-    assert not r.tracker.replaying
+    assert r.tracker.replaying  # without the run number: what's credited and started depends on it
+    r((61, "RUNNUMBER", "00010"))
+    assert not r.tracker.replaying  # without the run state
 
 
 def test_a_partial_update_is_skipped():
@@ -234,11 +236,9 @@ def test_a_run_ending_while_its_start_settles_is_still_recorded():
     assert r.log[1:] == [("done", "00010", 8.0), ("start", "00011", "silent"), ("done", "00011", 0.4)]
 
 
-def test_a_run_that_never_got_under_way_is_only_logged(caplog):
-    caplog.set_level("INFO")
+def test_a_run_that_never_got_under_way_isnt_recorded():
     r = running()(*NEXT_RUN[:5], (26, "RUNSTATE_STR", "SETUP"), (28, "RUNNUMBER", "00012")).settle()
     assert r.log[1:] == [("done", "00010", 8.0)]
-    assert "ended before it was announced" not in caplog.text  # it never began
 
 
 def test_a_start_time_from_before_the_run_isnt_taken_as_its():
@@ -470,20 +470,41 @@ def test_a_run_first_seen_ending_after_a_reconnect_is_recorded():
     assert r.log[1:] == [("done", "00010", None), ("start", "00011", "silent"), ("done", "00011", 4.0)]
 
 
+def test_a_stale_ending_replayed_doesnt_adopt_the_next_run():
+    """Run 10 was ending when the replay came, and the number moved on before its SETUP was re-sent."""
+    r = reconnect(running())((100, "RUNSTATE_STR", "ENDING"), (100, "TOTALUAMPS", 13.0), (100.2, "RUNNUMBER", "00011"),
+                             (100.2, "RUNSTATE_STR", "SETUP"), *NEXT_RUN[3:]).settle()
+    assert r.log[1:] == [("done", "00010", 13.0), ("start", "00011", "00010")]
+
+
+def test_a_final_still_due_when_another_run_passes_is_unknown():
+    r = running()((30, "RUNNUMBER", "NaN"), (30, "RUNSTATE_STR", "NaN"), (30, "TOTALUAMPS", "NaN"),
+                  (40, "RUNSTATE_STR", "SETUP"), (40, "RUNNUMBER", "00011"))  # run 10 ended unseen; no counts yet
+    r((50, "RUNNUMBER", "NaN"), (50, "RUNSTATE_STR", "NaN"), (50, "TOTALUAMPS", "NaN"),
+      (200, "TOTALUAMPS", 30.0), (200, "RUNSTATE_STR", "SETUP"), (200, "RUNNUMBER", "00012")).settle()
+    assert r.log[1:] == [("done", "00010", None)]  # not run 11's 30 µA·h
+
+
 def test_an_rb_change_just_after_begin_makes_the_run_the_new_experiments():
     """No counts yet, so the run in progress is the new experiment's first (and gets its target)."""
-    r = running(auto=True)(*NEXT_RUN).settle()
+    r = running(auto=True)
+    r.tracker.run_totals.extend([20.0] * 3)
+    r(*NEXT_RUN).settle()
+    assert r.tracker.run.target == 20.0
     r((29, "_RBNUMBER", "456"), (40, "TOTALUAMPS", 3.0), (50, "RUNSTATE_STR", "ENDING"),
       (51, "RUNNUMBER", "00012"), (51, "RUNSTATE_STR", "SETUP")).settle()
     assert ("experiment", "123", 1, 8.0, True) in r.log  # run 11 isn't counted in it
     assert (r.tracker.exp_runs, r.tracker.exp_uah) == (1, 3.0)  # but in the new one
+    assert r.tracker.run.target == r.tracker.instrument.notify_counts  # with no runs of its own yet
 
 
 def test_a_run_number_going_back_is_ignored(caplog):
     r = running()(*NEXT_RUN).settle()
     r((40, "RUNNUMBER", "00010"), (41, "RUNNUMBER", "00011")).settle()
     assert [d for d in r.log if d[0] == "done"] == [("done", "00010", 8.0)]  # not recounted
-    assert "ignoring run number 00010, not after 00010" in caplog.text
+    assert "ignoring run number 00010, already completed" in caplog.text
+    r((50, "RUNNUMBER", "00003"))  # renumbered
+    assert r.tracker.run_number == "00003"
 
 
 def test_counts_arent_credited_after_a_replay_timeout_without_the_run_number():
@@ -491,4 +512,4 @@ def test_counts_arent_credited_after_a_replay_timeout_without_the_run_number():
     r((100, "RUNSTATE_STR", "RUNNING"))
     r.at(100 + REPLAY_TIMEOUT.total_seconds())  # gave up waiting
     r((112, "TOTALUAMPS", 50.0))
-    assert not r.tracker.replaying and r.tracker.run.last_counts == 8.0
+    assert r.tracker.replaying and r.tracker.run.last_counts == 8.0

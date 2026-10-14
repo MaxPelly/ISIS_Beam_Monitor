@@ -10,7 +10,7 @@ own versions and changelog; each release here notes the version its
 
 - The `push_site` submodule points at push site v1.1.2 (the Status page shows when it was updated, and its script and styles can't be served stale from a cache).
 
-- The shadow run detection also records a run first seen as it ends (e.g. after a reconnect), takes a run's final total the same way whatever order PVWS replays it in, makes a run that's only just begun the new experiment's when the RB number changes, and ignores a run number that goes backwards.
+- The shadow run detection also records a run first seen as it ends (e.g. after a reconnect), takes a run's final total the same way whatever order PVWS replays it in, makes a run that's only just begun the new experiment's when the RB number changes, ignores a run number that goes back to one already completed, and after a reconnect waits for the run number however long it takes.
 
 - Config warnings (unknown keys, an `http://` push URL, a readable secret file) now reach the log file: they're logged once the daemon's logging is set up, rather than lost before it.
 - An unknown `[LOGGING] level` now stops the daemon from starting, naming the allowed levels, instead of quietly logging at WARNING.
