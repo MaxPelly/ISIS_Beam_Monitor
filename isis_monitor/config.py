@@ -156,6 +156,7 @@ class AppConfig:
     # Optional signed-JSON webhook for every channel (e.g. the push_site
     # submodule); a blank url disables it.
     push_url: str = _ini("PUSH", "", "url")
+    # Unset, the daemon reads systemd's push-secret credential (LoadCredential=).
     push_secret_file: str = _ini("PUSH", "", "secret_file")
     push_timeout: float = _ini("PUSH", 2.0, "timeout")
     push_secret: bytes = field(default=b"", repr=False)  # set by the daemon from read_push_secret()
@@ -300,25 +301,33 @@ MIN_PUSH_SECRET_BYTES = 32
 MAX_PUSH_SECRET_BYTES = 4096  # the same limits as the push site, so both accept the same file
 
 
+PUSH_CREDENTIAL = "push-secret"
+
+
 def read_push_secret(config: AppConfig) -> bytes:
     """The [PUSH] shared secret (surrounding whitespace dropped), or b"" when
-    push is disabled; a world-readable file adds to config.warnings. Only the
+    push is disabled: from secret_file, or else systemd's push-secret
+    credential. A world-readable file adds to config.warnings. Only the
     daemon needs it, so it isn't read by load_config()."""
     if not config.push_url:
         return b""
-    path = Path(config.push_secret_file)
+    if config.push_secret_file:
+        path, what = Path(config.push_secret_file), "[PUSH] secret_file"
+    elif "CREDENTIALS_DIRECTORY" in os.environ:
+        path, what = Path(os.environ["CREDENTIALS_DIRECTORY"]) / PUSH_CREDENTIAL, f"The {PUSH_CREDENTIAL} credential"
+    else:
+        raise ConfigError(f"[PUSH] url is set, so set secret_file too, or give the daemon the {PUSH_CREDENTIAL} "
+                          f"credential (LoadCredential={PUSH_CREDENTIAL}:<file> in its systemd unit)")
     try:
         with path.open("rb") as f:
             secret = f.read(MAX_PUSH_SECRET_BYTES + 1).strip()
         world_readable = path.stat().st_mode & 0o004
     except OSError as exc:
-        raise ConfigError(f"[PUSH] secret_file could not be read: {exc}") from exc
+        raise ConfigError(f"{what} could not be read: {exc}") from exc
     if not MIN_PUSH_SECRET_BYTES <= len(secret) <= MAX_PUSH_SECRET_BYTES:
-        raise ConfigError(
-            f"[PUSH] secret_file must hold {MIN_PUSH_SECRET_BYTES} to {MAX_PUSH_SECRET_BYTES} characters"
-        )
+        raise ConfigError(f"{what} must hold {MIN_PUSH_SECRET_BYTES} to {MAX_PUSH_SECRET_BYTES} characters")
     if world_readable:
-        config.warnings.append(f"[PUSH] secret_file {path} is world-readable; consider chmod o-r")
+        config.warnings.append(f"{what} {path} is world-readable; consider chmod o-r")
     return secret
 
 
@@ -382,8 +391,6 @@ def _validate(config: AppConfig, config_path: Path) -> None:
     if config.push_url:
         if not config.push_url.startswith(("http://", "https://")):
             raise ConfigError("[PUSH] url must start with http:// or https://")
-        if not config.push_secret_file:
-            raise ConfigError("[PUSH] secret_file is required when url is set")
         if config.push_url.startswith("http://") and not _is_loopback(urlsplit(config.push_url).hostname or ""):
             config.warnings.append("[PUSH] url is plain http:// to another host, so notifications cross the network "
                                    "unencrypted (they're signed, so can't be forged); use https:// unless it's local")

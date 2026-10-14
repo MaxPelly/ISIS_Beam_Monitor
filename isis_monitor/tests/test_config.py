@@ -194,7 +194,6 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     (NOTIF + "summary_time = 25:00\n", "summary_time"),
     # [PUSH]
     ("[PUSH]\nurl = ftp://x\nsecret_file = s\n", r"\[PUSH\] url must start with"),
-    ("[PUSH]\nurl = http://127.0.0.1:8765/ingest\n", r"\[PUSH\] secret_file is required"),
     ("[PUSH]\ntimeout = 0\n", r"\[PUSH\] timeout must be between"),
 ])
 def test_invalid_config_raises_config_error(tmp_path, extra, match):
@@ -463,3 +462,17 @@ def test_push_secret_is_read_and_checked(tmp_path):
     read_push_secret(config)
     assert "world-readable" in config.warnings[-1]
 
+
+
+def test_push_secret_comes_from_systemds_credential_without_a_file(tmp_path, monkeypatch):
+    config = load_config(_write(tmp_path, "[PUSH]\nurl = http://127.0.0.1:8765/ingest\n"))
+    monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
+    with pytest.raises(ConfigError, match="set secret_file too, or give the daemon the push-secret credential"):
+        read_push_secret(config)
+    credentials = tmp_path / "credentials"
+    credentials.mkdir()
+    (credentials / "push-secret").write_text("c" * 40 + "\n")
+    (credentials / "push-secret").chmod(0o400)
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credentials))
+    assert read_push_secret(config) == b"c" * 40
+    assert not any("world-readable" in w for w in config.warnings)

@@ -8,6 +8,7 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+- `[PUSH] secret_file` is optional: unset, the daemon reads systemd's `push-secret` credential (`LoadCredential=push-secret:<file>`), so the secret file can stay root's.
 - `[DAEMON] sample_interval` must be at least 10s (was 1s): each status sent to the push site bins the last 24h of samples, which at 1s took most of a second.
 - A saved state that's corrupt (e.g. a number too large for a float) is logged and skipped, rather than stopping the daemon from starting.
 - **Breaking:** the monitor is an installed command, `isis-monitor daemon|config|status|reconnect|stop <config.ini>`, and `main.py` is gone. Install it with `pip install -e .` in the checkout (`pip install -e '.[dev]'` for the tests); `requirements.txt` and `requirements-dev.txt` are gone, the dependencies being only in `pyproject.toml`. A systemd unit's `ExecStart` becomes `<venv>/bin/isis-monitor daemon <config.ini>` (see `deploy/isis-beam-monitor.service`).
