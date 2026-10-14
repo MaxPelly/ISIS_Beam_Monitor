@@ -181,3 +181,18 @@ async def test_ipc_request_fails_without_an_answer(tmp_path):
         async with serving(tmp_path, command_handler=never_answers) as server:
             with pytest.raises(TimeoutError, match="No reply to 'command' within"):
                 await ipc_request(server.socket_path, {"method": "command", "name": "x"}, timeout=0.05)
+
+
+async def test_connections_from_other_users_are_refused(tmp_path, caplog):
+    async with serving(tmp_path) as server:
+        assert (await ipc_request(server.socket_path, {"method": "command", "name": "x"}))["ok"]  # our own
+        with patch("isis_monitor.ipc.os.getuid", return_value=os.getuid() + 1):
+            with pytest.raises(ConnectionError):
+                await ipc_request(server.socket_path, {"method": "command", "name": "x"})
+    assert f"Refused an IPC connection from user {os.getuid()}" in caplog.text
+
+
+async def test_the_peer_check_is_skipped_where_unsupported(tmp_path):
+    with patch("isis_monitor.ipc.socket", spec=[]):  # no SO_PEERCRED
+        async with serving(tmp_path) as server:
+            assert (await ipc_request(server.socket_path, {"method": "command", "name": "x"}))["ok"]

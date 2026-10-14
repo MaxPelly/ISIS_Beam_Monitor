@@ -9,6 +9,8 @@ import contextlib
 import json
 import logging
 import os
+import socket
+import struct
 from pathlib import Path
 from typing import Awaitable, Callable, Optional, Set
 
@@ -92,6 +94,11 @@ class IPCServer:
         if self._closing:  # accepted just before stop(), but not yet tracked by it
             writer.close()
             return
+        uid = _peer_uid(writer)
+        if uid not in (None, os.getuid()):  # e.g. root: the socket is already owner-only
+            logger.warning(f"Refused an IPC connection from user {uid}")
+            writer.close()
+            return
         self._clients.add(writer)
         try:
             while line := await reader.readline():
@@ -117,6 +124,15 @@ class IPCServer:
             writer.close()
             with contextlib.suppress(ConnectionError):
                 await writer.wait_closed()
+
+
+def _peer_uid(writer: asyncio.StreamWriter) -> Optional[int]:
+    """The connecting process's user ID, or None where the OS can't say (SO_PEERCRED is Linux's)."""
+    sock = writer.get_extra_info("socket")
+    if sock is None or not hasattr(socket, "SO_PEERCRED"):
+        return None
+    _pid, uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+    return uid
 
 
 async def ipc_request(socket_path: Path, payload: dict, timeout: Optional[float] = None) -> dict:
