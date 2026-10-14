@@ -1,4 +1,4 @@
-"""Shared test helpers: polling, a fake PVWS server, IPC server/client contexts."""
+"""Shared test helpers: polling, a fake PVWS server, an IPC server context."""
 import asyncio
 import contextlib
 import json
@@ -6,8 +6,7 @@ from unittest.mock import MagicMock
 
 import websockets
 
-from isis_monitor.daemon_state import DaemonState
-from isis_monitor.ipc import IPCClient, IPCServer
+from isis_monitor.ipc import IPCServer
 from isis_monitor.notifiers import NotificationChannel
 
 
@@ -72,26 +71,16 @@ async def running(monitor):
 
 
 @contextlib.asynccontextmanager
-async def serving(tmp_path, state=None, command_handler=None, config_handler=None):
+async def serving(tmp_path, command_handler=None, config_handler=None, status=None):
     async def default_handler(name):
         return {"handled": name}
 
-    server = IPCServer(tmp_path / "d.sock", state or DaemonState(), command_handler or default_handler, config_handler)
+    server = IPCServer(tmp_path / "d.sock", command_handler or default_handler, config_handler, status)
     await server.start()
     try:
         yield server
     finally:
         await server.stop()
-
-
-@contextlib.asynccontextmanager
-async def connected(server):
-    client = IPCClient(server.socket_path)
-    await client.connect()
-    try:
-        yield client
-    finally:
-        await client.close()
 
 
 async def raw_request(server, line: bytes) -> dict:

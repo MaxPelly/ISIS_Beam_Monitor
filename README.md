@@ -14,8 +14,8 @@ This is a Python application that monitors the status of the ISIS beam, experime
 - **Signed Webhook (optional)**: Can also POST every notification as HMAC-signed JSON, e.g. to the optional `push_site` for mobile push notifications (see `[PUSH]` below).
 - **Dummy Notifier**: Includes a logging-based dummy notifier for testing and development without sending actual webhooks.
 - **Concurrent Execution**: Uses `asyncio` to run beam and news monitors concurrently for real-time responsiveness.
-- **Live TUI Graph View**: Displays a rolling sparkline graph of beam current (μA) for TS1, TS2, and Muons directly in the terminal, `history_maxlen` samples long (1 hour by default). The graph is sampled every `[DAEMON] sample_interval` (1 minute by default), fully decoupled from the beam WebSocket update rate — a silent beam produces a flat line at the last-known value.
-- **TUI Instruments Panel and Config Editor**: Shows each instrument's run and progress towards its notify threshold (µA·h), and lets you edit instruments and notification settings from the TUI; the daemon validates, saves and restarts itself to apply them.
+- **Status**: With `[PUSH] url` set, the push site's Status page shows each beam with its last 24h, each instrument's run and progress towards its notify threshold (µA·h), the MCR news and the daemon's health. `main.py status` prints the same on the host.
+- **Config Editor**: `main.py config` edits the instruments and notification settings of the running daemon, which validates, saves and restarts itself to apply them.
 
 ## Requirements
 
@@ -89,22 +89,12 @@ or a quarter of the typical run, e.g. a mistaken setup) are left out, and `<numb
 used until 3 runs remain. The experiment is told apart by its RB number
 (`IN:<NAME>:DAE:_RBNUMBER`): when it changes, including to "0" (no experiment), the
 history starts again. The finishing
-card shows an auto target as e.g. "60.5 / 60 µA·h (auto)", and the TUI as "≈60".
+card shows an auto target as e.g. "60.5 / 60 µA·h (auto)", and `status` as "≈60".
 
 Known issue: retitling a run more than 2 minutes after it began is taken as a new run, as
 a new title usually comes just before BEGIN. That sends a new-run card and records the
 µA·h so far as a completed run, so the run is counted twice in the experiment card, the
 daily summary and the auto target history.
-
-### Optional `[TUI]` section
-
-```ini
-[TUI]
-# Number of samples to retain per beam target (default = 60 → 1-hour rolling window at the default interval).
-# history_maxlen = 60
-```
-
-The samples are taken every `[DAEMON] sample_interval` seconds (default 60).
 
 ### Optional `[NOTIFICATIONS]` section
 
@@ -212,26 +202,9 @@ python main.py reconnect path/to/config.ini
 python main.py stop path/to/config.ini
 ```
 
-Run the TUI client (attach/detach as needed, same host via SSH):
-
-```bash
-python main.py tui path/to/config.ini
-```
-
-In TUI mode, single keys (no Enter needed) control the client:
-- `r`: force reconnect (beam + MCR) on daemon
-- `c`: edit the configuration (see below)
-- `v`: switch between the full and compact layouts
-- `q`: quit TUI client
-
-Terminals narrower than 80 columns (e.g. a phone) get a compact layout with just
-the beam currents (coloured by state), the instruments and the MCR news, stacked
-vertically. The layout follows the terminal as it is resized until `v` picks one
-by hand.
-
 ### Editing the configuration
 
-Run `python main.py config path/to/config.ini` (or press `c` in the TUI) to open a numbered menu of the notification settings
+Run `python main.py config path/to/config.ini` to open a numbered menu of the notification settings
 (`timezone`, `debounce_seconds`, `stall_minutes`,
 `finish_warning_minutes`, `summary_time`) and the
 instruments (name, notify threshold, beam target, Teams channel). Type a number to edit
@@ -272,12 +245,6 @@ To run the daemon with a custom configuration file and dummy notifications for t
 python main.py daemon config.ini --dummy
 ```
 
-To run TUI from an SSH session on the same host:
-
-```bash
-python main.py tui config.ini
-```
-
 ### Running as a service (systemd)
 
 `deploy/isis-beam-monitor.service` runs the daemon in a systemd sandbox that
@@ -299,8 +266,8 @@ sudo systemctl status isis-beam-monitor.service
 ### Troubleshooting
 
 - **`Lock file already held`**: another daemon instance is running (or stale lock path configured).
-- **TUI cannot connect**: ensure the daemon is running and the TUI uses the same config file (both use `[DAEMON] socket_path`).
-- **No live updates**: check the daemon's log (`journalctl -u isis-beam-monitor`, its terminal, or `[LOGGING] file` if set) for websocket/news source errors; `python main.py reconnect config.ini` (or `r` in the TUI) forces a reconnect.
+- **`No answer from the daemon`**: ensure the daemon is running and the command uses the same config file (both use `[DAEMON] socket_path`).
+- **No live updates**: check the daemon's log (`journalctl -u isis-beam-monitor`, its terminal, or `[LOGGING] file` if set) for websocket/news source errors; `python main.py reconnect config.ini` forces a reconnect.
 
 ## Releases
 

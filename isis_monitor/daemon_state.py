@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import math
 from collections import deque
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Deque, Dict, Iterable, List, Optional, Tuple
 
@@ -16,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 MCR_NEWS_PLACEHOLDER = "Waiting for initial MCR news..."
 
-SUBSCRIBER_QUEUE_SIZE = 500
 # How far back run completions are kept in the snapshot: the daily summary
 # covers runs over the last 24h, so older ones don't survive a restart.
 RUN_COMPLETIONS_WINDOW = timedelta(hours=24)
@@ -39,24 +36,14 @@ def _finite_floats(value: object) -> List[float]:
     return numbers
 
 
-@dataclass
-class DaemonEvent:
-    event: str
-    payload: dict
-
-
 class DaemonState:
-    """The daemon's in-memory state and event bus.
-
-    Confined to the event-loop thread: it is not thread-safe, because the
-    asyncio.Queue subscribers it publishes to are not either. Code running in
-    other threads must hop onto the loop (see main.StateLogHandler).
-    """
+    """The daemon's in-memory state: beams and their history, MCR news,
+    health and recent run completions. Confined to the event-loop thread
+    (it isn't thread-safe)."""
 
     def __init__(
         self,
         history_maxlen: int = 10_080,
-        logs_maxlen: int = 200,
         instrument_names: Iterable[str] = (),
     ):
         self.beam_states: Dict[str, Dict[str, object]] = {
@@ -67,7 +54,6 @@ class DaemonState:
         }
         self.mcr_news = MCR_NEWS_PLACEHOLDER
         self.mcr_news_at: Optional[datetime] = None  # when this run of the daemon last saw it change
-        self.logs: Deque[str] = deque(maxlen=logs_maxlen)
         self.instrument_names = frozenset(instrument_names)
         # Each instrument tracker's live view (its snapshot plus its effective
         # beam target), set by run_daemon once BeamMonitor exists; the trackers
@@ -84,41 +70,9 @@ class DaemonState:
             "beam": "unknown",
             "mcr": "unknown",
         }
-        self._subscribers: List[asyncio.Queue] = []
         # Called on each significant change (a beam's power, MCR news, health,
         # a run completed), e.g. to send the status page a fresh status.
         self.on_change: Callable[[], None] = lambda: None
-
-    def subscribe(self) -> asyncio.Queue:
-        """Queue of DaemonEvents; a None item means the subscriber fell too far
-        behind and was dropped, so the consumer should disconnect and resync."""
-        q: asyncio.Queue = asyncio.Queue(maxsize=SUBSCRIBER_QUEUE_SIZE)
-        self._subscribers.append(q)
-        return q
-
-    def unsubscribe(self, q: asyncio.Queue) -> None:
-        if q in self._subscribers:
-            self._subscribers.remove(q)
-
-    def _publish(self, event: str, payload: dict) -> None:
-        dropped = 0
-        for q in list(self._subscribers):
-            try:
-                q.put_nowait(DaemonEvent(event=event, payload=payload))
-            except asyncio.QueueFull:
-                self._subscribers.remove(q)
-                while not q.empty():
-                    q.get_nowait()
-                q.put_nowait(None)
-                dropped += 1
-        # Logged only after removal: this log line is itself published back
-        # through update_log(), and would otherwise recurse into the full queue.
-        if dropped:
-            logger.warning(f"Dropped {dropped} IPC subscriber(s) whose event queue was full")
-
-    def update_log(self, message: str) -> None:
-        self.logs.append(message)
-        self._publish("log", {"message": message})
 
     def update_beam_state(self, beam: str, current: float, power: str) -> None:
         if beam not in self.beam_states:
@@ -127,7 +81,6 @@ class DaemonState:
         self.beam_states[beam] = {"current": float(current), "power": str(power)}
         if changed:
             self.on_change()
-        self._publish("beam", {"beam": beam, "current": current, "power": power})
 
     def append_beam_sample(
         self,
@@ -135,17 +88,10 @@ class DaemonState:
         current: float,
         power: str,
         ts: Optional[datetime] = None,
-        publish: bool = True,
     ) -> None:
         ts = ts or datetime.now(timezone.utc)
-        if beam not in self.history:
-            return
-        self.history[beam].append((ts, float(current), str(power)))
-        if publish:
-            self._publish(
-                "sample",
-                {"beam": beam, "timestamp": ts.isoformat(), "current": current, "power": power},
-            )
+        if beam in self.history:
+            self.history[beam].append((ts, float(current), str(power)))
 
     def sample_all_currents(self, ts: Optional[datetime] = None) -> List[Tuple[datetime, str, float, str]]:
         """Append the latest value of every beam to its history; return the
@@ -169,16 +115,14 @@ class DaemonState:
     def update_mcr_news(self, news: str) -> None:
         self.mcr_news, self.mcr_news_at = news, datetime.now(timezone.utc)
         self.on_change()
-        self._publish("mcr", {"news": news})
 
     def update_health(self, component: str, status: str) -> None:
         # Monitors re-report the same status on every successful poll; only
-        # actual transitions are worth an event to every subscriber.
+        # actual transitions are a change.
         if self.health.get(component) == status:
             return
         self.health[component] = status
         self.on_change()
-        self._publish("health", {"component": component, "status": status})
         if component == "beam" and status != "connected":
             # No readings arrive without the feed, so the last ones can't be
             # trusted; PVWS re-sends every value once it reconnects.
@@ -212,22 +156,6 @@ class DaemonState:
             ],
             "instlist": instlist.to_snapshot(self.instlist),
         }
-
-    def get_history_snapshot(self, limit: Optional[int] = None) -> dict:
-        """History per beam, optionally only the most recent `limit` samples."""
-        def tail(data):
-            return list(data)[-limit:] if limit else data
-
-        return {
-            beam: [
-                {"timestamp": ts.isoformat(), "current": cur, "power": power}
-                for ts, cur, power in tail(data)
-            ]
-            for beam, data in self.history.items()
-        }
-
-    def get_logs_snapshot(self) -> list:
-        return list(self.logs)
 
     def restore_from_snapshot_json(self, raw: Optional[str]) -> None:
         if not raw:

@@ -349,7 +349,7 @@ _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 def strip_controls(text: str) -> str:
     """Remote text (run titles, MCR news) with each control character made a
-    space, so e.g. ESC sequences can't drive a terminal showing the TUI or log."""
+    space, so e.g. ESC sequences can't drive a terminal showing `status` or the log."""
     return _CONTROL_RE.sub(" ", text).strip()
 
 
@@ -360,9 +360,8 @@ _BLOCKS = " ▁▂▃▄▅▆▇█"
 def sparkline_chars(values: list[float], width: int) -> str:
     """Return a plain-text sparkline of `width` block characters, min-max normalised.
 
-    Shared between the daily summary (plain text in a notification card) and
-    the TUI (which colours each block); kept here so the daemon needn't
-    import the TUI and rich.
+    Shared by the daily summary (plain text in a notification card) and
+    `main.py status`.
     """
     if not values:
         return " " * width

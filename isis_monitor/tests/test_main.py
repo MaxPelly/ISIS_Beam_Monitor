@@ -6,11 +6,10 @@ import logging
 import os
 import signal
 import sqlite3
-import threading
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,11 +18,11 @@ from isis_monitor import messages
 from isis_monitor.config import DEFAULT_BEAMS, AppConfig, InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.instrument import InstrumentTracker
-from isis_monitor.ipc import IPCClient
+from isis_monitor.ipc import ipc_request
 from isis_monitor.notifiers import DummyNotifier, TeamsNotifier, WebhookNotifier
 from isis_monitor.storage import SQLiteStateStore
 from isis_monitor.tests.helpers import FakePVWS, fake_channel, never_answers, serving, wait_until
-from main import SingleInstanceLock, StateLogHandler
+from main import SingleInstanceLock
 
 
 @pytest.fixture(autouse=True)
@@ -31,36 +30,6 @@ def no_exec():
     """A real exec would replace the pytest process itself."""
     with patch("main.os.execve", side_effect=AssertionError("os.execve called in a test")) as execve:
         yield execve
-
-
-class TestStateLogHandler:
-    def test_emit_calls_update_log(self):
-        """StateLogHandler.emit should forward the formatted message."""
-        mock_state = MagicMock()
-        handler = StateLogHandler(mock_state)
-        handler.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
-
-        record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="hello world", args=(), exc_info=None,
-        )
-        handler.emit(record)
-
-        mock_state.update_log.assert_called_once_with("INFO - hello world")
-
-    def test_emit_handles_exception_gracefully(self, caplog):
-        """If state.update_log raises, handleError should be called and not propagate."""
-        mock_state = MagicMock()
-        mock_state.update_log.side_effect = RuntimeError("State broken")
-        handler = StateLogHandler(mock_state)
-
-        record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="test", args=(), exc_info=None,
-        )
-        with patch.object(handler, "handleError") as handle_error:
-            handler.emit(record)  # does not raise
-        handle_error.assert_called_once_with(record)
 
 
 def test_single_instance_lock_writes_pid_and_releases(tmp_path):
@@ -80,45 +49,6 @@ def test_single_instance_lock_rejects_second_holder(tmp_path):
             with SingleInstanceLock(lock_file):
                 pass
 
-
-def test_apply_snapshot_to_tui():
-    from main import _apply_snapshot_to_tui
-    from isis_monitor.tui import RichTUI
-    tui = RichTUI(60, 60, 4, 50)
-    snap = {
-        "beam_states": {
-            "TS1": {"current": 42.0, "power": "high"}
-        },
-        "mcr_news": "Test news",
-        "instruments": {"PEARL": {"run_name": "R1", "counts": 5.0, "notify_counts": 130.0, "beam_target": "TS1"}},
-    }
-    _apply_snapshot_to_tui(tui, snap)
-    assert tui.mcr_news == "Test news"
-    assert tui.instruments["PEARL"]["run_name"] == "R1"
-    assert "TS1" in tui.beam_states
-    assert tui.beam_states["TS1"]["current"] == 42.0
-
-
-# ---------------------------------------------------------------------------
-# StateLogHandler from other threads
-# ---------------------------------------------------------------------------
-
-async def test_state_log_handler_hands_off_records_from_other_threads():
-    """DaemonState is loop-confined; a record logged in a worker thread must be
-    applied on the loop thread, not in the worker."""
-    state = MagicMock()
-    applied_on = []
-    state.update_log.side_effect = lambda msg: applied_on.append((threading.get_ident(), msg))
-    handler = StateLogHandler(state, asyncio.get_running_loop())
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    record = logging.LogRecord("t", logging.INFO, "", 0, "from worker", (), None)
-
-    await asyncio.to_thread(handler.emit, record)
-    await wait_until(lambda: applied_on)
-    assert applied_on == [(threading.get_ident(), "from worker")]
-
-    handler.emit(logging.LogRecord("t", logging.INFO, "", 0, "on loop", (), None))
-    assert applied_on[-1] == (threading.get_ident(), "on loop")
 
 
 # ---------------------------------------------------------------------------
@@ -386,19 +316,16 @@ async def daemon(config, args=DAEMON_ARGS):
             await asyncio.wait_for(task, 5)
 
 
-async def test_run_daemon_serves_ipc_and_shuts_down_cleanly_with_tui_attached(tmp_path):
+async def test_run_daemon_serves_ipc_and_shuts_down_cleanly_with_a_client_attached(tmp_path):
     update = {"type": "update", "pv": DEFAULT_BEAMS[0].pv, "value": 150.0}
     async with FakePVWS([update]) as pvws:
         config = _config(tmp_path, isis_websocket_url=pvws.url, sample_interval=0.02)
-        root_handlers = list(logging.getLogger().handlers)
         async with daemon(config) as (task, _stop):
-            client = IPCClient(config.daemon_socket_path)
-            await client.connect()
-            await client.request({"method": "subscribe_updates"})
+            def request(payload):
+                return ipc_request(Path(config.daemon_socket_path), payload)
 
             async def ts1_power():
-                reply = await client.request({"method": "get_snapshot"})
-                return reply["snapshot"]["beam_states"]["TS1"]["power"]
+                return (await request({"method": "get_status"}))["status"]["beams"][0]["power"]
 
             for _ in range(200):
                 if await ts1_power() == "high":
@@ -407,16 +334,16 @@ async def test_run_daemon_serves_ipc_and_shuts_down_cleanly_with_tui_attached(tm
             assert await ts1_power() == "high"
             await wait_until(lambda: _persisted_samples(tmp_path / "state.db"))
 
-            bogus = (await client.request({"method": "command", "name": "bogus"}))["result"]
+            bogus = (await request({"method": "command", "name": "bogus"}))["result"]
             assert bogus == {"error": "unknown_command", "name": "bogus"}
 
-            shutdown = await client.request({"method": "command", "name": "shutdown"})
+            _reader, attached = await asyncio.open_unix_connection(config.daemon_socket_path)
+            shutdown = await request({"method": "command", "name": "shutdown"})
             assert shutdown["result"] == {"shutdown": "ok"}
-            await asyncio.wait_for(task, 5)  # exits even though our client is still attached
-            await client.close()
+            await asyncio.wait_for(task, 5)  # exits even though a client is still connected
+            attached.close()
 
     assert not os.path.exists(config.daemon_socket_path)
-    assert logging.getLogger().handlers == root_handlers  # StateLogHandler removed
     store = SQLiteStateStore(tmp_path / "state.db")
     snap = json.loads(store.load_snapshot("daemon_state"))
     store.close()
@@ -451,133 +378,17 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
     config = _config(tmp_path, instruments=[pearl])
     with patch("main.MCRNewsMonitor", wraps=main.MCRNewsMonitor) as mcr_cls:
         async with daemon(config):
-            client = IPCClient(config.daemon_socket_path)
-            await client.connect()
-            snap = (await client.request({"method": "get_snapshot"}))["snapshot"]
-            history = (await client.request({"method": "get_history"}))["history"]
-            reconnect = (await client.request({"method": "command", "name": "force_reconnect_all"}))["result"]
-            await client.close()
+            status = (await ipc_request(Path(config.daemon_socket_path), {"method": "get_status"}))["status"]
+            reconnect = (await ipc_request(Path(config.daemon_socket_path),
+                                           {"method": "command", "name": "force_reconnect_all"}))["result"]
 
-    assert snap["mcr_news"] == "old news"
+    assert status["mcr"]["news"] == "old news"
     assert mcr_cls.call_args.kwargs["old_news"] == "old news"
-    assert snap["instruments"] == {"PEARL": {**saved, "beam_target": "TS1", "run_number": "", "run_state": ""}}
-    assert history["TS2"][0]["current"] == 7.0
+    (inst,) = status["instruments"]
+    assert (inst["name"], inst["title"], inst["rb"], inst["beam"]) == ("PEARL", "Run 30", "A", "TS1")
+    assert [v for v, _ in status["beams"][1]["history"]["values"] if v is not None] == [7.0]
     assert set(reconnect) == {"beam", "mcr"}
 
-
-# ---------------------------------------------------------------------------
-# TUI client side
-# ---------------------------------------------------------------------------
-
-def test_apply_event_to_tui_dispatches_each_event_type():
-    tui = MagicMock()
-    ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    for message in [
-        {"event": "beam", "payload": {"beam": "TS1", "current": 5, "power": "low"}},
-        {"event": "mcr", "payload": {"news": "hi"}},
-        {"event": "log", "payload": {"message": "line"}},
-        {"event": "sample", "payload": {"beam": "TS2", "timestamp": ts.isoformat(), "current": 1, "power": "off"}},
-        {"event": "sample", "payload": {"beam": "TS2"}},  # no timestamp: ignored
-        {"event": "health", "payload": {"component": "beam", "status": "connected"}},
-    ]:
-        main._apply_event_to_tui(tui, message)
-
-    tui.update_beam_state.assert_called_once_with("TS1", 5.0, "low")
-    tui.update_mcr_news.assert_called_once_with("hi")
-    tui.add_history_sample.assert_called_once_with("TS2", ts, 1.0, "off")
-    assert tui.update_log.call_args_list == [call("line"), call("Health: beam -> connected")]
-
-
-async def test_refresh_instruments_rereads_them_from_the_snapshot():
-    """Instruments aren't sent as events; replies without them are skipped."""
-    instruments = {"PEARL": {"run_name": "Run 9"}}
-    replies = [{"ok": False}, {"ok": True, "snapshot": {"instruments": "junk"}},
-               {"ok": True, "snapshot": {"instruments": instruments}}]
-    client, tui = MagicMock(), MagicMock()
-    client.request = AsyncMock(side_effect=lambda *a, **kw: replies.pop(0) if len(replies) > 1 else replies[0])
-    with patch("main.INSTRUMENT_REFRESH", 0.01):
-        task = asyncio.create_task(main._refresh_instruments(client, tui))
-        try:
-            await wait_until(lambda: tui.set_instruments.call_count >= 2)
-        finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-    tui.set_instruments.assert_called_with(instruments)
-    assert client.request.await_args_list[0] == call({"method": "get_snapshot"}, timeout=main.IPC_REQUEST_TIMEOUT)
-    assert client.request.await_count == tui.set_instruments.call_count + 2  # the bad replies weren't applied
-
-
-async def test_tui_connection_loop_syncs_streams_and_reconnects(tmp_path):
-    config = _config(tmp_path, history_maxlen=2, tui_reconnect_initial=0.01, tui_reconnect_max=0.02)
-    state = DaemonState()
-    state.update_mcr_news("hello")
-    for i in range(5):
-        state.append_beam_sample("TS1", float(i), "low")
-    state.update_log("old log")
-    tui = MagicMock()
-    clients = []
-
-    task = asyncio.create_task(main.tui_connection_loop(config, tui, clients.append))
-    try:
-        async with serving(tmp_path, state):
-            await wait_until(lambda: any(c is not None for c in clients))
-            tui.update_mcr_news.assert_called_with("hello")
-            history = tui.set_history_snapshot.call_args[0][0]
-            assert [r["current"] for r in history["TS1"]] == [3.0, 4.0]  # limited to history_maxlen
-            assert call("old log") in tui.update_log.call_args_list
-
-            state.update_beam_state("TS2", 40.0, "high")
-            await wait_until(lambda: call("TS2", 40.0, "high") in tui.update_beam_state.call_args_list)
-
-        # The daemon has gone away: the TUI shows it and retries.
-        await wait_until(lambda: call("disconnected") in tui.update_connection_state.call_args_list)
-        assert clients[-1] is None
-
-        async with serving(tmp_path, state):
-            await wait_until(lambda: sum(c is not None for c in clients) >= 2)
-    finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-
-
-async def test_handle_tui_key():
-    stop, tui, tasks = asyncio.Event(), MagicMock(), set()
-
-    main.handle_tui_key("r", None, stop, tui, tasks)
-    tui.update_log.assert_called_with("Not connected to the daemon.")
-
-    client = MagicMock()
-    client.request = AsyncMock(return_value={"ok": True, "result": {"beam": True}})
-    main.handle_tui_key("R", client, stop, tui, tasks)
-    assert len(tasks) == 1
-    await asyncio.gather(*tasks)
-    await asyncio.sleep(0)
-    assert not tasks  # done tasks are discarded
-    client.request.assert_awaited_with({"method": "command", "name": "force_reconnect_all"})
-    tui.update_log.assert_called_with("Reconnect request result: {'beam': True}")
-
-    client.request = AsyncMock(side_effect=ConnectionError("gone"))
-    main.handle_tui_key("r", client, stop, tui, tasks)
-    await asyncio.gather(*tasks)
-    tui.update_log.assert_called_with("Reconnect request failed: gone")
-
-    main.handle_tui_key("c", None, stop, tui, tasks, AsyncMock())
-    assert not tasks
-
-    edit_config = AsyncMock()
-    main.handle_tui_key("C", client, stop, tui, tasks, edit_config)
-    await asyncio.gather(*tasks)
-    edit_config.assert_awaited_once_with()
-
-    main.handle_tui_key("V", client, stop, tui, tasks)
-    tui.toggle_compact.assert_called_once_with()
-
-    main.handle_tui_key("x", client, stop, tui, tasks)
-    assert not stop.is_set()
-    main.handle_tui_key("Q", client, stop, tui, tasks)
-    assert stop.is_set()
 
 
 # ---------------------------------------------------------------------------
@@ -640,7 +451,6 @@ async def test_status_command_reports_an_error_reply(tmp_path, capsys):
 def test_parse_args_modes():
     args = main.parse_args(["daemon", "c.ini", "--dummy"])
     assert (args.mode, args.dummy, args.notify_current) == ("daemon", True, None)
-    assert main.parse_args(["tui", "c.ini"]).mode == "tui"
     assert main.parse_args(["stop", "c.ini"]).mode == "stop"
     assert main.parse_args(["config", "c.ini"]).mode == "config"
     assert main.parse_args(["status", "c.ini", "--json"]).json is True
@@ -697,7 +507,6 @@ def test_configure_logging_sets_the_daemons_level(tmp_path):
     ("daemon", "", [logging.StreamHandler]),
     ("daemon", "monitor.log", [logging.StreamHandler, main.RotatingFileHandler]),
     ("stop", "monitor.log", None),  # basicConfig's default: stderr
-    ("tui", "monitor.log", [logging.NullHandler]),
 ])
 def test_only_the_daemon_writes_the_log_file(tmp_path, mode, log_file, handlers):
     config = _config(tmp_path, log_file=log_file and str(tmp_path / log_file))
@@ -711,7 +520,7 @@ def test_only_the_daemon_writes_the_log_file(tmp_path, mode, log_file, handlers)
 
 
 @pytest.mark.parametrize("mode, target", [
-    ("daemon", "run_daemon"), ("tui", "run_tui"), ("stop", "run_stop"), ("config", "run_config"),
+    ("daemon", "run_daemon"), ("stop", "run_stop"), ("config", "run_config"),
     ("status", "run_status"), ("reconnect", "run_reconnect"),
 ])
 def test_main_dispatches_each_mode(tmp_path, mode, target):
@@ -761,12 +570,17 @@ async def daemon_with_file(tmp_path):
     args = _file_args(tmp_path)
     config = _config(tmp_path)
     async with daemon(config, args) as (task, _stop):
-        client = IPCClient(config.daemon_socket_path)
-        await client.connect()
-        try:
-            yield task, client, args.config
-        finally:
-            await client.close()
+        yield task, Client(config.daemon_socket_path), args.config
+
+
+class Client:
+    """Sends each request on a connection of its own, as the CLI does."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def request(self, payload):
+        return ipc_request(self.path, payload)
 
 
 async def _revision(client) -> str:
@@ -791,7 +605,7 @@ async def test_daemon_update_config_requires_revision(tmp_path):
 
 
 async def test_daemon_rejects_update_based_on_stale_read(tmp_path):
-    """A hand edit (or another TUI's save) since get_config must not be overwritten."""
+    """A hand edit (or another editor's save) since get_config must not be overwritten."""
     async with daemon_with_file(tmp_path) as (task, client, ini):
         revision = await _revision(client)
         ini.write_text(ini.read_text() + "[INSTRUMENT:WISH]\nnotify_counts = 5\n")
@@ -804,23 +618,18 @@ async def test_daemon_rejects_update_based_on_stale_read(tmp_path):
 
 
 async def test_concurrent_updates_only_one_is_applied(tmp_path):
-    """Two TUIs saving at once from the same read: the edits are serialised,
+    """Two editors saving at once from the same read: the edits are serialised,
     and the loser gets restart_pending (or the connection closes as the
     daemon restarts) rather than overwriting the winner's change."""
     async with daemon_with_file(tmp_path) as (task, client, ini):
         revision = await _revision(client)
-        other = IPCClient(tmp_path / "d.sock")
-        await other.connect()
-        try:
-            results = await asyncio.gather(
-                client.request({"method": "update_config", "revision": revision,
-                                "settings": {"notifications": {"debounce_seconds": "30"}}}),
-                other.request({"method": "update_config", "revision": revision,
-                               "settings": {"notifications": {"summary_time": "09:30"}}}),
-                return_exceptions=True,
-            )
-        finally:
-            await other.close()
+        results = await asyncio.gather(
+            client.request({"method": "update_config", "revision": revision,
+                            "settings": {"notifications": {"debounce_seconds": "30"}}}),
+            client.request({"method": "update_config", "revision": revision,
+                            "settings": {"notifications": {"summary_time": "09:30"}}}),
+            return_exceptions=True,
+        )
         assert await asyncio.wait_for(task, 5) is True
 
     winners = [r for r in results if isinstance(r, dict) and r.get("restarting")]
@@ -925,168 +734,6 @@ def test_restarted_daemon_does_not_replay_notify_current(tmp_path, monkeypatch, 
     assert main.RESTARTED_ENV not in os.environ
 
 
-@contextlib.contextmanager
-def tui_terminal():
-    """A pipe standing in for the TTY, with termios/tty/RichTUI mocked."""
-    read_fd, write_fd = os.pipe()
-    stdin = os.fdopen(read_fd, "r")
-    tui = MagicMock()
-    try:
-        with patch.object(main.sys, "stdin", stdin), \
-             patch("main.termios") as termios_mock, \
-             patch("main.tty") as tty_mock, \
-             patch("isis_monitor.tui.RichTUI", return_value=tui), \
-             patch("main.install_signal_handlers"):
-            termios_mock.tcgetattr.return_value = "saved"
-            yield tui, write_fd, termios_mock, tty_mock
-    finally:
-        os.close(write_fd)
-        stdin.close()
-
-
-SUBSCRIBED = call("Subscribed to daemon updates.")
-
-
-async def start_tui(tui, config, stop):
-    """Start run_tui and wait until it has subscribed to the daemon."""
-    task = asyncio.create_task(main.run_tui(config, stop))
-    await wait_until(lambda: SUBSCRIBED in tui.update_log.call_args_list)
-    return task
-
-
-async def test_run_tui_c_hands_the_terminal_to_the_config_editor_and_back(tmp_path, capsys):
-    async with daemon_with_file(tmp_path) as (_task, _client, _ini):
-        with tui_terminal() as (tui, keys, termios_mock, tty_mock):
-            stop = asyncio.Event()
-            task = await start_tui(tui, _config(tmp_path), stop)
-
-            os.write(keys, b"c")
-            await wait_until(lambda: tui.stop.called)
-            await wait_until(lambda: "=== Configuration ===" in capsys.readouterr().out)
-            assert termios_mock.tcsetattr.call_count == 1  # line mode for the editor
-
-            os.write(keys, b"q\n\n")  # quit the editor without changes, then Enter
-            await wait_until(lambda: tui.start.call_count == 2)
-            assert tty_mock.setcbreak.call_count == 2  # back to key-at-a-time
-
-            os.write(keys, b"q")
-            await asyncio.wait_for(task, 2)
-    assert tui.stop.call_count == 2
-
-
-async def test_run_tui_fits_the_layout_to_the_terminal_width_on_resize(tmp_path):
-    async with daemon_with_file(tmp_path) as (_task, _client, _ini):
-        with tui_terminal() as (tui, keys, _termios, _tty), \
-                patch("main.shutil.get_terminal_size", return_value=os.terminal_size((66, 37))):
-            stop = asyncio.Event()
-            task = await start_tui(tui, _config(tmp_path), stop)
-            tui.fit_to_width.assert_called_once_with(66)  # before the display starts
-
-            os.kill(os.getpid(), signal.SIGWINCH)
-            await wait_until(lambda: tui.fit_to_width.call_count == 2)
-
-            os.write(keys, b"q")
-            await asyncio.wait_for(task, 2)
-            os.kill(os.getpid(), signal.SIGWINCH)  # the handler is gone
-            await asyncio.sleep(0.05)
-    assert tui.fit_to_width.call_count == 2
-
-
-async def test_quitting_the_tui_cancels_an_open_config_editor(tmp_path, capsys):
-    async with daemon_with_file(tmp_path) as (_task, _client, _ini):
-        with tui_terminal() as (tui, keys, termios_mock, tty_mock):
-            stop = asyncio.Event()
-            task = await start_tui(tui, _config(tmp_path), stop)
-            os.write(keys, b"c")
-            await wait_until(lambda: "> " in capsys.readouterr().out)
-
-            stop.set()  # e.g. Ctrl-C
-            await asyncio.wait_for(task, 2)
-
-    # Quitting doesn't bring the live display back just to tear it down.
-    assert tui.start.call_count == 1 and tui.stop.call_count == 2
-    assert termios_mock.tcsetattr.call_args_list[-1] == call(ANY, termios_mock.TCSADRAIN, "saved")
-
-
-async def test_run_tui_handles_several_keys_in_one_read_and_quits_on_eof(tmp_path):
-    """No daemon running: the TUI keeps retrying, still handles keys, and
-    restores the terminal when it quits."""
-    with tui_terminal() as (tui, keys, termios_mock, tty_mock):
-        stop = asyncio.Event()
-        config = _config(tmp_path, tui_reconnect_initial=0.01, tui_reconnect_max=0.01)
-        task = asyncio.create_task(main.run_tui(config, stop))
-        await wait_until(lambda: call("disconnected") in tui.update_connection_state.call_args_list)
-        os.write(keys, b"rc")  # arrive in one read; both handled
-        await wait_until(lambda: tui.update_log.call_args_list.count(call("Not connected to the daemon.")) == 2)
-        assert not task.done()
-
-        null = os.open(os.devnull, os.O_RDONLY)
-        os.dup2(null, keys)  # replaces the pipe's only writer, so stdin sees EOF
-        os.close(null)
-        await asyncio.wait_for(task, 2)
-    assert stop.is_set()
-    tty_mock.setcbreak.assert_called_once()
-    termios_mock.tcsetattr.assert_called_once_with(ANY, termios_mock.TCSADRAIN, "saved")
-    tui.start.assert_called_once()
-    tui.stop.assert_called_once()
-
-
-async def test_config_editor_saves_over_the_new_connection_after_reconnecting(tmp_path, capsys):
-    config = _config(tmp_path, tui_reconnect_initial=0.05, tui_reconnect_max=0.05)
-    clients = []
-
-    def recording_client(path):
-        clients.append(IPCClient(path))
-        return clients[-1]
-
-    async with daemon_with_file(tmp_path) as (_task, _client, ini):
-        with tui_terminal() as (tui, keys, _termios, _tty), patch("main.IPCClient", side_effect=recording_client):
-            task = await start_tui(tui, config, asyncio.Event())
-            os.write(keys, b"c")
-            await wait_until(lambda: "> " in capsys.readouterr().out)
-
-            # The connection the editor started on drops; the TUI reconnects.
-            tui.update_log.reset_mock()
-            clients[-1].writer.transport.abort()
-            await wait_until(lambda: SUBSCRIBED in tui.update_log.call_args_list)
-            assert len(clients) == 2
-
-            for line in (b"1\n", b"UTC\n", b"s\n", b"y\n"):
-                os.write(keys, line)
-                await asyncio.sleep(0.05)
-            await wait_until(lambda: "timezone = UTC" in ini.read_text())
-            os.write(keys, b"\n")  # "Press Enter to return"
-            await wait_until(lambda: tui.start.call_count == 2)
-            os.write(keys, b"q")
-            await asyncio.wait_for(task, 2)
-
-
-async def test_failed_tui_action_is_logged(caplog):
-    tasks = set()
-    async def boom():
-        raise ValueError("bad")
-    main._track(asyncio.create_task(boom()), tasks)
-    await asyncio.sleep(0.01)
-    assert "TUI action failed" in caplog.text and "ValueError: bad" in caplog.text
-    assert not tasks
-
-
-async def test_keys_typed_ahead_of_the_editor_are_passed_to_it(tmp_path, capsys):
-    async with daemon_with_file(tmp_path) as (_task, _client, _ini):
-        with tui_terminal() as (tui, keys, _termios, _tty):
-            task = await start_tui(tui, _config(tmp_path), asyncio.Event())
-            os.write(keys, b"c1\nx")  # one read: open editor, choose 1, then a partial line
-            await wait_until(lambda: "timezone [Europe/London]: " in capsys.readouterr().out)
-            os.write(keys, b"UTC\n")  # the hidden partial "x" was dropped
-            await wait_until(lambda: "  1) timezone                UTC" in capsys.readouterr().out)
-            os.write(keys, b"2\n30\n")  # several lines in one read are split up
-            await wait_until(lambda: "  2) debounce_seconds        30" in capsys.readouterr().out)
-            os.write(keys, b"q\n")
-            await wait_until(lambda: "Discard your changes?" in capsys.readouterr().out)
-            os.write(keys, b"y\n\n")
-            await wait_until(lambda: tui.start.call_count == 2)
-            os.write(keys, b"q")
-            await asyncio.wait_for(task, 2)
 
 
 async def test_run_daemon_stops_other_loops_when_one_crashes(tmp_path):
@@ -1140,7 +787,7 @@ async def test_config_save_is_refused_once_shutdown_has_started(tmp_path):
     real_ipc = main.IPCServer
 
     def capture(*a):
-        handlers["config"] = a[3]
+        handlers["config"] = a[2]
         return real_ipc(*a)
 
     with patch("main.IPCServer", side_effect=capture):
@@ -1150,15 +797,6 @@ async def test_config_save_is_refused_once_shutdown_has_started(tmp_path):
             reply = await handlers["config"]("update_config", {"revision": revision, "settings": {}})
             assert await asyncio.wait_for(task, 5) is False
     assert (reply["ok"], reply["error"]) == (False, "restart_pending")
-
-
-async def test_sync_tui_subscribes_before_fetching_state():
-    client = MagicMock()
-    client.request = AsyncMock(return_value={"ok": True})
-    await main._sync_tui(client, MagicMock(), 60)
-    methods = [c.args[0]["method"] for c in client.request.await_args_list]
-    assert methods == ["subscribe_updates", "get_snapshot", "get_history", "get_logs"]
-    assert all(c.kwargs["timeout"] == main.IPC_REQUEST_TIMEOUT for c in client.request.await_args_list)
 
 
 async def test_run_stop_gives_up_on_a_daemon_that_does_not_answer(tmp_path, capsys):

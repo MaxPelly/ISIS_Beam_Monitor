@@ -31,7 +31,7 @@ CHANNEL_MODES = ("experiment", "instrument")
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 INSTRUMENT_SECTION_PREFIX = "INSTRUMENT:"
 INSTRUMENT_KEYS = ("notify_counts", "beam_target", "channel")  # besides the name, from the section
-# [NOTIFICATIONS] keys the TUI may edit, mapped to their AppConfig field.
+# [NOTIFICATIONS] keys the config editor may edit, mapped to their AppConfig field.
 EDITABLE_NOTIFICATION_KEYS = {
     "timezone": "notifications_timezone",
     "debounce_seconds": "debounce_seconds",
@@ -52,15 +52,10 @@ _BOUNDS = {
     "webhook_timeout": (1, 300, False),
     "push_timeout": (0.5, 30, False),
     "sample_interval": (1, 3600, False),
-    "history_maxlen": (1, 1_000, False),  # the TUI fetches this many per beam in one IPC reply
-    "refresh_per_second": (1, 60, False),
-    "logs_maxlen": (1, 10_000, False),
     "retention_days": (1, 365, False),
     "debounce_seconds": (0, 3600, False),
     "stall_minutes": (0, _WEEK_MINUTES, True),
     "finish_warning_minutes": (0, _WEEK_MINUTES, False),
-    "tui_reconnect_initial": (0, 3600, True),
-    "tui_reconnect_max": (0, 3600, True),
 }
 # The daemon keeps retention_days of samples per beam in memory.
 MAX_HISTORY_SAMPLES = 100_000
@@ -177,10 +172,6 @@ class AppConfig:
     beam_reconnect_interval: float = _ini("TIMEOUTS_INTERVALS", 5.0)
     webhook_timeout: float = _ini("TIMEOUTS_INTERVALS", 10.0)
 
-    history_maxlen: int = _ini("TUI", 60)  # samples shown per beam target
-    refresh_per_second: int = _ini("TUI", 4)
-    logs_maxlen: int = _ini("TUI", 50)
-
     # Relative paths (these, [LOGGING] file and [PUSH] secret_file) are resolved
     # against the config file's directory. The socket and lock stay out of
     # shared /tmp, where another local user could pre-create them.
@@ -190,9 +181,6 @@ class AppConfig:
     retention_days: int = _ini("DAEMON", 7)
     # Seconds between beam history samples, which are also when state is saved
     sample_interval: float = _ini("DAEMON", 60.0)
-
-    tui_reconnect_initial: float = _ini("TUI_CLIENT", 1.0, "reconnect_initial")
-    tui_reconnect_max: float = _ini("TUI_CLIENT", 15.0, "reconnect_max")
 
     # The daemon logs to stderr (journald under systemd), and also to this
     # rotating file if it's set.
@@ -395,8 +383,6 @@ def _validate(config: AppConfig, config_path: Path) -> None:
             f"[DAEMON] retention_days / sample_interval would keep {samples:.0f} samples per beam "
             f"in memory (at most {MAX_HISTORY_SAMPLES}); shorten retention or lengthen the interval"
         )
-    if config.tui_reconnect_initial > config.tui_reconnect_max:
-        raise ConfigError("[TUI_CLIENT] reconnect_initial cannot be greater than reconnect_max")
     for name in ("news_teams_url", "beam_teams_url", "experiment_teams_url"):
         # The URL is a secret (whoever has it can post), so never send it in the clear.
         if getattr(config, name) and not getattr(config, name).lower().startswith("https://"):
@@ -493,7 +479,7 @@ def _format_notify_counts(inst: InstrumentConfig) -> str:
 
 
 def editable_settings(config: AppConfig) -> dict:
-    """The settings the TUI may edit, as INI strings:
+    """The settings the config editor may edit, as INI strings:
     {"notifications": {key: value}, "instruments": [{name, notify_counts, beam_target, channel}]}."""
     return {
         "notifications": {

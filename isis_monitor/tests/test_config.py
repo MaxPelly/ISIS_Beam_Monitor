@@ -70,24 +70,18 @@ def test_load_config_empty_websocket_url_warns(tmp_path):
     assert any("isis_websocket_url" in w for w in config.warnings)
 
 
-def test_load_config_daemon_and_tui_client_values(tmp_path):
+def test_load_config_daemon_values(tmp_path):
     config = load_config(_write(tmp_path, """\
 [DAEMON]
 db_path = /tmp/beam.db
 socket_path = /tmp/beam.sock
 lock_file = /tmp/beam.lock
 retention_days = 7
-
-[TUI_CLIENT]
-reconnect_initial = 2
-reconnect_max = 20
 """))
     assert config.daemon_db_path == "/tmp/beam.db"
     assert config.daemon_socket_path == "/tmp/beam.sock"
     assert config.daemon_lock_file == "/tmp/beam.lock"
     assert config.retention_days == 7
-    assert config.tui_reconnect_initial == 2
-    assert config.tui_reconnect_max == 20
 
 
 def test_load_config_notifications_custom_values(tmp_path):
@@ -155,16 +149,10 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     ("[BEAM:TS2]\npv = AC:TS1:BEAM:CURR\n", r"\[BEAM:TS2\] PV AC:TS1:BEAM:CURR is already used by the TS1 beam"),
     ("[INSTRUMENT:WISH]\n[INSTRUMENT:WISH]\n", "Could not parse"),  # duplicate section
     # Out-of-range numbers
-    ("[TUI_CLIENT]\nreconnect_initial = 0\nreconnect_max = 5\n", "reconnect_initial must be above 0 and at most 3600"),
-    ("[TUI_CLIENT]\nreconnect_max = inf\n", "reconnect_max must be above 0"),
-    ("[TUI_CLIENT]\nreconnect_initial = 10\nreconnect_max = 5\n", "cannot be greater"),
     ("[TIMEOUTS_INTERVALS]\nmcr_poll_interval = 0\n", r"\[TIMEOUTS_INTERVALS\] mcr_poll_interval must be between 5"),
     ("[TIMEOUTS_INTERVALS]\nbeam_reconnect_interval = -1\n", "beam_reconnect_interval must be between"),
     ("[TIMEOUTS_INTERVALS]\nwebhook_timeout = 0\n", "webhook_timeout must be between 1 and 300"),
     ("[DAEMON]\nsample_interval = nan\n", r"\[DAEMON\] sample_interval must be between"),
-    ("[TUI]\nhistory_maxlen = -5\n", "history_maxlen must be between"),
-    ("[TUI]\nhistory_maxlen = 1001\n", "history_maxlen must be between"),
-    ("[TUI]\nlogs_maxlen = 0\n", "logs_maxlen must be between"),
     ("[DAEMON]\nretention_days = 100000000\n", "retention_days must be between"),
     ("[DAEMON]\nretention_days = 30\nsample_interval = 1\n", "samples per beam"),
     # [INSTRUMENT:*] sections
@@ -209,9 +197,8 @@ def test_invalid_config_raises_config_error(tmp_path, extra, match):
 
 
 def test_load_config_blank_numeric_value_uses_default(tmp_path):
-    config = load_config(_write(tmp_path, "[DAEMON]\nretention_days =\n[TUI]\nhistory_maxlen =\n"))
-    assert config.retention_days == 7
-    assert config.history_maxlen == 60
+    config = load_config(_write(tmp_path, "[DAEMON]\nretention_days =\nsample_interval =\n"))
+    assert (config.retention_days, config.sample_interval) == (7, 60)
 
 
 @pytest.mark.parametrize("url, warned", [
@@ -472,7 +459,7 @@ channel = Instrument
 def test_push_secret_is_read_and_checked(tmp_path):
     secret_file = tmp_path / "push.secret"
     push = f"[PUSH]\nurl = http://127.0.0.1:8765/ingest\nsecret_file = {secret_file}\n"
-    # load_config() doesn't need the secret (the TUI and stop modes never read it).
+    # load_config() doesn't need the secret (the other commands never read it).
     config = load_config(_write(tmp_path, push))
     assert config.push_secret == b""
     with pytest.raises(ConfigError, match="could not be read"):

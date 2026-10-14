@@ -784,21 +784,21 @@ async def test_reconnect_repopulates_beam_states_marked_unknown(mock_config, moc
     unchanged value on reconnect must restore it, without a beam notification."""
     beam_channel, _ = mock_channels
     state = DaemonState()
-    events = state.subscribe()
     update = {"type": "update", "pv": TS1_PV, "value": 150.0}
     powers = []
+    update_beam_state = state.update_beam_state
 
-    def ts1_powers():
-        while not events.empty():
-            event = events.get_nowait()
-            if event.event == "beam" and event.payload["beam"] == "TS1":
-                powers.append(event.payload["power"])
-        return powers
+    def record(beam, current, power):
+        if beam == "TS1":
+            powers.append(power)
+        update_beam_state(beam, current, power)
+
+    state.update_beam_state = record
 
     async with FakePVWS([update], close_after_send=True) as server:
         m = ws_monitor(mock_config, mock_channels, server.url, sink=state, reconnect_interval=0.02)
         async with running(m):
-            await wait_until(lambda: ts1_powers()[:3] == ["high", "unknown", "high"])
+            await wait_until(lambda: powers[:3] == ["high", "unknown", "high"])
 
     beam_channel.broadcast.assert_called_once()  # just the startup card
 
@@ -1155,7 +1155,7 @@ async def test_dropped_flicker_does_not_reset_time_in_state(mock_config, mock_ch
 
 
 async def test_restored_run_is_not_reset_or_renotified_after_a_restart(mock_config, mock_channels):
-    """After a restart (e.g. a TUI config save) PVWS re-sends the same title and
+    """After a restart (e.g. a config save) PVWS re-sends the same title and
     TOTALUAMPS; neither a new-run card nor a second finishing card is sent."""
     _, exp_channel = mock_channels
     m = make_monitor(mock_config, mock_channels, counts_target=100)
@@ -1547,7 +1547,7 @@ async def test_reconnect_requested_during_handshake_does_not_block_later_ones(mo
 
 
 async def test_run_title_control_characters_are_stripped(mock_config, mock_channels):
-    """A title can't carry terminal escape sequences into the TUI, log or cards."""
+    """A title can't carry terminal escape sequences into `status`, the log or cards."""
     m = make_monitor(mock_config, mock_channels)
     await m._handle_update(title(b"\x1b]0;pwn\x07Run\x1b[2J 1\x00\x00"))
     assert tracker(m).state.run_name == "]0;pwn Run [2J 1"

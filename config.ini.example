@@ -47,7 +47,7 @@ experiment_teams_url =
 # and the run state, run number and RB number from <prefix>DAE:RUNSTATE_STR,
 # RUNNUMBER and _RBNUMBER. The prefix is the instrument's from CS:INSTLIST, which
 # is usually IN:<NAME>: (used until the list arrives, or if it doesn't name it).
-# Instruments and [NOTIFICATIONS] can also be edited from the TUI (press c); saving
+# Instruments and [NOTIFICATIONS] can also be edited with `main.py config`; saving
 # there rewrites this file without its comments (the old file is kept as .bak).
 [INSTRUMENT:PEARL]
 notify_counts = 130
@@ -62,34 +62,21 @@ notify_counts = 130
 # put on TS1, TS2 or MUON (TS1, TS2 or Muons).
 # instrument_target = TS1
 
-[TUI]
-# Number of samples the TUI shows per beam target (1-1000, default = 60 → 1-hour rolling window).
-# history_maxlen = 60
-# Refresh rate for the UI (default = 4).
-# refresh_per_second = 4
-# Maximum number of log lines to show in the TUI (default = 50).
-# logs_maxlen = 50
-
 [DAEMON]
 # Relative paths here and in [LOGGING] and [PUSH] are relative to this file's directory.
 # SQLite database path for persisted history/state.
 # db_path = beam_monitor.db
-# Unix domain socket the TUI and `stop` connect to. Keep it out of shared
+# Unix domain socket the other commands (config, status, stop…) connect to. Keep it out of shared
 # directories such as /tmp, where another user could create it first.
 # socket_path = isis_beam_monitor.sock
 # Single-instance lock file for daemon mode.
 # lock_file = isis_beam_monitor.lock
 # Seconds between beam history samples, which is also how often state is
-# saved (1-3600). The TUI's graph shows one point per sample.
+# saved (1-3600).
 # sample_interval = 60
 # Beam history retention window in days (1-365, but at most 100,000 samples per beam
 # are kept in memory, so about 69 days at the default 60s sample_interval).
 # retention_days = 7
-
-[TUI_CLIENT]
-# Reconnect backoff start and max in seconds.
-# reconnect_initial = 1
-# reconnect_max = 15
 
 [LOGGING]
 # The daemon logs to stderr; under systemd, read it with journalctl.

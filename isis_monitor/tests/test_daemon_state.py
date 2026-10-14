@@ -3,8 +3,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
-from isis_monitor.daemon_state import SUBSCRIBER_QUEUE_SIZE, DaemonState
-from main import StateLogHandler
+from isis_monitor.daemon_state import DaemonState
 
 INSTRUMENTS = ["PEARL", "WISH"]
 
@@ -19,104 +18,37 @@ def test_daemon_state_snapshot():
     assert snap["beam_states"]["TS1"]["current"] == 45.0
     assert "health" not in snap  # live state, not saved: it describes this run's connections
     
-    # History and logs are fetched separately, not in the snapshot
-    assert "history" not in snap
-    assert "logs" not in snap
-    state.update_log("Log entry 1")
-    assert state.get_logs_snapshot() == ["Log entry 1"]
+    assert "history" not in snap  # saved as samples, separately
 
-def test_daemon_state_pubsub():
+def test_update_health_is_a_change_only_when_it_changes():
     state = DaemonState()
-    queue = state.subscribe()
-
-    state.update_beam_state("TS2", 100.0, "high")
-    
-    event = queue.get_nowait()
-    assert event.event == "beam"
-    assert event.payload["beam"] == "TS2"
-
-    state.unsubscribe(queue)
-    state.update_log("Log entry")
-    
-    assert queue.empty()
-
-def _drain(q):
-    events = []
-    while not q.empty():
-        events.append(q.get_nowait())
-    return events
-
-
-def test_full_subscriber_is_dropped_with_sentinel(caplog):
-    state = DaemonState()
-    slow = state.subscribe()
-    for i in range(SUBSCRIBER_QUEUE_SIZE + 1):
-        state.update_log(f"Spam {i}")
-
-    assert "Dropped 1 IPC subscriber(s)" in caplog.text
-    assert slow not in state._subscribers
-    # The backlog is discarded and replaced by a single "resync" sentinel.
-    assert _drain(slow) == [None]
-
-
-def test_dropping_subscriber_does_not_recurse_through_state_log_handler():
-    """The drop warning is itself published via update_log(); it must not
-    re-enter the still-full queue (previously: RecursionError)."""
-    state = DaemonState()
-    handler = StateLogHandler(state)
-    handler.handleError = MagicMock()
-    root = logging.getLogger()
-    root.addHandler(handler)
-    try:
-        state.subscribe()
-        healthy = state.subscribe()
-        for i in range(SUBSCRIBER_QUEUE_SIZE + 1):
-            state.update_log(f"Spam {i}")
-            _drain(healthy)  # keep this one keeping up
-    finally:
-        root.removeHandler(handler)
-
-    handler.handleError.assert_not_called()
-    assert sum("Dropped" in line for line in state.logs) == 1
-    assert healthy in state._subscribers
-
-
-def test_update_health_publishes_only_on_change():
-    state = DaemonState()
-    q = state.subscribe()
+    state.on_change = MagicMock()
     state.update_health("mcr", "connected")
     state.update_health("mcr", "connected")
     state.update_health("mcr", "error")
-    events = _drain(q)
-    assert [e.payload["status"] for e in events] == ["connected", "error"]
+    assert state.on_change.call_count == 2
     assert state.health["mcr"] == "error"
 
 
-def test_sample_all_currents_appends_publishes_and_returns_rows():
+def test_sample_all_currents_appends_and_returns_rows():
     state = DaemonState()
     state.update_beam_state("TS1", 150.0, "high")
-    q = state.subscribe()
     ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
     rows = state.sample_all_currents(ts)
 
     assert rows == [(ts, "TS1", 150.0, "high")]  # the others have no reading yet
     assert state.history["TS1"][-1] == (ts, 150.0, "high")
-    events = _drain(q)
-    assert {e.event for e in events} == {"sample"}
-    assert len(events) == len(rows)
 
 
-def test_append_beam_sample_without_publish_and_unknown_beams():
+def test_unknown_beams_are_ignored():
     state = DaemonState()
-    q = state.subscribe()
-    state.append_beam_sample("TS1", 1.0, "low", publish=False)
+    state.append_beam_sample("TS1", 1.0, "low")
     state.append_beam_sample("Nope", 1.0, "low")
     state.update_beam_state("Nope", 1.0, "low")
     assert len(state.history["TS1"]) == 1
     assert "Nope" not in state.history
     assert "Nope" not in state.beam_states
-    assert q.empty()
 
 
 def test_trim_history_before_drops_only_old_samples():
@@ -126,17 +58,6 @@ def test_trim_history_before_drops_only_old_samples():
         state.append_beam_sample("TS2", float(minutes), "low", ts=now - timedelta(minutes=minutes))
     state.trim_history_before(now - timedelta(minutes=15))
     assert [v for _, v, _ in state.history["TS2"]] == [10.0, 0.0]
-
-
-def test_get_history_snapshot_limit_returns_newest():
-    state = DaemonState()
-    now = datetime.now(timezone.utc)
-    for i in range(5):
-        state.append_beam_sample("TS1", float(i), "low", ts=now + timedelta(minutes=i))
-    limited = state.get_history_snapshot(limit=2)
-    assert [row["current"] for row in limited["TS1"]] == [3.0, 4.0]
-    assert limited["TS2"] == []
-    assert [row["current"] for row in state.get_history_snapshot()["TS1"]] == [0.0, 1.0, 2.0, 3.0, 4.0]
 
 
 def test_snapshot_is_a_copy():
@@ -249,12 +170,9 @@ def test_beams_are_unknown_while_the_beam_feed_is_down():
     state = DaemonState()
     state.update_health("beam", "connected")
     state.update_beam_state("TS1", 150.0, "high")
-    q = state.subscribe()
 
     state.update_health("beam", "disconnected")
     assert state.beam_states["TS1"] == {"current": 150.0, "power": "unknown"}
-    events = [q.get_nowait() for _ in range(q.qsize())]
-    assert {e.payload["beam"] for e in events if e.event == "beam"} == {"TS1", "TS2", "Muons"}
 
     state.update_health("beam", "reconnecting")
     state.update_health("beam", "connected")

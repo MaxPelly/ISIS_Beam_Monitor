@@ -3,20 +3,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
 import fcntl
 import json
 import logging
 import os
-import shutil
 import signal
 import sys
-import termios
-import tty
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import TYPE_CHECKING, Awaitable, Callable, Optional
+from typing import Optional
 
 import aiohttp
 
@@ -36,15 +32,12 @@ from isis_monitor.config import (
 )
 from isis_monitor.daemon_state import MCR_NEWS_PLACEHOLDER, DaemonState
 from isis_monitor.status import StatusPublisher, build as build_status, render_text as render_status
-from isis_monitor.ipc import IPCClient, IPCServer, ipc_request
+from isis_monitor.ipc import IPCServer, ipc_request
 from isis_monitor.mcr import MCRNewsMonitor
 from isis_monitor.messages import Notification, set_timezone
 from isis_monitor.notifiers import DummyNotifier, NotificationChannel, Notifier, TeamsNotifier, WebhookNotifier
 from isis_monitor.storage import SQLiteStateStore
 from isis_monitor.summary import daily_summary_loop
-
-if TYPE_CHECKING:  # the daemon never loads the TUI (or rich); run_tui imports it
-    from isis_monitor.tui import RichTUI
 
 logger = logging.getLogger("MAIN")
 
@@ -52,39 +45,7 @@ LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 # Set in the environment of a daemon that re-exec'd itself (see restart_process).
 RESTARTED_ENV = "ISIS_MONITOR_RESTARTED"
 LOOP_STOP_TIMEOUT = 5.0  # seconds run_daemon's loops get to exit after stop_event
-INSTRUMENT_REFRESH = 2.0  # seconds between the TUI's re-reads of instrument state
 CLOSE_TIMEOUT = 5.0  # seconds the notifiers get to send what's queued, on shutdown
-IPC_REQUEST_TIMEOUT = 10.0  # for the TUI's sync; a stuck daemon mustn't hang it
-
-
-class StateLogHandler(logging.Handler):
-    """Mirrors log records into DaemonState, and from there to attached TUIs.
-
-    DaemonState is confined to the event loop, so records emitted from other
-    threads (e.g. asyncio.to_thread workers) are handed over to `loop`.
-    """
-
-    def __init__(self, state: DaemonState, loop: Optional[asyncio.AbstractEventLoop] = None):
-        super().__init__()
-        self.state = state
-        self.loop = loop
-
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            if self.loop is None or self.loop is _running_loop():
-                self.state.update_log(msg)
-            else:
-                self.loop.call_soon_threadsafe(self.state.update_log, msg)
-        except Exception:
-            self.handleError(record)
-
-
-def _running_loop() -> Optional[asyncio.AbstractEventLoop]:
-    try:
-        return asyncio.get_running_loop()
-    except RuntimeError:
-        return None
 
 
 class LockHeldError(RuntimeError):
@@ -128,11 +89,7 @@ LOG_MAX_BYTES, LOG_BACKUP_COUNT = 5_000_000, 3
 
 def configure_logging(mode: str, config) -> None:
     """Only the daemon writes the log: to stderr, and to `[LOGGING] file` if
-    set. `stop` shows warnings on stderr; the TUI logs nothing, as stderr
-    would draw over its display (it shows connection problems itself)."""
-    if mode == "tui":
-        logging.basicConfig(handlers=[logging.NullHandler()])
-        return
+    set. The other commands only show warnings, on stderr."""
     if mode != "daemon":
         logging.basicConfig(level=logging.WARNING, format=LOG_FORMAT)
         return
@@ -231,9 +188,8 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
     """Run until stopped; returns True if the daemon should restart itself."""
     install_signal_handlers(stop_event)
 
-    samples_for_retention = int(86400 * config.retention_days / config.sample_interval)
     state = DaemonState(
-        history_maxlen=max(config.history_maxlen, samples_for_retention),
+        history_maxlen=int(86400 * config.retention_days / config.sample_interval),
         instrument_names=[inst.name for inst in config.instruments],
     )  # health starts as "starting"
 
@@ -250,12 +206,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             current=float(row["current"]),
             power=str(row["power"]),
             ts=datetime.fromisoformat(str(row["timestamp"])),
-            publish=False,
         )
-
-    state_log_handler = StateLogHandler(state, asyncio.get_running_loop())
-    state_log_handler.setFormatter(logging.Formatter(LOG_FORMAT))
-    logging.getLogger().addHandler(state_log_handler)
     logger.info(f"ISIS Beam Monitor v{__version__} starting")
 
     session = aiohttp.ClientSession()  # for every HTTP notifier
@@ -336,7 +287,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
         state.on_change = publisher.poke
         loops.append(publisher.run)
 
-    ipc_server = IPCServer(Path(config.daemon_socket_path), state, command_handler, config_handler, current_status)
+    ipc_server = IPCServer(Path(config.daemon_socket_path), command_handler, config_handler, current_status)
     tasks: list = []
     try:
         await ipc_server.start()
@@ -380,7 +331,6 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             if isinstance(result, Exception):
                 logger.error(f"Closing {type(notifier).__name__} failed: {result!r}")
         await session.close()
-        logging.getLogger().removeHandler(state_log_handler)
     return restart_requested
 
 
@@ -395,271 +345,6 @@ def restart_process() -> None:
     except OSError as exc:  # e.g. the interpreter was removed by a venv rebuild
         print(f"Failed to restart daemon: {exc}", file=sys.stderr)
         raise SystemExit(1)
-
-
-def _apply_snapshot_to_tui(tui: RichTUI, snapshot: dict) -> None:
-    beam_states = snapshot.get("beam_states", {})
-    for beam in BEAM_NAMES:
-        state = beam_states.get(beam)
-        if state:
-            tui.update_beam_state(beam, float(state.get("current", 0.0)), str(state.get("power", "unknown")))
-    if snapshot.get("mcr_news"):
-        tui.update_mcr_news(str(snapshot["mcr_news"]))
-    if isinstance(snapshot.get("instruments"), dict):
-        tui.set_instruments(snapshot["instruments"])
-
-
-def _apply_event_to_tui(tui: RichTUI, message: dict) -> None:
-    ev = message.get("event")
-    payload = message.get("payload", {})
-    if ev == "beam":
-        tui.update_beam_state(str(payload.get("beam", "")), float(payload.get("current", 0.0)), str(payload.get("power", "unknown")))
-    elif ev == "mcr":
-        tui.update_mcr_news(str(payload.get("news", "")))
-    elif ev == "log":
-        tui.update_log(str(payload.get("message", "")))
-    elif ev == "sample":
-        ts_raw = payload.get("timestamp")
-        if not ts_raw:
-            return
-        tui.add_history_sample(
-            str(payload.get("beam", "")),
-            datetime.fromisoformat(str(ts_raw)),
-            float(payload.get("current", 0.0)),
-            str(payload.get("power", "unknown")),
-        )
-    elif ev == "health":
-        tui.update_log(f"Health: {payload.get('component', '')} -> {payload.get('status', '')}")
-
-
-async def _sync_tui(client: IPCClient, tui: RichTUI, history_limit: int) -> None:
-    # Subscribe first, so nothing that happens during the sync is missed;
-    # events carry absolute values, so replaying one after the snapshot is harmless.
-    sub_resp = await client.request({"method": "subscribe_updates"}, timeout=IPC_REQUEST_TIMEOUT)
-
-    snapshot_resp = await client.request({"method": "get_snapshot"}, timeout=IPC_REQUEST_TIMEOUT)
-    if snapshot_resp.get("ok"):
-        tui.set_daemon_version(str(snapshot_resp.get("version", "")))
-        _apply_snapshot_to_tui(tui, snapshot_resp.get("snapshot", {}))
-
-    history_resp = await client.request(
-        {"method": "get_history", "limit": history_limit}, timeout=IPC_REQUEST_TIMEOUT
-    )
-    if history_resp.get("ok"):
-        tui.set_history_snapshot(history_resp.get("history", {}))
-
-    logs_resp = await client.request({"method": "get_logs"}, timeout=IPC_REQUEST_TIMEOUT)
-    if logs_resp.get("ok"):
-        for line in logs_resp.get("logs", [])[-20:]:
-            tui.update_log(str(line))
-
-    if sub_resp.get("ok"):
-        tui.update_log("Subscribed to daemon updates.")
-
-
-async def _refresh_instruments(client: IPCClient, tui: RichTUI) -> None:
-    """Instruments aren't sent as events, so re-read them every INSTRUMENT_REFRESH."""
-    while True:
-        await asyncio.sleep(INSTRUMENT_REFRESH)
-        try:
-            resp = await client.request({"method": "get_snapshot"}, timeout=IPC_REQUEST_TIMEOUT)
-        except (OSError, ValueError, RuntimeError):  # the connection's gone; the loop reconnects
-            return
-        if resp.get("ok") and isinstance(resp.get("snapshot", {}).get("instruments"), dict):
-            tui.set_instruments(resp["snapshot"]["instruments"])
-
-
-async def tui_connection_loop(config, tui: RichTUI, on_client: Callable[[Optional[IPCClient]], None]) -> None:
-    """Keep `tui` attached to the daemon, reconnecting with backoff, until cancelled.
-
-    `on_client` is told the live client (or None) so key presses can send commands.
-    """
-    backoff = config.tui_reconnect_initial
-    refresh: Optional[asyncio.Task] = None
-    while True:
-        client = IPCClient(Path(config.daemon_socket_path))
-        try:
-            tui.update_connection_state("connecting")
-            await client.connect()
-            tui.update_connection_state("connected")
-            await _sync_tui(client, tui, config.history_maxlen)
-            backoff = config.tui_reconnect_initial
-            on_client(client)
-            refresh = asyncio.create_task(_refresh_instruments(client, tui))
-            async for message in client.iter_events():
-                _apply_event_to_tui(tui, message)
-        except (OSError, ValueError) as exc:
-            tui.update_connection_state("disconnected")
-            tui.update_log(f"Daemon connection lost: {exc}")
-        finally:
-            if refresh is not None:
-                refresh.cancel()
-                with contextlib.suppress(asyncio.CancelledError, OSError, ValueError):
-                    await refresh
-            refresh = None
-            on_client(None)
-            await client.close()
-        await asyncio.sleep(backoff)
-        backoff = min(config.tui_reconnect_max, backoff * 2)
-
-
-async def _send_reconnect(client: IPCClient, tui: RichTUI) -> None:
-    try:
-        response = await client.request({"method": "command", "name": "force_reconnect_all"})
-        tui.update_log(f"Reconnect request result: {response.get('result')}")
-    except Exception as e:
-        tui.update_log(f"Reconnect request failed: {e}")
-
-
-def _track(task: asyncio.Task, tasks: set) -> None:
-    tasks.add(task)  # keep a reference so the task isn't garbage-collected
-    task.add_done_callback(tasks.discard)
-    task.add_done_callback(_log_task_failure)
-
-
-def _log_task_failure(task: asyncio.Task) -> None:
-    if not task.cancelled() and task.exception() is not None:
-        logger.error("TUI action failed", exc_info=task.exception())
-
-
-def handle_tui_key(
-    ch: str,
-    client: Optional[IPCClient],
-    stop_event: asyncio.Event,
-    tui: RichTUI,
-    tasks: set,
-    edit_config: Optional[Callable[[], Awaitable[None]]] = None,
-) -> None:
-    ch = ch.lower()
-    if ch == "q":
-        stop_event.set()
-    elif ch == "v":
-        tui.toggle_compact()
-    elif ch in ("r", "c"):
-        if client is None:
-            tui.update_log("Not connected to the daemon.")
-        elif ch == "r":
-            _track(asyncio.create_task(_send_reconnect(client, tui)), tasks)
-        elif edit_config is not None:
-            _track(asyncio.create_task(edit_config()), tasks)
-
-
-async def run_tui(config, stop_event: asyncio.Event):
-    install_signal_handlers(stop_event)
-
-    # Read keystrokes immediately, without waiting for Enter
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    tty.setcbreak(fd)
-
-    from isis_monitor.tui import RichTUI
-
-    tui = RichTUI(
-        history_maxlen=config.history_maxlen,
-        sample_interval=config.sample_interval,
-        refresh_per_second=config.refresh_per_second,
-        logs_maxlen=config.logs_maxlen,
-    )
-
-    def fit_layout() -> None:  # compact on narrow terminals, e.g. phones
-        tui.fit_to_width(shutil.get_terminal_size().columns)
-
-    fit_layout()
-    tui.start()
-
-    client: Optional[IPCClient] = None
-    key_tasks: set = set()
-
-    def set_client(c: Optional[IPCClient]) -> None:
-        nonlocal client
-        client = c
-
-    loop = asyncio.get_running_loop()
-    typed_ahead = ""  # keys read in the same chunk as "c", owed to the editor
-
-    # stdin is read with os.read rather than through sys.stdin, whose buffer
-    # could swallow typed-ahead keys (so the reader never fires for them) or
-    # block the event loop waiting for a newline.
-    def on_key() -> None:
-        nonlocal typed_ahead
-        data = os.read(fd, 64)
-        if not data:  # stdin closed
-            stop_event.set()
-            return
-        text = data.decode(errors="ignore")
-        for i, ch in enumerate(text):
-            handle_tui_key(ch, client, stop_event, tui, key_tasks, edit_config)
-            if ch.lower() == "c" and client is not None:
-                typed_ahead = text[i + 1:]  # the editor now owns the terminal
-                return
-
-    async def read_line(prompt: str) -> Optional[str]:
-        """Read one line without blocking the event loop (so the daemon
-        connection stays alive and quitting can cancel it); None on EOF."""
-        nonlocal typed_ahead
-        sys.stdout.write(prompt)
-        if "\n" in typed_ahead:
-            text, typed_ahead = typed_ahead.split("\n", 1)
-            print(text)
-            return text
-        typed_ahead = ""  # a partial line can't be shown or edited, so drop it
-        sys.stdout.flush()
-        line: asyncio.Future = loop.create_future()
-
-        def ready() -> None:
-            if not line.done():
-                # In canonical mode one read returns at most one line.
-                nonlocal typed_ahead
-                data = os.read(fd, 4096)
-                if not data:
-                    line.set_result(None)
-                    return
-                # Usually one line, but keys queued while switching terminal
-                # modes arrive together; keep the rest for the next prompts.
-                text, _, typed_ahead = data.decode(errors="replace").partition("\n")
-                line.set_result(text)
-
-        loop.add_reader(fd, ready)
-        try:
-            return await line
-        finally:
-            loop.remove_reader(fd)
-
-    async def request(payload: dict) -> dict:
-        # Whichever client is live now: the connection may have been
-        # replaced (e.g. by a daemon restart) while the editor was open.
-        if client is None:
-            raise ConnectionError("Not connected to the daemon")
-        return await client.request(payload)
-
-    async def edit_config() -> None:
-        # Hand the terminal over to the line-based editor, then take it back.
-        nonlocal typed_ahead
-        loop.remove_reader(fd)
-        tui.stop()
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-        try:
-            await run_config_editor(request, read_line, print)
-            await read_line("Press Enter to return to the monitor...")
-        finally:
-            typed_ahead = ""  # not owed to the next editor session
-            tty.setcbreak(fd)
-            if not stop_event.is_set():  # otherwise run_tui is tearing down anyway
-                tui.start()
-                loop.add_reader(fd, on_key)
-
-    loop.add_reader(fd, on_key)
-    loop.add_signal_handler(signal.SIGWINCH, fit_layout)
-    try:
-        await run_until_stopped(tui_connection_loop(config, tui, set_client), stop_event)
-    finally:
-        for task in list(key_tasks):  # e.g. an open config editor
-            task.cancel()
-        await asyncio.gather(*key_tasks, return_exceptions=True)
-        loop.remove_signal_handler(signal.SIGWINCH)
-        loop.remove_reader(fd)
-        tui.stop()
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 async def request_or_exit(config, payload: dict) -> dict:
@@ -723,7 +408,6 @@ def parse_args(argv=None) -> argparse.Namespace:
 
     for mode, help_text in (
         ("daemon", "Run the long-lived daemon process"),
-        ("tui", "Run the TUI client attached to daemon"),
         ("config", "Edit the running daemon's instruments and notification settings"),
         ("status", "Print the running daemon's status"),
         ("reconnect", "Make the running daemon reconnect to PVWS and the MCR news"),
@@ -770,8 +454,6 @@ def main():
                 restart = asyncio.run(run_daemon(config, args, stop_event))
             if restart:  # after the lock and database are released
                 restart_process()
-        elif args.mode == "tui":
-            asyncio.run(run_tui(config, stop_event))
         elif args.mode == "stop":
             asyncio.run(run_stop(config))
         elif args.mode == "config":
