@@ -159,7 +159,16 @@ async def test_a_receiver_that_is_down_or_refuses_doesnt_stop_publishing(caplog)
     async with receiver(status=404) as server:  # an older push site, without /ingest/status
         async with publishing(str(server.make_url("/ingest")), interval=0.05):
             await wait_until(lambda: len(server.received) >= 2)
-    assert "didn't take the status: HTTP 404" in caplog.text
+    assert caplog.text.count("Push site refuses the status: HTTP 404") == 1  # once, not every send
+
+
+def test_refusals_are_warned_of_once_and_recovery_noted(caplog):
+    caplog.set_level("INFO")
+    publisher = StatusPublisher("http://x/ingest", SECRET, dict, 60, MagicMock())
+    for status in (204, 400, 400, 409, 204, 409):
+        publisher._took(status)
+    assert caplog.text.count("refuses the status: HTTP 400") == 1
+    assert caplog.text.count("takes the status again") == 1
 
 
 async def test_a_failing_build_is_logged_and_retried(caplog):

@@ -124,6 +124,7 @@ class StatusPublisher:
         self.secret, self.build, self.interval = secret, build, interval
         self.session, self.timeout = session, timeout
         self._changed = asyncio.Event()
+        self._refused: Optional[int] = None  # the HTTP status the site last refused one with
 
     def poke(self) -> None:
         self._changed.set()
@@ -136,6 +137,20 @@ class StatusPublisher:
                 await asyncio.wait_for(self._changed.wait(), max(self.interval - self.DEBOUNCE, 0))
             self._changed.clear()
 
+    def _took(self, status: int) -> None:
+        """Warns once when the site starts refusing the status (e.g. 400 for one it
+        can't read, 401 for a wrong secret, 404 for an older site), and when it
+        takes it again; 409 (not newer than the last, e.g. after a clock step) is routine."""
+        refused = None if status in (204, 409) else status
+        if refused != self._refused:
+            if refused:
+                logger.warning(f"Push site refuses the status: HTTP {status}; its Status page won't update")
+            else:
+                logger.info("Push site takes the status again")
+        self._refused = refused
+        if status == 409:
+            logger.debug("Push site didn't take the status: HTTP 409 (not newer than the last)")
+
     async def _send(self) -> None:
         """One status; any failure is only logged, and never stops the publisher."""
         try:
@@ -143,8 +158,7 @@ class StatusPublisher:
                 self.url, timeout=aiohttp.ClientTimeout(total=self.timeout), allow_redirects=False,
                 **signed_json(self.build(), self.secret),
             ) as resp:
-                if resp.status != 204:  # e.g. 409: not newer than the last, after a clock step
-                    logger.debug(f"Push site didn't take the status: HTTP {resp.status}")
+                self._took(resp.status)
         except (aiohttp.ClientError, TimeoutError) as exc:
             logger.debug(f"Failed to send the status: {exc!r}")
         except Exception:  # a bug: logged, and the next send tries again
