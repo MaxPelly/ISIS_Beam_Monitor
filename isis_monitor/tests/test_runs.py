@@ -353,7 +353,7 @@ def test_snapshot_round_trip():
 
 @pytest.mark.parametrize("change", [
     {"run": "junk"}, {"run_number": 10}, {"exp_gen": True}, {"exp_uah": float("nan")}, {"exp_since": "yesterday"},
-    {"run_totals": [1, "x"]}, {"run": {"number": "1"}},
+    {"run_totals": [1, "x"]}, {"run": {"number": "1"}}, {"exp_uah": 10**400}, {"run_totals": [10**400]},
 ])
 def test_a_malformed_snapshot_is_ignored(change, caplog):
     saved = {**running().tracker.to_snapshot(), **change}

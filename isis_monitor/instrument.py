@@ -78,7 +78,7 @@ def _typed(saved: dict, key: str, kind: type):
     """saved[key] if it's a `kind` (ints count as floats); raises otherwise."""
     value = saved[key]
     if kind is float and isinstance(value, int) and not isinstance(value, bool):
-        value = float(value)
+        value = _float(value)
     if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
         raise TypeError(f"{key} isn't a {kind.__name__}")
     if kind is float and not math.isfinite(value):
@@ -86,10 +86,20 @@ def _typed(saved: dict, key: str, kind: type):
     return value
 
 
+def _float(value: int) -> float:
+    try:
+        return float(value)
+    except OverflowError:  # e.g. 10**400 from a corrupt snapshot
+        raise ValueError(f"{value} is too large") from None
+
+
 def _finite(values: list) -> list:
-    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in values):
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
         raise ValueError("run_totals must be finite numbers")
-    return [float(v) for v in values]
+    numbers = [_float(v) for v in values]
+    if not all(math.isfinite(v) for v in numbers):
+        raise ValueError("run_totals must be finite numbers")
+    return numbers
 
 
 def _aware(text: object) -> Optional[datetime]:
@@ -512,7 +522,10 @@ class InstrumentTracker:
         if not same_target:  # otherwise the run keeps the target it started with
             self._set_target()
         if "shadow" in saved:
-            self.runs.from_snapshot(saved["shadow"], same_target)
+            try:
+                self.runs.from_snapshot(saved["shadow"], same_target)
+            except Exception:  # like its PV handlers: a failure in the shadow is only logged
+                logger.exception(f"[shadow] {name}: failed to restore its saved state")
 
     def resubscribed(self) -> None:
         """PVWS is about to re-send every value, which may have changed unseen."""

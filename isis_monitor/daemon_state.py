@@ -33,7 +33,10 @@ def _finite_floats(value: object) -> List[float]:
     """A saved list of numbers; raises ValueError if it's anything else."""
     if not isinstance(value, list):
         raise ValueError(f"expected a list, got {value!r}")
-    numbers = [float(v) for v in value]
+    try:
+        numbers = [float(v) for v in value]
+    except OverflowError:  # e.g. 10**400 from a corrupt snapshot
+        raise ValueError("a number too large") from None
     if not all(math.isfinite(v) for v in numbers):
         raise ValueError("non-finite number")
     return numbers
@@ -171,7 +174,7 @@ class DaemonState:
         for beam in BEAM_NAMES:
             try:
                 (current,) = _finite_floats([beam_states[beam]["current"]])
-            except (TypeError, KeyError, ValueError, OverflowError):  # missing or malformed: keep the default
+            except (TypeError, KeyError, ValueError):  # missing or malformed: keep the default
                 continue
             # The power is left "unknown" until the beam feed connects: the
             # saved one may be long out of date.

@@ -465,7 +465,7 @@ class RunTracker:
                 _of(saved, "run_number", str), _of(saved, "last_completed", str), _of(saved, "rb", str),
                 _of(saved, "exp_gen", int), _time(saved["exp_since"]) if saved["exp_since"] else None,
                 _of(saved, "exp_partial", bool), _of(saved, "exp_runs", int), _of(saved, "exp_uah", float),
-                [float(_finite(v)) for v in _of(saved, "run_totals", list)],
+                [_finite(v) for v in _of(saved, "run_totals", list)],
             )
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning(f"{self._log}: ignoring malformed saved run state ({exc})")
@@ -488,17 +488,23 @@ def _follows(previous: str, number: str) -> bool:
 
 def _of(saved: dict, key: str, kind: type):
     value = saved[key]
-    if kind is float and isinstance(value, int) and not isinstance(value, bool):
-        value = float(value)
+    if kind is float:
+        return _finite(value)  # an int counts too
     if not isinstance(value, kind) or (kind is not bool and isinstance(value, bool)):
         raise TypeError(f"{key} isn't a {kind.__name__}")
-    return _finite(value) if kind is float else value
+    return value
 
 
 def _finite(value: Any) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{value!r} isn't a finite number")
-    return value
+    try:
+        number = float(value)
+    except OverflowError:  # an int too large for a float, e.g. from a corrupt snapshot
+        number = math.inf
+    if not math.isfinite(number):
+        raise ValueError(f"{value!r:.40} isn't a finite number")
+    return number
 
 
 def _time(text: Any) -> datetime:
@@ -513,7 +519,7 @@ def _check_run(run: RunInfo) -> None:
                        ("end_notified", bool), ("final_known", bool)):
         _of(asdict(run), name, kind)
     for name in ("target", "last_counts"):
-        setattr(run, name, float(_finite(getattr(run, name))))
+        setattr(run, name, _finite(getattr(run, name)))
     if run.start_text is not None and not isinstance(run.start_text, str):
         raise TypeError("start_text isn't text")
 

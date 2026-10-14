@@ -1577,9 +1577,19 @@ async def test_instrument_state_round_trips_through_its_snapshot(mock_config, mo
     assert m2.instrument_views()["PEARL"]["beam_target"] == "TS1"
 
 
+def test_a_failure_restoring_the_shadow_is_only_logged(mock_config, mock_channels, caplog):
+    m = make_monitor(mock_config, mock_channels)
+    entry = saved(m, run_name="Run 4", run_started_at="2026-01-01T00:00:00+00:00", rb_number="A")
+    with patch.object(tracker(m).runs, "from_snapshot", side_effect=RuntimeError("bug")):
+        m.restore_instruments({"PEARL": {**entry, "shadow": {}}})
+    assert tracker(m).state.run_name == "Run 4"  # the rest is restored
+    assert "[shadow] PEARL: failed to restore its saved state" in caplog.text
+
+
 @pytest.mark.parametrize("changes", [
     {"counts": None}, {"run_totals": "12"}, {"run_totals": [1.0, "x"]}, {"run_totals": [float("nan")]},
     {"run_started_at": "yesterday"}, {"end_notified": "yes"}, {"exp_runs": True}, {"exp_uah": float("inf")},
+    {"counts": 10**400}, {"run_totals": [10**400]},  # too large for a float
 ])
 def test_a_malformed_saved_entry_is_ignored_whole(mock_config, mock_channels, caplog, changes):
     m = make_monitor(mock_config, mock_channels)

@@ -129,11 +129,12 @@ def test_old_and_malformed_run_completions_are_not_restored(caplog):
             [now.isoformat(), "PEARL", "1"],  # no µA·h
             [now.isoformat(), "PEARL", 1.0],  # an older entry, without a run number
             [now.isoformat(), "PEARL", 1, 1.0],  # a run number that isn't text
+            [now.isoformat(), "PEARL", "1", 10**400],  # too large for a float
             "junk",
             [(now - timedelta(minutes=5)).replace(tzinfo=None).isoformat(), "WISH", "2", 1.0],  # naive means UTC
         ]}))
     assert [(name, number) for _, name, number, _ in state.run_completions] == [("WISH", "2")]
-    assert "Skipped 7 malformed run completion(s)" in caplog.text
+    assert "Skipped 8 malformed run completion(s)" in caplog.text
 
 
 def test_beams_are_unknown_while_the_beam_feed_is_down():
