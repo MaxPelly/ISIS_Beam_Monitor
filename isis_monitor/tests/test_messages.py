@@ -304,3 +304,14 @@ def test_builders_set_topic():
         collection_stalled("PEARL", **STALLED),
     ):
         assert n.topic == "PEARL", n.title
+
+
+def test_sparkline_chars():
+    from isis_monitor.messages import _BLOCKS, sparkline_chars
+    assert sparkline_chars([], 10) == " " * 10
+    padded = sparkline_chars([1.0, 2.0, 3.0], 10)
+    assert len(padded) == 10 and padded.startswith(" " * 7)  # left-padded to the width
+    assert len(sparkline_chars(list(range(20)), 10)) == 10  # the newest that fit
+    assert sparkline_chars([0.0] * 5, 5) == " " * 5  # all zero is a flat baseline
+    assert sparkline_chars([0.0, 100.0], 2) == " " + _BLOCKS[-1]
+    assert sparkline_chars([5.0, 5.0], 2) == _BLOCKS[len(_BLOCKS) // 2] * 2  # steady, not zero
