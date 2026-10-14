@@ -45,9 +45,6 @@ class SQLiteStateStore:
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-
-            -- Uptime records from the retired fun_mode.
-            DELETE FROM snapshot WHERE key = 'records';
             """
         )
         self.conn.commit()

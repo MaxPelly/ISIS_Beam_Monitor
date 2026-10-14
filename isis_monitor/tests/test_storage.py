@@ -41,16 +41,6 @@ def test_storage_snapshot_upsert_and_reopen(tmp_path):
     reopened.close()
 
 
-def test_storage_drops_retired_snapshot_keys(tmp_path):
-    store = SQLiteStateStore(tmp_path / "state.db")
-    store.upsert_snapshot("records", '{"TS1": 3600}')
-    store.commit()
-    store.close()
-    reopened = SQLiteStateStore(tmp_path / "state.db")
-    assert reopened.load_snapshot("records") is None
-    reopened.close()
-
-
 def test_storage_sets_busy_timeout(tmp_path):
     """An external reader holding a lock should delay writes, not fail them."""
     db = tmp_path / "state.db"
