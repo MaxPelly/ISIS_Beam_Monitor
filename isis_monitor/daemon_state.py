@@ -167,15 +167,15 @@ class DaemonState:
         if not isinstance(snap, dict):
             logger.warning("Corrupt daemon state snapshot, starting fresh.")
             return
-        beam_states = snap.get("beam_states", {})
+        beam_states = snap.get("beam_states")
         for beam in BEAM_NAMES:
-            if beam in beam_states:
-                # The power is left "unknown" until the beam feed connects:
-                # the saved one may be long out of date.
-                self.beam_states[beam] = {
-                    "current": float(beam_states[beam].get("current", 0.0)),
-                    "power": "unknown",
-                }
+            try:
+                current = float(beam_states[beam]["current"])
+            except (TypeError, KeyError, ValueError):  # missing or malformed: keep the default
+                continue
+            # The power is left "unknown" until the beam feed connects: the
+            # saved one may be long out of date.
+            self.beam_states[beam] = {"current": current, "power": "unknown"}
         self.mcr_news = str(snap.get("mcr_news", self.mcr_news))
         saved = snap.get("instruments")
         saved = saved if isinstance(saved, dict) else {}

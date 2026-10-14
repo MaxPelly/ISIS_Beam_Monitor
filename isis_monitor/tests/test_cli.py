@@ -44,7 +44,8 @@ async def _unknown_command(_name):
     (cli.run_config, None, "Could not reach the daemon"),
 ])
 async def test_commands_exit_1_without_a_good_reply(tmp_path, capsys, runner, server, error):
-    with patch("isis_monitor.ipc.STOP_FLUSH_TIMEOUT", 0.05), patch("isis_monitor.ipc.REQUEST_TIMEOUT", 0.05):
+    short = 0.05 if server and server.get("command_handler") is never_answers else 10  # only for the one that hangs
+    with patch("isis_monitor.ipc.STOP_FLUSH_TIMEOUT", short), patch("isis_monitor.ipc.REQUEST_TIMEOUT", short):
         async with serving(tmp_path, **server) if server is not None else contextlib.nullcontext():
             with pytest.raises(SystemExit) as exc:
                 await runner(app_config(tmp_path))

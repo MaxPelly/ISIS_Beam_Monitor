@@ -38,6 +38,6 @@ jobs:
     - name: Lint
       run: ruff check .
     - name: Test
-      # The gate sits a little under the measured coverage (99%), so it catches
+      # The gate sits a little under the measured coverage (99% of the monitor's code), so it catches
       # a real drop without failing on a small one.
       run: pytest --cov=isis_monitor --cov-branch --cov-report=term-missing --cov-fail-under=97

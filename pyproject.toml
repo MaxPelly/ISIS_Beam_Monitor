@@ -21,7 +21,7 @@ dev = [
     "pytest-asyncio",
     "pytest-mock",
     "pytest-cov",
-    "ruff",
+    "ruff>=0.17,<0.18",
 ]
 
 [tool.setuptools.packages.find]
@@ -35,6 +35,9 @@ version = {attr = "isis_monitor.__version__"}
 asyncio_mode = "auto"
 # Keep the push_site submodule's tests (and dependencies) out of this run.
 testpaths = ["isis_monitor/tests"]
+
+[tool.coverage.run]
+omit = ["isis_monitor/tests/*"]  # the gate measures the monitor, not its tests
 
 [tool.ruff]
 extend-exclude = ["push_site"]  # a separate project, with its own checks

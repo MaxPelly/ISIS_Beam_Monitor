@@ -1,6 +1,7 @@
 # ISIS Beam Monitor configuration: the annotated example, with every setting.
 # README.md's "Configuration reference" has the same settings as a table.
-# Commented-out settings show their defaults. A blank number means its default;
+# Commented-out settings show their defaults, or an example where the default is
+# blank (unset). A blank number means its default;
 # relative paths are relative to this file's directory. Instruments and
 # [NOTIFICATIONS] can also be edited with `isis-monitor config`, which rewrites
 # this file without its comments (keeping the old one as config.ini.bak).
@@ -105,7 +106,8 @@ news_teams_url =
 notify_counts = 130
 # TS1, TS2 or Muons: the beam reported on run cards and checked before stall
 # warnings. Unset, it's the instrument's target station from CS:INSTLIST, or
-# [PVS] instrument_target if that isn't TS1, TS2 or MUON.
+# [PVS] instrument_target if that isn't TS1, TS2 or MUON. Set it only to override
+# the list. Any case; Muon works too.
 # beam_target = TS1
 # The Teams payload channel of its cards: experiment = "Experiment Updates",
 # or instrument = the instrument's name.

@@ -177,6 +177,7 @@ async def test_a_receiver_that_is_down_or_refuses_doesnt_stop_publishing(caplog)
 def test_refusals_are_warned_of_once_and_recovery_noted(caplog):
     caplog.set_level("INFO")
     publisher = StatusPublisher("http://x/ingest", SECRET, dict, 60, MagicMock())
+    assert publisher.url == StatusPublisher("http://x/ingest/", SECRET, dict, 60, MagicMock()).url == "http://x/ingest/status"
     for status in (204, 400, 400, 409, 204, 409):
         publisher._took(status)
     assert caplog.text.count("refuses the status: HTTP 400") == 1

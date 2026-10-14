@@ -70,7 +70,7 @@ Times are in seconds unless the key says minutes.
 | `[PUSH]` | `url` | blank | `http://` or `https://` URL | Also POST every notification, signed, here, and the status to this URL plus `/status`; blank disables it. Plain `http://` to a non-local host is warned about. |
 | | `secret_file` | blank (required with `url`) | file of 32 to 4096 characters | The shared signing secret; only the daemon reads it, and a world-readable file is warned about. |
 | | `timeout` | 2 | 0.5 to 30 | Seconds before each push attempt is abandoned. |
-| `[PVS]` | `instrument_target` | `TS1` | `TS1`, `TS2`, `Muons` | The `beam_target` of instruments that don't set one and that `CS:INSTLIST` doesn't put on TS1, TS2 or MUON. |
+| `[PVS]` | `instrument_target` | `TS1` | `TS1`, `TS2`, `Muons` (any case; `Muon` too) | The `beam_target` of instruments that don't set one and that `CS:INSTLIST` doesn't put on TS1, TS2 or MUON. |
 | `[TIMEOUTS_INTERVALS]` | `mcr_poll_interval` | 60 | 5 to 86400 | Seconds between MCR news polls. |
 | | `beam_reconnect_interval` | 5 | 0.5 to 3600 | Seconds before retrying a lost PVWS connection. |
 | | `webhook_timeout` | 10 | 1 to 300 | Seconds before a Teams send is abandoned. |
@@ -88,7 +88,7 @@ Times are in seconds unless the key says minutes.
 | | `summary_time` | `08:00` | `HH:MM`, 00:00 to 23:59 | When the daily beam-uptime summary is sent, in `timezone`. |
 | `[INSTRUMENT:<NAME>]` | `notify_counts` | none (**required**) | positive number, or `auto, <positive number>` | The run's target in total µA·h collected; `auto` sets it per run (see [Instruments](#instruments)). |
 | | `beam_target` | from `CS:INSTLIST` | `TS1`, `TS2`, `Muons` (any case; `Muon` too) | The beam reported on run cards and checked before stall warnings. Unset, it's the instrument's target station from `CS:INSTLIST`, else `[PVS] instrument_target`. |
-| | `channel` | `experiment` | `experiment`, `instrument` | The Teams payload `channel` of its cards: "Experiment Updates", or the instrument's name. |
+| | `channel` | `experiment` | `experiment`, `instrument` (any case) | The Teams payload `channel` of its cards: "Experiment Updates", or the instrument's name. |
 | `[BEAM:<NAME>]` | `pv` | `AC:TS1:BEAM:CURR`, `AC:TS2:BEAM:CURR`, `AC:MUON:BEAM:CURR` | PV name, different for each beam | The beam's current, in µA. |
 | | `boundaries` | TS1 `0, 50, 140`; TS2 `0, 10, 30`; Muons `0, 2, 5` | 3 finite numbers, in increasing order (equal allowed) | Power cutoffs in µA: off at or below the first, low below the second, medium below the third, else high. |
 

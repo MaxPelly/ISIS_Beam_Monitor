@@ -69,6 +69,8 @@ def test_restore_from_snapshot():
     "",
     "{bad_json: True",
     "[]",  # JSON, but not a snapshot
+    json.dumps({"beam_states": ["TS1"]}),
+    json.dumps({"beam_states": {"TS1": "high", "TS2": {"current": "lots"}}}),
     json.dumps({"mcr_news": "Old News"}),  # from before run completions were saved
     json.dumps({"run_completions": {"not": "a list"}}),
 ])
