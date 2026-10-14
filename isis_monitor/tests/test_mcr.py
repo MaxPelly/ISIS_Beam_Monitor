@@ -1,14 +1,15 @@
 import asyncio
 import contextlib
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+
+from isis_monitor import mcr
 from isis_monitor.config import AppConfig
 from isis_monitor.daemon_state import DaemonState
-from isis_monitor.tests.helpers import fake_channel
-from isis_monitor import mcr
 from isis_monitor.mcr import MCRNewsMonitor
+from isis_monitor.tests.helpers import fake_channel
 
 
 @pytest.fixture

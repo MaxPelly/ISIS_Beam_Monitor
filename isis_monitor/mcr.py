@@ -3,8 +3,9 @@ import contextlib
 import logging
 import re
 from datetime import datetime, timezone
-import aiohttp
 from typing import Optional
+
+import aiohttp
 
 from isis_monitor.config import AppConfig
 from isis_monitor.daemon_state import DaemonState

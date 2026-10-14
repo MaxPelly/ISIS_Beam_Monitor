@@ -11,16 +11,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from isis_monitor import cli, daemon
-from isis_monitor import messages
+from isis_monitor import cli, daemon, messages
 from isis_monitor.config import DEFAULT_BEAMS, InstrumentConfig
+from isis_monitor.daemon import SingleInstanceLock
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.instrument import InstrumentTracker
 from isis_monitor.ipc import ipc_request
 from isis_monitor.notifiers import DummyNotifier, TeamsNotifier, WebhookNotifier
 from isis_monitor.storage import SQLiteStateStore
-from isis_monitor.tests.helpers import FakePVWS, app_config, fake_channel, run_cli, wait_until, write_ini
-from isis_monitor.daemon import SingleInstanceLock
+from isis_monitor.tests.helpers import (
+    FakePVWS,
+    app_config,
+    fake_channel,
+    run_cli,
+    wait_until,
+    write_ini,
+)
 
 
 @pytest.fixture(autouse=True)

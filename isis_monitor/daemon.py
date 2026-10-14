@@ -29,8 +29,15 @@ from isis_monitor.daemon_state import HISTORY_WINDOW, MCR_NEWS_PLACEHOLDER, Daem
 from isis_monitor.ipc import IPCServer
 from isis_monitor.mcr import MCRNewsMonitor
 from isis_monitor.messages import Notification
-from isis_monitor.notifiers import DummyNotifier, NotificationChannel, Notifier, TeamsNotifier, WebhookNotifier
-from isis_monitor.status import StatusPublisher, build as build_status
+from isis_monitor.notifiers import (
+    DummyNotifier,
+    NotificationChannel,
+    Notifier,
+    TeamsNotifier,
+    WebhookNotifier,
+)
+from isis_monitor.status import StatusPublisher
+from isis_monitor.status import build as build_status
 from isis_monitor.storage import SQLiteStateStore
 from isis_monitor.summary import daily_summary_loop
 

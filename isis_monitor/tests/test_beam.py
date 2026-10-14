@@ -1,25 +1,26 @@
 import asyncio
+import base64
 import contextlib
 import json
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
+
 import pytest
 from websockets.datastructures import Headers
 from websockets.exceptions import InvalidStatus
 from websockets.http11 import Response
-import base64
-from dataclasses import replace
-from datetime import datetime, timedelta, timezone
-from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
-from isis_monitor.config import DEFAULT_BEAMS, AppConfig, InstrumentConfig
-from isis_monitor.daemon_state import DaemonState
+
 from isis_monitor.beam import (
     BeamMonitor,
     _classify_ws_error,
     _PendingChange,
 )
+from isis_monitor.config import DEFAULT_BEAMS, AppConfig, InstrumentConfig
+from isis_monitor.daemon_state import DaemonState
 from isis_monitor.instrument import STALL_CHECK_WINDOW, _fit_rate, auto_target
-from isis_monitor.tests.test_instlist import encode
 from isis_monitor.tests.helpers import FakePVWS, fake_channel, running, wait_until
-
+from isis_monitor.tests.test_instlist import encode
 
 PEARL_UAMPS = "IN:PEARL:DAE:TOTALUAMPS"
 PEARL_TITLE = "IN:PEARL:DAE:WDTITLE"
@@ -910,7 +911,13 @@ def rejected_with(status: int) -> InvalidStatus:
 def test_classify_ws_error():
     import socket
     import ssl
-    from websockets.exceptions import ConnectionClosedError, InvalidMessage, InvalidURI, SecurityError
+
+    from websockets.exceptions import (
+        ConnectionClosedError,
+        InvalidMessage,
+        InvalidURI,
+        SecurityError,
+    )
 
     cases = {
         rejected_with(403): "rejected",

@@ -5,7 +5,13 @@ from zoneinfo import ZoneInfo
 from isis_monitor.config import InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.instrument import InstrumentTracker
-from isis_monitor.status import HISTORY_POINTS, MAX_INSTRUMENTS, MAX_TITLE, build, render_text
+from isis_monitor.status import (
+    HISTORY_POINTS,
+    MAX_INSTRUMENTS,
+    MAX_TITLE,
+    build,
+    render_text,
+)
 from isis_monitor.tests.helpers import fake_channel
 
 NOW = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)

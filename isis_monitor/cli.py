@@ -15,7 +15,13 @@ from typing import Optional
 from isis_monitor import __version__
 from isis_monitor.config import ConfigError, load_config, read_push_secret
 from isis_monitor.config_editor import run_config_editor
-from isis_monitor.daemon import RESTARTED_ENV, LockHeldError, SingleInstanceLock, restart_process, run_daemon
+from isis_monitor.daemon import (
+    RESTARTED_ENV,
+    LockHeldError,
+    SingleInstanceLock,
+    restart_process,
+    run_daemon,
+)
 from isis_monitor.ipc import ipc_request
 from isis_monitor.messages import set_timezone
 from isis_monitor.status import render_text as render_status

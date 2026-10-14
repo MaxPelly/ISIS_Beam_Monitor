@@ -1,13 +1,23 @@
 import os
-import pytest
-from pathlib import Path
 from dataclasses import replace
-
+from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from isis_monitor.config import (
-    load_config, ConfigError, ConfigChangedError, AppConfig, InstrumentConfig, read_config,
-    editable_settings, update_config_file, read_push_secret, _PATH_FIELDS, BeamTargetConfig, DEFAULT_BEAMS,
+    _PATH_FIELDS,
+    DEFAULT_BEAMS,
+    AppConfig,
+    BeamTargetConfig,
+    ConfigChangedError,
+    ConfigError,
+    InstrumentConfig,
+    editable_settings,
+    load_config,
+    read_config,
+    read_push_secret,
+    update_config_file,
 )
 
 

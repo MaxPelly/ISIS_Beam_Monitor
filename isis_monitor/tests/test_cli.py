@@ -7,7 +7,13 @@ import pytest
 
 from isis_monitor import cli
 from isis_monitor.daemon import SingleInstanceLock
-from isis_monitor.tests.helpers import app_config, never_answers, run_cli, serving, write_ini
+from isis_monitor.tests.helpers import (
+    app_config,
+    never_answers,
+    run_cli,
+    serving,
+    write_ini,
+)
 
 
 @pytest.mark.parametrize("runner, result, out", [

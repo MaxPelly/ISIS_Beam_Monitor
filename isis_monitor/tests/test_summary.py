@@ -7,10 +7,14 @@ import pytest
 from isis_monitor.config import AppConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.messages import get_timezone
-from isis_monitor.tests.helpers import fake_channel
 from isis_monitor.storage import SQLiteStateStore
-from isis_monitor.summary import LAST_SENT_KEY, TargetSummary, compute_summary, daily_summary_loop
-
+from isis_monitor.summary import (
+    LAST_SENT_KEY,
+    TargetSummary,
+    compute_summary,
+    daily_summary_loop,
+)
+from isis_monitor.tests.helpers import fake_channel
 
 # ---------------------------------------------------------------------------
 # compute_summary

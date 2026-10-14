@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from isis_monitor.config import InstrumentConfig
-from isis_monitor.runs import REPLAY_TIMEOUT, SETTLE, RunTracker, parse_start_time, pv_handlers
+from isis_monitor.runs import (
+    REPLAY_TIMEOUT,
+    SETTLE,
+    RunTracker,
+    parse_start_time,
+    pv_handlers,
+)
 
 DATA = Path(__file__).parent / "data" / "runs"
 T0 = datetime(2026, 10, 13, 9, 0, tzinfo=timezone.utc)

@@ -5,17 +5,21 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
 
 from isis_monitor import __version__
-from isis_monitor.notifiers import (
-    _retry_after, TeamsNotifier, DummyNotifier, NotificationChannel, Notifier, WebhookNotifier,
-)
 from isis_monitor.messages import Notification, Severity
-
+from isis_monitor.notifiers import (
+    DummyNotifier,
+    NotificationChannel,
+    Notifier,
+    TeamsNotifier,
+    WebhookNotifier,
+    _retry_after,
+)
 
 # ---------------------------------------------------------------------------
 # DummyNotifier

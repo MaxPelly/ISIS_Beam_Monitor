@@ -10,11 +10,16 @@ from typing import Any, Awaitable, Callable, Deque, Dict, Optional, Sequence, Tu
 from isis_monitor.config import InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.messages import (
-    collection_resumed, collection_stalled, experiment_finished, run_finishing, run_started,
+    collection_resumed,
+    collection_stalled,
+    experiment_finished,
+    run_finishing,
+    run_started,
     strip_controls,
 )
 from isis_monitor.notifiers import NotificationChannel
-from isis_monitor.runs import AUTO_HISTORY, AUTO_MIN_RUNS, RunTracker, auto_target, pv_handlers as run_pv_handlers
+from isis_monitor.runs import AUTO_HISTORY, AUTO_MIN_RUNS, RunTracker, auto_target
+from isis_monitor.runs import pv_handlers as run_pv_handlers
 
 logger = logging.getLogger(__name__)
 

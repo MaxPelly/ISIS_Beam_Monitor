@@ -3,7 +3,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from isis_monitor.config_editor import describe_changes, edit_settings, render_menu, run_config_editor
+from isis_monitor.config_editor import (
+    describe_changes,
+    edit_settings,
+    render_menu,
+    run_config_editor,
+)
 
 SETTINGS = {
     "notifications": {
