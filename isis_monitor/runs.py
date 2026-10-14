@@ -147,6 +147,7 @@ class RunTracker:
         self.rb_resync = True  # the first RB number after (re)subscribing may have changed unwatched
         self._pending: Optional[Tuple[str, datetime]] = None  # (number, since) of a start that's settling
         self._final_due = False  # a run ended unseen, and its final counts are still to come
+        self._ending = ""  # the run number last seen ending, until the number moves on
         self._timer = None
         self._unknown_states: set = set()
 
@@ -228,13 +229,20 @@ class RunTracker:
             if self._final_due:  # another run passed before its final counts came
                 self._end_unseen(now, waited=True)
             run = self.run
-            if (was_seen and not self.replaying and self.run_state == "ENDING" and old != self.last_completed
+            if (was_seen and not self.replaying and self._ending == old and old != self.last_completed
                     and not (run and run.number == old) and _follows(old, number)):
-                self._start(now)  # it began unseen (e.g. before a reconnect) and has just ended
+                # It began unseen (e.g. before a reconnect) and has just ended: in ENDING still, or
+                # in SETUP (which can come first), where the counts are still its final.
+                self._start(now, adopted=True)
+            # Live, a number that moves on while ENDING is the next run's; replayed (or the first
+            # seen), it may be the one ending, which only shows if it moves on in turn.
             self.run_number = number
+            self._ending = number if self.run_state == "ENDING" and (self.replaying or not old) else ""
             run = self.run
             if run and run.number == old and self.last_completed != old and not self.replaying:
                 self._complete(now, final_known=True)  # (while replaying: see _replayed)
+        elif self.run_state == "ENDING":  # it came first (a number that moved on would be the next run's)
+            self._ending = number
         self._seen(now)
         self._maybe_start(now)
 
@@ -246,6 +254,8 @@ class RunTracker:
             return
         self.run_state = state.upper()
         self._seen_state = True
+        if self.run_state == "ENDING" and self._seen_number:
+            self._ending = self.run_number
         if self._final_due and not self.replaying and self.run_state != "ENDING":  # begun: the counts are the next run's
             self._end_unseen(now, waited=self.run_state != "SETUP")
         if self.run_state not in ACTIVE_STATES:
@@ -386,7 +396,7 @@ class RunTracker:
         else:  # e.g. a timer that fired early: wait out the rest
             self._schedule(SETTLE - (now - self._pending[1]))
 
-    def _start(self, now: datetime) -> None:
+    def _start(self, now: datetime, adopted: bool = False) -> None:
         previous = self.run
         if previous and self.last_completed != previous.number:  # its end wasn't seen, e.g. the daemon was down
             self._complete(now, final_known=False)
@@ -396,9 +406,9 @@ class RunTracker:
         started_at = (parse_start_time(start_text, now) if start_text else None) or now
         self.run = RunInfo(
             self.run_number, self.title, started_at, start_text, self.exp_gen, target, auto_runs,
-            last_counts=self.counts if self.counts is not None and self.run_state in CREDITED_STATES else -1.0,
+            last_counts=self.counts if self.counts is not None and (adopted or self.run_state in CREDITED_STATES) else -1.0,
         )
-        silent = (previous is None and not self.restored and not self._seen_idle) or self.run_state == "ENDING"
+        silent = (previous is None and not self.restored and not self._seen_idle) or adopted
         if previous and not _follows(previous.number, self.run_number):
             previous = None  # runs were missed (its final_known says whether its total is)
         logger.info(f"{self._log}: run {self.run_number} began{' (adopted)' if silent else ''}: {self.title!r}")

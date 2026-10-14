@@ -469,9 +469,13 @@ def test_a_timer_that_fires_early_waits_out_the_rest():
 
 
 
-def test_a_run_first_seen_ending_after_a_reconnect_is_recorded():
+@pytest.mark.parametrize("next_number", [
+    [(120, "RUNNUMBER", "00012"), (120, "RUNSTATE_STR", "SETUP")],
+    [(120, "RUNSTATE_STR", "SETUP"), (121, "RUNNUMBER", "00012")],  # SETUP first, as ZOOM often sends them
+])
+def test_a_run_first_seen_ending_after_a_reconnect_is_recorded(next_number):
     r = reconnect(running())((100, "RUNNUMBER", "00011"), (100, "RUNSTATE_STR", "ENDING"), (100, "TOTALUAMPS", 4.0),
-                             (120, "RUNNUMBER", "00012"), (120, "RUNSTATE_STR", "SETUP")).settle()
+                             *next_number).settle()
     # Run 10's final is unknown (11 came and went unseen); 11 is adopted as it ends.
     assert r.log[1:] == [("done", "00010", None), ("start", "00011", "silent"), ("done", "00011", 4.0)]
 
@@ -492,11 +496,12 @@ def test_a_final_still_due_when_another_run_passes_is_unknown():
 
 
 def test_a_replayed_ending_of_a_later_run_isnt_taken_as_the_runs_final():
-    """Run 10 ended and 11 ran unseen; the replay lands in 11's ENDING, and SETUP comes before 12."""
+    """Run 10 ended and 11 ran unseen; the replay lands in 11's ENDING, and SETUP comes before 12.
+    Run 10's final is unknown; run 11 is adopted once its number moves on, with its own final."""
     r = reconnect(running())((100, "RUNSTATE_STR", "ENDING"), (100, "RUNNUMBER", "00011"), (100, "TOTALUAMPS", 30.0),
                              (100, "STARTTIME", "Tue 13-Oct-2026 10:30:00"),  # not run 10's
                              (102, "RUNSTATE_STR", "SETUP"), (102, "RUNNUMBER", "00012")).settle()
-    assert r.log[1:] == [("done", "00010", None)]
+    assert r.log[1:] == [("done", "00010", None), ("start", "00011", "silent"), ("done", "00011", 30.0)]
 
 
 @pytest.mark.parametrize("rb_at, new_experiments", [(29, True), (27 + 31, False)])
