@@ -12,6 +12,13 @@ own versions and changelog; each release here notes the version its
 
 - The shadow run detection also records a run first seen as it ends (e.g. after a reconnect), takes a run's final total the same way whatever order PVWS replays it in, makes a run that's only just begun the new experiment's when the RB number changes, and ignores a run number that goes backwards.
 
+- Config warnings (unknown keys, an `http://` push URL, a readable secret file) now reach the log file: they're logged once the daemon's logging is set up, rather than lost before it.
+- An unknown `[LOGGING] level` now stops the daemon from starting, naming the allowed levels, instead of quietly logging at WARNING.
+- A push site that refuses the status (e.g. HTTP 401 or 413) is warned of once, and its taking the status again is logged.
+- On shutdown the notifiers are closed even if stopping the IPC server or saving the state fails.
+- An instrument left out of a non-empty `CS:INSTLIST` falls back to `[PVS] instrument_target` rather than keeping the station from an older list; a list over 1 MB uncompressed is refused as unreadable.
+- The status sends at most 64 instruments, the push site's limit.
+
 ## [1.3.0rc2] - 2026-10-13
 
 1.3.0rc1 plus the status publisher, for the push site's new Status page. Includes push site v1.1.0, which must be running first (an older push site refuses the status, which is only logged at debug). No config change, and no reset of saved state beyond rc1's: from rc1 it carries on where it left off, while from 1.2.0 the rc1 notes apply.
