@@ -36,7 +36,7 @@ from isis_monitor.config import (
 )
 from isis_monitor.daemon_state import MCR_NEWS_PLACEHOLDER, DaemonState
 from isis_monitor.status import StatusPublisher, build as build_status
-from isis_monitor.ipc import IPCClient, IPCServer
+from isis_monitor.ipc import IPCClient, IPCServer, ipc_request
 from isis_monitor.mcr import MCRNewsMonitor
 from isis_monitor.messages import Notification, set_timezone
 from isis_monitor.notifiers import DummyNotifier, NotificationChannel, Notifier, TeamsNotifier, WebhookNotifier
@@ -54,7 +54,7 @@ RESTARTED_ENV = "ISIS_MONITOR_RESTARTED"
 LOOP_STOP_TIMEOUT = 5.0  # seconds run_daemon's loops get to exit after stop_event
 INSTRUMENT_REFRESH = 2.0  # seconds between the TUI's re-reads of instrument state
 CLOSE_TIMEOUT = 5.0  # seconds the notifiers get to send what's queued, on shutdown
-IPC_REQUEST_TIMEOUT = 10.0  # for the TUI's sync and `stop`; a stuck daemon mustn't hang them
+IPC_REQUEST_TIMEOUT = 10.0  # for the TUI's sync; a stuck daemon mustn't hang it
 
 
 class StateLogHandler(logging.Handler):
@@ -323,19 +323,20 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             request_restart(f"Config file {args.config} updated over IPC")
             return {"restarting": True}
 
+    def current_status() -> dict:
+        # interval_s is the interval it's really sent at, which the site judges staleness by.
+        return build_status(state, {name: b.since for name, b in beam_monitor.beams.items()},
+                            max(config.sample_interval, StatusPublisher.DEBOUNCE))
+
     loops = [beam_monitor.run, mcr_monitor.run]  # each run until stop_event
     if config.push_url and not args.dummy:
         publisher = StatusPublisher(
-            config.push_url, config.push_secret,
-            # The interval it really sends at, which the site judges staleness by.
-            lambda: build_status(state, {name: b.since for name, b in beam_monitor.beams.items()},
-                                 max(config.sample_interval, StatusPublisher.DEBOUNCE)),
-            config.sample_interval, session, config.push_timeout,
+            config.push_url, config.push_secret, current_status, config.sample_interval, session, config.push_timeout,
         )
         state.on_change = publisher.poke
         loops.append(publisher.run)
 
-    ipc_server = IPCServer(Path(config.daemon_socket_path), state, command_handler, config_handler)
+    ipc_server = IPCServer(Path(config.daemon_socket_path), state, command_handler, config_handler, current_status)
     tasks: list = []
     try:
         await ipc_server.start()
@@ -660,25 +661,18 @@ async def run_tui(config, stop_event: asyncio.Event):
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
-async def run_stop(config) -> None:
-    """Connect to a running daemon via IPC and request a clean shutdown."""
-    client = IPCClient(Path(config.daemon_socket_path))
+async def request_or_exit(config, payload: dict) -> dict:
+    """The daemon's reply to `payload`; exits with 1 (and says why) if there's none."""
     try:
-        await asyncio.wait_for(client.connect(), IPC_REQUEST_TIMEOUT)
-    except OSError as exc:  # including TimeoutError
-        print(f"Could not connect to daemon at {config.daemon_socket_path}: {exc!r}")
+        return await ipc_request(Path(config.daemon_socket_path), payload)
+    except (OSError, ValueError) as exc:  # including TimeoutError
+        print(f"No answer from the daemon at {config.daemon_socket_path}: {exc}")
         raise SystemExit(1)
 
-    try:
-        response = await client.request({"method": "command", "name": "shutdown"}, timeout=IPC_REQUEST_TIMEOUT)
-    except TimeoutError:
-        print(f"The daemon didn't answer within {IPC_REQUEST_TIMEOUT:.0f}s; it may be stuck.")
-        raise SystemExit(1)
-    except (OSError, ValueError) as exc:  # e.g. the daemon closed the connection
-        print(f"Lost the connection to the daemon: {exc!r}")
-        raise SystemExit(1)
-    finally:
-        await client.close()
+
+async def run_stop(config) -> None:
+    """Ask a running daemon to shut down cleanly."""
+    response = await request_or_exit(config, {"method": "command", "name": "shutdown"})
     if not response.get("ok"):
         print(f"Daemon returned an error: {response.get('error')}")
         raise SystemExit(1)

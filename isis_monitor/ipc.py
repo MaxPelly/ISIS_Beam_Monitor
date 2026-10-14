@@ -28,6 +28,7 @@ STOP_FLUSH_TIMEOUT = 1.0
 # disconnected; it reconnects and resyncs from a snapshot when it resumes.
 SUBSCRIBER_DRAIN_TIMEOUT = 30.0
 CLIENT_LINE_LIMIT = 16 * 1024 * 1024
+REQUEST_TIMEOUT = 10.0  # a stuck daemon mustn't hang a command
 
 
 def _encode(payload: dict) -> bytes:
@@ -41,12 +42,15 @@ class IPCServer:
         state: DaemonState,
         command_handler: Callable[[str], Awaitable[dict]],
         config_handler: Optional[Callable[[str, dict], Awaitable[dict]]] = None,
+        status: Optional[Callable[[], dict]] = None,
     ):
-        """`config_handler(method, request)` serves get_config and update_config."""
+        """`config_handler(method, request)` serves get_config and update_config;
+        `status()` serves get_status."""
         self.socket_path = Path(socket_path)
         self.state = state
         self.command_handler = command_handler
         self.config_handler = config_handler
+        self.status = status
         self.server: Optional[asyncio.base_events.Server] = None
         self._clients: Set[asyncio.StreamWriter] = set()
         self._closing = False
@@ -93,6 +97,8 @@ class IPCServer:
             return {"history": self.state.get_history_snapshot(limit if isinstance(limit, int) else None)}
         if method == "get_logs":
             return {"logs": self.state.get_logs_snapshot()}
+        if method == "get_status" and self.status is not None:
+            return {"status": self.status()}
         if method == "command":
             return {"result": await self.command_handler(str(req.get("name", "")))}
         if method in ("get_config", "update_config") and self.config_handler is not None:
@@ -156,6 +162,31 @@ class IPCServer:
         # Aborted rather than closed, since close() would first wait to flush
         # stale events to a client that isn't reading them.
         writer.transport.abort()
+
+
+async def ipc_request(socket_path: Path, payload: dict, timeout: Optional[float] = None) -> dict:
+    """Send one request on a connection of its own and return the reply.
+    Raises OSError (including TimeoutError) if the daemon can't be reached or
+    doesn't answer in time, and ValueError for a reply that isn't JSON."""
+    async def exchange() -> dict:
+        reader, writer = await asyncio.open_unix_connection(str(socket_path), limit=CLIENT_LINE_LIMIT)
+        try:
+            writer.write(_encode(payload))
+            await writer.drain()
+            line = await reader.readline()
+        finally:
+            writer.close()
+            with contextlib.suppress(ConnectionError):
+                await writer.wait_closed()
+        if not line:
+            raise ConnectionError("The daemon closed the connection without answering")
+        return json.loads(line)
+
+    timeout = timeout or REQUEST_TIMEOUT
+    try:
+        return await asyncio.wait_for(exchange(), timeout)
+    except TimeoutError:
+        raise TimeoutError(f"No reply to {payload.get('method')!r} within {timeout:.0f}s") from None
 
 
 class IPCClient:

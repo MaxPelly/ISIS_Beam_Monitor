@@ -588,7 +588,7 @@ async def test_run_stop_without_daemon_exits_1(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         await main.run_stop(_config(tmp_path))
     assert exc.value.code == 1
-    assert "Could not connect" in capsys.readouterr().out
+    assert "No answer from the daemon" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("result, expected", [
@@ -1103,24 +1103,12 @@ async def test_sync_tui_subscribes_before_fetching_state():
 
 
 async def test_run_stop_gives_up_on_a_daemon_that_does_not_answer(tmp_path, capsys):
-    with patch("isis_monitor.ipc.STOP_FLUSH_TIMEOUT", 0.05), patch("main.IPC_REQUEST_TIMEOUT", 0.05):
+    with patch("isis_monitor.ipc.STOP_FLUSH_TIMEOUT", 0.05), patch("isis_monitor.ipc.REQUEST_TIMEOUT", 0.05):
         async with serving(tmp_path, command_handler=never_answers):
             with pytest.raises(SystemExit) as exc:
                 await main.run_stop(_config(tmp_path))
     assert exc.value.code == 1
-    assert "didn't answer" in capsys.readouterr().out
-
-
-async def test_run_stop_reports_a_dropped_connection(tmp_path, capsys):
-    with patch("main.IPCClient") as client_cls:
-        client = client_cls.return_value
-        client.connect = AsyncMock()
-        client.close = AsyncMock()
-        client.request = AsyncMock(side_effect=ConnectionError("IPC client closed"))
-        with pytest.raises(SystemExit) as exc:
-            await main.run_stop(_config(tmp_path))
-    assert exc.value.code == 1
-    assert "Lost the connection" in capsys.readouterr().out
+    assert "No reply to 'command' within" in capsys.readouterr().out
 
 
 async def test_run_daemon_publishes_the_status_with_a_push_url(tmp_path):

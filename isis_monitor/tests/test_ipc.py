@@ -11,7 +11,7 @@ import pytest
 
 from isis_monitor import __version__
 from isis_monitor.daemon_state import SUBSCRIBER_QUEUE_SIZE, DaemonState
-from isis_monitor.ipc import SERVER_LINE_LIMIT, IPCClient, IPCServer
+from isis_monitor.ipc import SERVER_LINE_LIMIT, IPCClient, IPCServer, ipc_request
 from isis_monitor.tests.helpers import connected, never_answers, raw_request, serving, wait_until
 
 
@@ -317,3 +317,29 @@ async def test_request_timeout_closes_the_client_and_wakes_other_waiters(tmp_pat
         with pytest.raises(RuntimeError, match="not connected"):
             await client.request({"method": "get_snapshot"})
         await client.close()  # idempotent
+
+
+async def test_ipc_request_gets_the_status_on_a_connection_of_its_own(tmp_path):
+    async with serving(tmp_path) as server:
+        server.status = lambda: {"kind": "status"}
+        assert await ipc_request(server.socket_path, {"method": "get_status"}) == {"ok": True, "status": {"kind": "status"}}
+        await wait_until(lambda: not server._clients)  # the connection's closed
+    async with serving(tmp_path) as server:  # without a status builder
+        assert (await ipc_request(server.socket_path, {"method": "get_status"}))["error"] == "unknown_method"
+
+
+async def test_ipc_request_fails_without_an_answer(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        await ipc_request(tmp_path / "none.sock", {"method": "get_status"})
+
+    async def hang_up(_reader, writer):
+        writer.close()
+
+    server = await asyncio.start_unix_server(hang_up, path=str(tmp_path / "h.sock"))
+    async with server:
+        with pytest.raises(ConnectionError):  # reset, or closed without answering
+            await ipc_request(tmp_path / "h.sock", {"method": "get_status"})
+    with patch("isis_monitor.ipc.STOP_FLUSH_TIMEOUT", 0.05):
+        async with serving(tmp_path, command_handler=never_answers) as server:
+            with pytest.raises(TimeoutError, match="No reply to 'command' within"):
+                await ipc_request(server.socket_path, {"method": "command", "name": "x"}, timeout=0.05)
