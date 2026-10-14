@@ -59,9 +59,12 @@ async def test_edit_notification_and_save():
     assert "timezone [Europe/London]: " in term.prompts
 
 
-async def test_enter_keeps_current_value():
-    result, term = await edit("4", "", "s", "q")
+async def test_enter_and_a_blank_name_change_nothing():
+    """Enter keeps the current value; a blank name cancels adding an instrument."""
+    result, term = await edit("4", "", "a", "", "s", "q")
     assert "No changes to save." in term.text
+    assert "Adding an instrument (leave the name blank to cancel)." in term.text
+    assert term.prompts.count("Name []: ") == 1
     assert result is None
 
 
@@ -97,9 +100,12 @@ async def test_delete_instrument_needs_confirmation():
 
 
 async def test_cannot_delete_last_instrument_or_a_missing_one():
-    result, term = await edit("d 6", "y", "d 6", "d 10", "q")
+    result, term = await edit("d 6", "y", "d 6", "d 10")
     assert "At least one instrument is required." in term.text
     assert "No instrument with that number." in term.text
+    # Input then closes with the deletion unsaved.
+    assert result is None
+    assert "Input closed; your changes were discarded." in term.text
 
 
 async def test_declining_save_or_discard_returns_to_menu():
@@ -113,6 +119,7 @@ async def test_unknown_command_and_closed_input():
     assert "Unknown command: zz" in term.text
     assert "Unknown command: ²" in term.text and "Unknown command: d ²" in term.text
     assert result is None  # input closed afterwards
+    assert "discarded" not in term.text  # nothing had changed
 
 
 def test_describe_changes_covers_renames_and_order():
@@ -135,14 +142,21 @@ def daemon(*update_replies):
     return AsyncMock(side_effect=replies)
 
 
-async def test_run_config_editor_saves_with_revision():
-    request = daemon({"ok": True, "restarting": True})
+@pytest.mark.parametrize("reply, message", [
+    ({"ok": True, "restarting": True}, "daemon is restarting"),
+    # A config changed elsewhere ends the session rather than overwriting it.
+    ({"ok": False, "error": "config_changed", "detail": "reload and try again"},
+     "Save failed (config_changed): reload and try again"),
+])
+async def test_run_config_editor_saves_with_revision(reply, message):
+    request = daemon(reply)
     term = Terminal("1", "UTC", "s", "y", "")
     await run_config_editor(request, term.read_line, term.write)
     update = request.await_args_list[1].args[0]
     assert (update["method"], update["revision"]) == ("update_config", "rev1")
     assert update["settings"]["notifications"]["timezone"] == "UTC"
-    assert "daemon is restarting" in term.text
+    assert message in term.text
+    assert request.await_count == 2
 
 
 async def test_run_config_editor_lets_user_fix_invalid_config():
@@ -156,14 +170,6 @@ async def test_run_config_editor_lets_user_fix_invalid_config():
     await run_config_editor(request, term.read_line, term.write)
     assert "Save failed (invalid_config): [INSTRUMENT:WISH] notify_counts" in term.text
     assert request.await_args_list[2].args[0]["settings"]["instruments"][1]["notify_counts"] == "5"
-
-
-async def test_run_config_editor_stops_on_config_changed():
-    request = daemon({"ok": False, "error": "config_changed", "detail": "reload and try again"})
-    term = Terminal("1", "UTC", "s", "y", "")
-    await run_config_editor(request, term.read_line, term.write)
-    assert "Save failed (config_changed): reload and try again" in term.text
-    assert request.await_count == 2
 
 
 async def test_run_config_editor_quit_sends_nothing():
@@ -197,19 +203,6 @@ async def test_run_config_editor_keeps_edits_when_connection_is_lost_on_save():
     assert "Save failed: daemon went away. Your changes are kept" in term.text
     retry = request.await_args_list[2].args[0]
     assert (retry["revision"], retry["settings"]["notifications"]["timezone"]) == ("r", "UTC")
-
-
-async def test_blank_name_cancels_adding_an_instrument():
-    result, term = await edit("a", "", "q")
-    assert result is None
-    assert "Adding an instrument (leave the name blank to cancel)." in term.text
-    assert term.prompts.count("Name []: ") == 1
-
-
-async def test_closed_input_with_changes_says_they_were_discarded():
-    result, term = await edit("1", "UTC")
-    assert result is None
-    assert "Input closed; your changes were discarded." in term.text
 
 
 async def test_teams_channel_prompt_validates_and_shows_in_menu():

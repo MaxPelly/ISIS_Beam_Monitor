@@ -22,71 +22,22 @@ def _write(tmp_path, extra: str) -> Path:
 
 def test_load_config_success(tmp_path):
     config_file = tmp_path / "config.ini"
-    config_file.write_text("""\
+    config_file.write_text(f"""\
 [DATA]
 mcr_news_url = http://test.com/news
 isis_websocket_url = wss://test.com/ws
+mcr_page_url = https://example.com/mcr
 
 [WEBHOOKS]
 news_teams_url = https://test.teams/news
 beam_teams_url = https://test.teams/beam
 experiment_teams_url = https://test.teams/exp
 
-[INSTRUMENT:PEARL]
-notify_counts = 130
-""")
-    config = load_config(config_file)
-    assert config.mcr_news_url == "http://test.com/news"
-    assert config.isis_websocket_url == "wss://test.com/ws"
-    assert config.news_teams_url == "https://test.teams/news"
-    assert config.beam_teams_url == "https://test.teams/beam"
-    assert config.experiment_teams_url == "https://test.teams/exp"
-    assert config.instruments == [InstrumentConfig("PEARL", 130.0)]  # beam_target from CS:INSTLIST
-
-
-def test_load_config_missing_file():
-    with pytest.raises(ConfigError, match="not found"):
-        load_config(Path("non_existent_file.ini"))
-
-
-def test_load_config_missing_mcr_url(tmp_path):
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("[DATA]\nisis_websocket_url = wss://test.com/ws\n[INSTRUMENT:PEARL]\nnotify_counts = 1\n")
-    with pytest.raises(ConfigError, match="mcr_news_url"):
-        load_config(config_file)
-
-
-def test_load_config_requires_an_instrument_section(tmp_path):
-    config_file = tmp_path / "config.ini"
-    config_file.write_text("[DATA]\nmcr_news_url = http://x\n[PVS]\ninstrument_target = TS2\n")
-    with pytest.raises(ConfigError, match=r"At least one \[INSTRUMENT:<NAME>\] section is required"):
-        load_config(config_file)
-
-
-def test_load_config_empty_websocket_url_warns(tmp_path):
-    """Empty isis_websocket_url is a warning, not an error."""
-    config = load_config(_write(tmp_path, "isis_websocket_url =\n"))
-    assert config.isis_websocket_url == ""
-    assert any("isis_websocket_url" in w for w in config.warnings)
-
-
-def test_load_config_daemon_values(tmp_path):
-    config = load_config(_write(tmp_path, """\
 [DAEMON]
 db_path = /tmp/beam.db
-socket_path = /tmp/beam.sock
+socket_path = /{"s" * 106}
 lock_file = /tmp/beam.lock
 retention_days = 7
-"""))
-    assert config.daemon_db_path == "/tmp/beam.db"
-    assert config.daemon_socket_path == "/tmp/beam.sock"
-    assert config.daemon_lock_file == "/tmp/beam.lock"
-    assert config.retention_days == 7
-
-
-def test_load_config_notifications_custom_values(tmp_path):
-    config = load_config(_write(tmp_path, """\
-mcr_page_url = https://example.com/mcr
 
 [NOTIFICATIONS]
 timezone = America/New_York
@@ -94,13 +45,54 @@ debounce_seconds = 5
 stall_minutes = 10
 finish_warning_minutes = 30
 summary_time = 07:30
-"""))
+
+[INSTRUMENT:PEARL]
+notify_counts = 130
+""")
+    config = load_config(config_file)
+    assert config.mcr_news_url == "http://test.com/news"
+    assert config.isis_websocket_url == "wss://test.com/ws"
+    assert config.mcr_page_url == "https://example.com/mcr"
+    assert config.news_teams_url == "https://test.teams/news"
+    assert config.beam_teams_url == "https://test.teams/beam"
+    assert config.experiment_teams_url == "https://test.teams/exp"
+    assert config.daemon_db_path == "/tmp/beam.db"
+    assert config.daemon_socket_path == "/" + "s" * 106  # the longest path a Unix socket allows
+    assert config.daemon_lock_file == "/tmp/beam.lock"
+    assert config.retention_days == 7
     assert config.notifications_timezone == "America/New_York"
     assert config.debounce_seconds == 5.0
     assert config.stall_minutes == 10.0
     assert config.finish_warning_minutes == 30.0
     assert config.summary_time == "07:30"
-    assert config.mcr_page_url == "https://example.com/mcr"
+    assert config.instruments == [InstrumentConfig("PEARL", 130.0)]  # beam_target from CS:INSTLIST
+
+
+def test_a_missing_config_file_is_reported(tmp_path):
+    with pytest.raises(ConfigError, match="not found"):
+        load_config(Path("non_existent_file.ini"))
+    with pytest.raises(ConfigError, match="not found"):
+        update_config_file(tmp_path / "nope.ini", {})
+
+
+@pytest.mark.parametrize("text, match", [
+    ("[DATA]\nisis_websocket_url = wss://test.com/ws\n[INSTRUMENT:PEARL]\nnotify_counts = 1\n", "mcr_news_url"),
+    ("[DATA]\nmcr_news_url = http://x\n[PVS]\ninstrument_target = TS2\n",
+     r"At least one \[INSTRUMENT:<NAME>\] section is required"),
+])
+def test_load_config_requires_mcr_url_and_an_instrument(tmp_path, text, match):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(text)
+    with pytest.raises(ConfigError, match=match):
+        load_config(config_file)
+
+
+def test_load_config_blank_values(tmp_path):
+    """Blank numbers fall back to their defaults; an empty isis_websocket_url is a warning, not an error."""
+    config = load_config(_write(tmp_path, "isis_websocket_url =\n[DAEMON]\nretention_days =\nsample_interval =\n"))
+    assert (config.retention_days, config.sample_interval) == (7, 60)
+    assert config.isis_websocket_url == ""
+    assert any("isis_websocket_url" in w for w in config.warnings)
 
 
 @pytest.mark.parametrize("given, target", [("TS1", "TS1"), ("ts2", "TS2"), ("Muon", "Muons"), ("MUONS", "Muons")])
@@ -108,13 +100,6 @@ def test_beam_targets_are_case_insensitive_and_stored_canonically(tmp_path, give
     config = load_config(_write(tmp_path, f"[PVS]\ninstrument_target = {given}\n"
                                           f"[INSTRUMENT:PEARL]\nnotify_counts = 5\nbeam_target = {given}\n"))
     assert config.instrument_target == config.instruments[0].beam_target == target
-
-
-def test_load_config_instrument_target_must_be_a_beam(tmp_path):
-    """A typo must be rejected at load time rather than silently degrading to
-    "unknown" in every run-card fact."""
-    with pytest.raises(ConfigError, match="instrument_target must be one of TS1, TS2, Muons"):
-        load_config(_write(tmp_path, "[PVS]\ninstrument_target = TS3\n"))
 
 
 def test_load_config_defaults_match_dataclass_defaults(tmp_path):
@@ -128,6 +113,9 @@ def test_load_config_defaults_match_dataclass_defaults(tmp_path):
     assert (config.mcr_page_url, config.summary_time) == ("", "08:00")
     # With no [PVS] or [INSTRUMENT:*] sections the one instrument is PEARL.
     assert [(i.name, i.notify_counts) for i in config.instruments] == [("PEARL", 130.0)]
+    # Push is off unless configured.
+    assert (config.push_url, config.push_secret, config.push_timeout) == ("", b"", 2.0)
+    assert read_push_secret(config) == b""
 
 
 NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
@@ -139,6 +127,9 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     ("[DAEMON]\nretention_days = 1.5\n", r"\[DAEMON\] retention_days"),
     (NOTIF + "debounce_seconds = soon\n", r"\[NOTIFICATIONS\] debounce_seconds"),
     ("[LOGGING]\nlevel = verbose\n", r"\[LOGGING\] level must be one of DEBUG, INFO, WARNING, ERROR"),
+    # A typo must be rejected at load time rather than silently degrading to "unknown" in every run-card fact.
+    ("[PVS]\ninstrument_target = TS3\n", "instrument_target must be one of TS1, TS2, Muons"),
+    (f"[DAEMON]\nsocket_path = {'s' * 108}\n", r"\[DAEMON\] socket_path .* is longer than a Unix socket path can be"),
     # [BEAM:*] sections
     ("[BEAM:TS1]\nboundaries = 0, a, 2\n", r"\[BEAM:TS1\] boundaries could not convert"),
     ("[BEAM:TS1]\nboundaries = 0.0, 50.0\n", "exactly 3"),
@@ -195,11 +186,6 @@ def test_invalid_config_raises_config_error(tmp_path, extra, match):
         load_config(_write(tmp_path, extra))
 
 
-def test_load_config_blank_numeric_value_uses_default(tmp_path):
-    config = load_config(_write(tmp_path, "[DAEMON]\nretention_days =\nsample_interval =\n"))
-    assert (config.retention_days, config.sample_interval) == (7, 60)
-
-
 @pytest.mark.parametrize("url, warned", [
     ("http://127.0.0.1:8765/ingest", False),
     ("http://localhost:8765/ingest", False),
@@ -234,7 +220,8 @@ def test_beam_sections_override_the_defaults(tmp_path):
 
 
 def test_instrument_sections(tmp_path):
-    """Section names are case-insensitive and instrument names upper-cased."""
+    """Section names are case-insensitive and instrument names upper-cased; channel defaults
+    to experiment; the progress PV is derived from the name, a configured counts_pv ignored."""
     config = load_config(_write(tmp_path, """\
 [PVS]
 instrument_target = TS2
@@ -243,12 +230,19 @@ notify_counts = 200
 beam_target = TS1
 [instrument:wish]
 notify_counts = 75
+channel = Instrument
+[INSTRUMENT:POLARIS]
+counts_pv = IN:POLARIS:CS:DASHBOARD:TAB:2:1:VALUE
+notify_counts = 300
 """))
-    assert config.instruments == [
+    assert config.instruments[:2] == [
         InstrumentConfig("PEARL", 200.0, "TS1"),
-        InstrumentConfig("WISH", 75.0),  # instrument_target is only a fallback for CS:INSTLIST
+        InstrumentConfig("WISH", 75.0, channel="instrument"),  # instrument_target is only a fallback for CS:INSTLIST
     ]
+    assert [i.channel for i in config.instruments] == ["experiment", "instrument", "experiment"]
     assert config.instruments[1].run_name_pv == "IN:WISH:DAE:WDTITLE"
+    assert config.instruments[2].counts_pv == "IN:POLARIS:DAE:TOTALUAMPS"
+    assert any("[INSTRUMENT:POLARIS] counts_pv" in w for w in config.warnings)
 
 
 def test_unknown_sections_and_keys_get_one_warning(tmp_path, caplog):
@@ -298,11 +292,9 @@ def test_editable_settings_are_ini_strings(tmp_path):
         },
         "instruments": [{"name": "PEARL", "notify_counts": "130", "beam_target": "", "channel": "experiment"}],
     }
-
-
-def test_editable_settings_keep_full_precision():
-    config = AppConfig(debounce_seconds=2.5, instruments=[InstrumentConfig("X", 1234567.0, "TS1")])
-    settings = editable_settings(config)
+    # Full precision is kept.
+    settings = editable_settings(
+        AppConfig(debounce_seconds=2.5, instruments=[InstrumentConfig("X", 1234567.0, "TS1")]))
     assert settings["notifications"]["debounce_seconds"] == "2.5"
     assert settings["instruments"][0]["notify_counts"] == "1234567"
 
@@ -341,18 +333,18 @@ def test_auto_notify_counts_keeps_its_fallback_and_round_trips(tmp_path):
     assert load_config(path).instruments[0] == inst
 
 
-def test_update_config_file_removes_dropped_instruments(tmp_path):
+def test_update_config_file_rewrites_only_the_parts_given(tmp_path):
     path = _editable_file(tmp_path, EDITABLE_BASE + "[Instrument:WISH]\nnotify_counts = 5\n")
-    update_config_file(path, {"instruments": [{"name": "WISH", "notify_counts": "5"}]})
-    assert [i.name for i in load_config(path).instruments] == ["WISH"]
-
-
-def test_update_config_file_only_notifications_leaves_instruments(tmp_path):
-    path = _editable_file(tmp_path)
     update_config_file(path, {"notifications": {"summary_time": "09:30"}})
     config = load_config(path)
     assert config.summary_time == "09:30"
-    assert [i.name for i in config.instruments] == ["PEARL"]
+    assert [i.name for i in config.instruments] == ["PEARL", "WISH"]
+
+    # Instruments left out of the list are removed.
+    update_config_file(path, {"instruments": [{"name": "WISH", "notify_counts": "5"}]})
+    config = load_config(path)
+    assert [i.name for i in config.instruments] == ["WISH"]
+    assert config.summary_time == "09:30"
 
 
 def test_update_config_file_writes_through_symlink(tmp_path):
@@ -385,11 +377,6 @@ def test_update_config_file_rejects_invalid_settings_without_writing(tmp_path, s
         update_config_file(path, settings)
     assert path.read_text() == EDITABLE_BASE
     assert not (tmp_path / "config.ini.bak").exists()
-
-
-def test_update_config_file_missing_file(tmp_path):
-    with pytest.raises(ConfigError, match="not found"):
-        update_config_file(tmp_path / "nope.ini", {})
 
 
 def test_update_config_file_cleans_up_temp_file_on_write_failure(tmp_path):
@@ -427,14 +414,6 @@ def test_update_config_file_directory_fsync_failure_is_only_a_warning(tmp_path, 
     assert "Could not fsync" in caplog.text
 
 
-def test_instrument_progress_pv_is_derived_from_the_name(tmp_path):
-    config = load_config(_write(
-        tmp_path, "[INSTRUMENT:POLARIS]\ncounts_pv = IN:POLARIS:CS:DASHBOARD:TAB:2:1:VALUE\nnotify_counts = 300\n"
-    ))
-    assert config.instruments[0].counts_pv == "IN:POLARIS:DAE:TOTALUAMPS"
-    assert "[INSTRUMENT:POLARIS] counts_pv" in config.warnings[0]
-
-
 def test_update_config_file_drops_unknown_instrument_keys_and_rejects_editing_them(tmp_path):
     path = _editable_file(tmp_path, EDITABLE_BASE + "[INSTRUMENT:WISH]\ncounts_pv = OLD\nnotify_counts = 5\n")
     update_config_file(path, editable_settings(load_config(path)))
@@ -442,17 +421,6 @@ def test_update_config_file_drops_unknown_instrument_keys_and_rejects_editing_th
 
     with pytest.raises(ConfigError, match="'counts_pv' can't be edited"):
         update_config_file(path, {"instruments": [{"name": "WISH", "counts_pv": "X", "notify_counts": "5"}]})
-
-
-def test_instrument_channel_defaults_to_experiment_and_can_be_instrument(tmp_path):
-    config = load_config(_write(tmp_path, """\
-[INSTRUMENT:PEARL]
-notify_counts = 130
-[INSTRUMENT:WISH]
-notify_counts = 50
-channel = Instrument
-"""))
-    assert [(i.name, i.channel) for i in config.instruments] == [("PEARL", "experiment"), ("WISH", "instrument")]
 
 
 def test_push_secret_is_read_and_checked(tmp_path):
@@ -479,14 +447,3 @@ def test_push_secret_is_read_and_checked(tmp_path):
     read_push_secret(config)
     assert "world-readable" in config.warnings[-1]
 
-
-def test_push_disabled_by_default(tmp_path):
-    config = load_config(_write(tmp_path, ""))
-    assert (config.push_url, config.push_secret, config.push_timeout) == ("", b"", 2.0)
-    assert read_push_secret(config) == b""
-
-
-def test_a_socket_path_too_long_for_a_unix_socket_is_refused(tmp_path):
-    with pytest.raises(ConfigError, match=r"\[DAEMON\] socket_path .* is longer than a Unix socket path can be"):
-        load_config(_write(tmp_path, f"[DAEMON]\nsocket_path = {'s' * 108}\n"))
-    assert load_config(_write(tmp_path, f"[DAEMON]\nsocket_path = /{'s' * 106}\n")).daemon_socket_path == "/" + "s" * 106
