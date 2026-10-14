@@ -175,16 +175,17 @@ async def edit_settings(
         return None
 
 
-async def run_config_editor(request: Request, read_line: ReadLine, write: Write) -> None:
-    """Fetch the config from the daemon, let the user edit it, and save it."""
+async def run_config_editor(request: Request, read_line: ReadLine, write: Write) -> bool:
+    """Fetch the config from the daemon, let the user edit it, and save it.
+    False if that failed (the user quitting isn't a failure)."""
     try:
         reply = await request({"method": "get_config"})
     except (OSError, ValueError) as exc:
         write(f"Could not reach the daemon: {exc}")
-        return
+        return False
     if not reply.get("ok") or "config" not in reply:
         write(f"Could not load the config: {reply.get('detail') or reply.get('error', 'unknown error')}")
-        return
+        return False
 
     original = reply["config"]
     settings = original
@@ -193,7 +194,7 @@ async def run_config_editor(request: Request, read_line: ReadLine, write: Write)
             settings, original, reply["beam_targets"], read_line, write, reply["channel_modes"]
         )
         if edited is None:
-            return
+            return True
         try:
             result = await request({"method": "update_config", "revision": reply.get("revision"), "settings": edited})
         except (OSError, ValueError) as exc:
@@ -203,8 +204,8 @@ async def run_config_editor(request: Request, read_line: ReadLine, write: Write)
             continue
         if result.get("ok"):
             write("Saved. The daemon is restarting to apply it.")
-            return
+            return True
         write(f"Save failed ({result.get('error')}): {result.get('detail', '')}")
         if result.get("error") != "invalid_config":
-            return
+            return False
         settings = edited  # let the user fix the rejected value and try again

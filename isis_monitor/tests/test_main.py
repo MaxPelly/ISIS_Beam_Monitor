@@ -399,7 +399,7 @@ async def test_run_stop_without_daemon_exits_1(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         await main.run_stop(_config(tmp_path))
     assert exc.value.code == 1
-    assert "No answer from the daemon" in capsys.readouterr().out
+    assert "No answer from the daemon" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("result, expected", [
@@ -416,7 +416,7 @@ async def test_run_stop_error_reply_exits_1(tmp_path, capsys):
     async with serving(tmp_path, command_handler=AsyncMock(side_effect=RuntimeError("x"))):
         with pytest.raises(SystemExit):
             await main.run_stop(_config(tmp_path))
-    assert "internal_error" in capsys.readouterr().out
+    assert "internal_error" in capsys.readouterr().err
 
 
 async def test_status_command_prints_the_daemons_status(tmp_path, capsys):
@@ -438,14 +438,14 @@ async def test_reconnect_command(tmp_path, capsys, result, out):
         server.command_handler = AsyncMock(return_value={"error": "unknown_command"})
         with pytest.raises(SystemExit):
             await main.run_reconnect(_config(tmp_path))
-    assert "Daemon returned an error: {'error': 'unknown_command'}" in capsys.readouterr().out
+    assert "Daemon returned an error: {'error': 'unknown_command'}" in capsys.readouterr().err
 
 
 async def test_status_command_reports_an_error_reply(tmp_path, capsys):
     async with serving(tmp_path):  # no status builder, so get_status is unknown
         with pytest.raises(SystemExit):
             await main.run_status(_config(tmp_path))
-    assert "Daemon returned an error: unknown_method" in capsys.readouterr().out
+    assert "Daemon returned an error: unknown_method" in capsys.readouterr().err
 
 
 def test_parse_args_modes():
@@ -486,7 +486,7 @@ def test_main_logs_config_warnings_once_logging_is_set_up(tmp_path, caplog):
 def test_main_reports_config_error(tmp_path, capsys):
     with pytest.raises(SystemExit):
         run_main("stop", str(tmp_path / "missing.ini"))
-    assert "Configuration error" in capsys.readouterr().out
+    assert "Configuration error" in capsys.readouterr().err
 
 
 def test_main_daemon_refuses_second_instance(tmp_path, capsys):
@@ -494,7 +494,7 @@ def test_main_daemon_refuses_second_instance(tmp_path, capsys):
         with pytest.raises(SystemExit):
             run_main("daemon", _ini(tmp_path))
     run_daemon.assert_not_called()
-    assert "Lock file already held" in capsys.readouterr().out
+    assert "Lock file already held" in capsys.readouterr().err
 
 
 def test_configure_logging_sets_the_daemons_level(tmp_path):
@@ -539,13 +539,23 @@ def test_main_reads_the_push_secret_only_for_the_daemon(tmp_path, capsys):
     with patch("main.run_daemon", new_callable=AsyncMock) as run_daemon, pytest.raises(SystemExit):
         run_main("daemon", ini)
     run_daemon.assert_not_called()
-    assert "secret_file could not be read" in capsys.readouterr().out
+    assert "secret_file could not be read" in capsys.readouterr().err
 
 
-def test_main_keyboard_interrupt_exits_quietly(tmp_path, capsys):
-    with patch("main.run_stop", new_callable=AsyncMock, side_effect=KeyboardInterrupt):
-        run_main("stop", _ini(tmp_path))
+def test_keyboard_interrupt_exits_quietly(tmp_path, capsys):
+    with patch("main.run_daemon", new_callable=AsyncMock, side_effect=KeyboardInterrupt):
+        run_main("daemon", _ini(tmp_path))
     assert "Stopping monitors" in capsys.readouterr().out
+    with patch("main.run_config", new_callable=AsyncMock, side_effect=KeyboardInterrupt), \
+            pytest.raises(SystemExit) as exc:
+        run_main("config", _ini(tmp_path))
+    assert exc.value.code == 130 and capsys.readouterr().out == ""
+
+
+async def test_config_command_lets_ctrl_c_interrupt_input(tmp_path):
+    with patch("main.signal.signal") as set_handler, patch("main.run_config_editor", new_callable=AsyncMock):
+        await main.run_config(_config(tmp_path))
+    set_handler.assert_called_once_with(main.signal.SIGINT, main.signal.default_int_handler)
 
 
 # ---------------------------------------------------------------------------
@@ -660,7 +670,9 @@ async def test_config_command_quits_without_saving_when_input_closes(tmp_path, c
 
 
 async def test_config_command_without_a_daemon(tmp_path, capsys):
-    await main.run_config(_config(tmp_path))
+    with pytest.raises(SystemExit) as exc:
+        await main.run_config(_config(tmp_path))
+    assert exc.value.code == 1
     assert "Could not reach the daemon" in capsys.readouterr().out
 
 
@@ -805,7 +817,7 @@ async def test_run_stop_gives_up_on_a_daemon_that_does_not_answer(tmp_path, caps
             with pytest.raises(SystemExit) as exc:
                 await main.run_stop(_config(tmp_path))
     assert exc.value.code == 1
-    assert "No reply to 'command' within" in capsys.readouterr().out
+    assert "No reply to 'command' within" in capsys.readouterr().err
 
 
 async def test_run_daemon_publishes_the_status_with_a_push_url(tmp_path):

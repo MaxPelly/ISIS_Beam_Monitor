@@ -179,7 +179,7 @@ async def test_run_config_editor_quit_sends_nothing():
 ])
 async def test_run_config_editor_reports_load_failures(request_mock, message):
     term = Terminal()
-    await run_config_editor(request_mock, term.read_line, term.write)
+    assert await run_config_editor(request_mock, term.read_line, term.write) is False
     assert message in term.text
     assert term.prompts == []
 

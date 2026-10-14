@@ -347,21 +347,24 @@ def restart_process() -> None:
         raise SystemExit(1)
 
 
+def fail(message: str):
+    print(message, file=sys.stderr)
+    raise SystemExit(1)
+
+
 async def request_or_exit(config, payload: dict) -> dict:
     """The daemon's reply to `payload`; exits with 1 (and says why) if there's none."""
     try:
         return await ipc_request(Path(config.daemon_socket_path), payload)
     except (OSError, ValueError) as exc:  # including TimeoutError
-        print(f"No answer from the daemon at {config.daemon_socket_path}: {exc}")
-        raise SystemExit(1)
+        fail(f"No answer from the daemon at {config.daemon_socket_path}: {exc}")
 
 
 async def run_stop(config) -> None:
     """Ask a running daemon to shut down cleanly."""
     response = await request_or_exit(config, {"method": "command", "name": "shutdown"})
     if not response.get("ok"):
-        print(f"Daemon returned an error: {response.get('error')}")
-        raise SystemExit(1)
+        fail(f"Daemon returned an error: {response.get('error')}")
     result = response.get("result", {})
     if result.get("shutdown") == "ok":
         print("Shutdown signal sent — daemon is stopping cleanly.")
@@ -373,8 +376,7 @@ async def run_status(config, as_json: bool = False) -> None:
     """Print the daemon's status: as the status page shows it, or its JSON."""
     response = await request_or_exit(config, {"method": "get_status"})
     if not response.get("ok"):
-        print(f"Daemon returned an error: {response.get('error')}")
-        raise SystemExit(1)
+        fail(f"Daemon returned an error: {response.get('error')}")
     print(json.dumps(response["status"], indent=2, ensure_ascii=False) if as_json else render_status(response["status"]))
 
 
@@ -383,14 +385,17 @@ async def run_reconnect(config) -> None:
     response = await request_or_exit(config, {"method": "command", "name": "force_reconnect_all"})
     result = response.get("result", {})
     if not response.get("ok") or set(result) != {"beam", "mcr"}:
-        print(f"Daemon returned an error: {response.get('error') or result}")
-        raise SystemExit(1)
+        fail(f"Daemon returned an error: {response.get('error') or result}")
     for name, label in (("beam", "PVWS"), ("mcr", "MCR news")):
         print(f"{label}: {'reconnecting' if result[name] else 'already reconnecting'}")
 
 
 async def run_config(config) -> None:
     """Edit the running daemon's config on the terminal; the daemon saves it and restarts."""
+    # Let Ctrl-C interrupt input() at once; asyncio.run's handler would only
+    # cancel the next request, e.g. the save the user just confirmed.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+
     async def read_line(prompt: str) -> Optional[str]:
         # Blocking is fine: nothing else runs, and each request has its own connection.
         try:
@@ -398,7 +403,8 @@ async def run_config(config) -> None:
         except EOFError:
             return None
 
-    await run_config_editor(lambda payload: ipc_request(Path(config.daemon_socket_path), payload), read_line, print)
+    if not await run_config_editor(lambda payload: ipc_request(Path(config.daemon_socket_path), payload), read_line, print):
+        raise SystemExit(1)
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -437,7 +443,7 @@ def main():
         if args.mode == "daemon":
             config.push_secret = read_push_secret(config)
     except ConfigError as e:
-        print(f"Configuration error: {e}")
+        print(f"Configuration error: {e}", file=sys.stderr)
         raise SystemExit(1)
 
     set_timezone(config.notifications_timezone)
@@ -463,9 +469,11 @@ def main():
         elif args.mode == "reconnect":
             asyncio.run(run_reconnect(config))
     except LockHeldError as exc:  # anything else keeps its traceback
-        print(str(exc))
+        print(str(exc), file=sys.stderr)
         raise SystemExit(1)
     except (KeyboardInterrupt, asyncio.CancelledError):
+        if args.mode != "daemon":
+            raise SystemExit(130)  # interrupted, like any command
         print("\nStopping monitors...")
 
 
