@@ -228,19 +228,21 @@ class RunTracker:
             old = self.run_number
             if self._final_due:  # another run passed before its final counts came
                 self._end_unseen(now, waited=True)
-            run = self.run
+            run, adopted = self.run, False
             if (was_seen and not self.replaying and self._ending == old and old != self.last_completed
                     and not (run and run.number == old) and _follows(old, number)):
                 # It began unseen (e.g. before a reconnect) and has just ended: in ENDING still, or
                 # in SETUP (which can come first), where the counts are still its final.
                 self._start(now, adopted=True)
+                adopted = True
             # Live, a number that moves on while ENDING is the next run's; replayed (or the first
             # seen), it may be the one ending, which only shows if it moves on in turn.
             self.run_number = number
             self._ending = number if self.run_state == "ENDING" and (self.replaying or not old) else ""
             run = self.run
             if run and run.number == old and self.last_completed != old and not self.replaying:
-                self._complete(now, final_known=True)  # (while replaying: see _replayed)
+                # (While replaying: see _replayed.) An adopted run's final is known if its counts are.
+                self._complete(now, final_known=not adopted or run.last_counts >= 0)
         elif self.run_state == "ENDING":  # it came first (a number that moved on would be the next run's)
             self._ending = number
         self._seen(now)
@@ -330,8 +332,10 @@ class RunTracker:
         old, partial = self.rb, True  # the first seen had begun before
         run = self.run
         in_progress = run and self.last_completed != run.number and run.exp_gen == self.exp_gen
-        # Only just begun, it's the new experiment's first run (and gets its target).
-        just_begun = in_progress and run.number == self.run_number and now - run.started_at <= NEW_EXPERIMENT_WINDOW
+        # Only just begun (by its STARTTIME), and still under way, it's the new experiment's first
+        # run (and gets its target).
+        just_begun = (in_progress and run.number == self.run_number and run.start_text is not None
+                      and self.run_state in ACTIVE_STATES and now - run.started_at <= NEW_EXPERIMENT_WINDOW)
         if old:
             extra = run.last_counts if in_progress and not just_begun and run.last_counts > 0 else 0.0
             runs = self.exp_runs + (extra > 0)
@@ -404,9 +408,14 @@ class RunTracker:
         # One from before the DAE was last between runs is an earlier run's.
         start_text = self.start_text if self._start_text_fresh else None
         started_at = (parse_start_time(start_text, now) if start_text else None) or now
+        credit = self.counts is not None and (adopted or self.run_state in CREDITED_STATES)
+        if adopted and credit and previous and previous.final_known and previous.last_counts == self.counts:
+            # The previous run took these as its final (SETUP came first, and it had no STARTTIME
+            # to tell): they can't be both runs', and which run's they are can't be told now.
+            credit = False
         self.run = RunInfo(
             self.run_number, self.title, started_at, start_text, self.exp_gen, target, auto_runs,
-            last_counts=self.counts if self.counts is not None and (adopted or self.run_state in CREDITED_STATES) else -1.0,
+            last_counts=self.counts if credit else -1.0,
         )
         silent = (previous is None and not self.restored and not self._seen_idle) or adopted
         if previous and not _follows(previous.number, self.run_number):

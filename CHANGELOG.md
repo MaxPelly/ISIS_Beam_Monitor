@@ -9,6 +9,7 @@ own versions and changelog; each release here notes the version its
 ## [Unreleased]
 
 - The shadow run detection makes a run the new experiment's when the RB number changes within 30s of its begin (it checked for no counts yet, which with beam on there almost always are), and records a run first seen ending even when the DAE sends SETUP before the next run number.
+
 ## [1.3.0rc3] - 2026-10-14
 
 1.3.0rc2 with the fixes from the 14 Oct review, so the shadow week runs on the run detection 1.3.0 will ship. Includes push site v1.1.3 (deploy it first). No config change and no reset of saved state: from rc2 it carries on where it left off.

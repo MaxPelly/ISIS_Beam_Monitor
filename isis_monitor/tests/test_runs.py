@@ -538,3 +538,35 @@ def test_counts_arent_credited_after_a_replay_timeout_without_the_run_number():
     r.at(100 + REPLAY_TIMEOUT.total_seconds())  # gave up waiting
     r((112, "TOTALUAMPS", 50.0))
     assert r.tracker.replaying and r.tracker.run.last_counts == 8.0
+
+
+NO_START_TIME = [u for u in RUNNING if u[1] != "STARTTIME"]
+
+
+def test_without_its_start_time_a_run_isnt_taken_as_just_begun():
+    """It may have begun long before the daemon saw it."""
+    r = Replay()(*NO_START_TIME, (10, "TOTALUAMPS", 8.0)).settle()
+    r((20, "_RBNUMBER", "456"))
+    assert ("experiment", "123", 1, 8.0, True) in r.log
+
+
+def test_a_run_ending_when_the_rb_number_changes_stays_the_old_experiments():
+    r = running()(*NEXT_RUN, (30, "TOTALUAMPS", 2.0), (40, "RUNSTATE_STR", "ENDING")).settle()
+    r((45, "_RBNUMBER", "456"))
+    assert ("experiment", "123", 2, 10.0, True) in r.log  # runs 10 and 11, though 11 began 18s before
+
+
+def test_counts_a_previous_run_took_as_its_final_arent_an_adopted_runs_too():
+    """Run 10 had no STARTTIME, so a replay of 11's ENDING with SETUP first can't be told
+    from 10's: 10 takes the counts, and 11 is recorded without them, not counted twice."""
+    r = Replay()(*NO_START_TIME, (10, "TOTALUAMPS", 8.0)).settle()
+    reconnect(r)((100, "RUNSTATE_STR", "ENDING"), (100, "RUNNUMBER", "00011"), (100, "TOTALUAMPS", 30.0),
+                 (102, "RUNSTATE_STR", "SETUP"), (103, "RUNNUMBER", "00012")).settle()
+    assert r.log[1:] == [("done", "00010", 30.0), ("start", "00011", "silent"), ("done", "00011", None)]
+    assert (r.tracker.exp_runs, r.tracker.exp_uah) == (1, 30.0)
+
+
+def test_an_adopted_run_without_counts_has_no_final():
+    r = reconnect(running())((100, "RUNNUMBER", "00011"), (100, "RUNSTATE_STR", "ENDING"), (100, "TOTALUAMPS", "NaN"),
+                             (120, "RUNSTATE_STR", "SETUP"), (121, "RUNNUMBER", "00012")).settle()
+    assert r.log[-2:] == [("start", "00011", "silent"), ("done", "00011", None)]
