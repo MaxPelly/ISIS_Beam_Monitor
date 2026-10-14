@@ -5,6 +5,7 @@ import aiohttp
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from isis_monitor.config import AppConfig
+from isis_monitor.daemon_state import DaemonState
 from isis_monitor.tests.helpers import fake_channel
 from isis_monitor import mcr
 from isis_monitor.mcr import MCRNewsMonitor
@@ -114,7 +115,7 @@ async def run_script(monitor, *items, waits=None):
 
 
 async def test_mcr_run_broadcasts_only_on_news_change(mock_config, mock_channel):
-    sink = MagicMock()
+    sink = MagicMock(spec=DaemonState())
     monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=False, sink=sink)
 
     await run_script(monitor, "News A", "News A", "News B")
@@ -146,7 +147,7 @@ async def test_mcr_run_announces_news_posted_while_down(mock_config, mock_channe
 
 
 async def test_mcr_run_baseline_retries_until_news_available(mock_config, mock_channel):
-    sink = MagicMock()
+    sink = MagicMock(spec=DaemonState())
     monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=False, sink=sink)
     delays = await run_script(monitor, None, None, "News A")
     base = mock_config.mcr_poll_interval
@@ -160,7 +161,7 @@ async def test_mcr_run_baseline_retries_until_news_available(mock_config, mock_c
 
 async def test_mcr_run_backoff_on_consecutive_failures(mock_config, mock_channel):
     """Poll delay doubles per consecutive failure, capped at 8x, and resets on success."""
-    sink = MagicMock()
+    sink = MagicMock(spec=DaemonState())
     monitor = MCRNewsMonitor(mock_config, mock_channel, notify_current=True, sink=sink)
 
     delays = await run_script(monitor, None, None, None, None, "News", None)
@@ -186,7 +187,7 @@ async def test_mcr_run_cancels_promptly_mid_wait(mock_config, mock_channel):
 
 async def test_mcr_request_reconnect_polls_immediately(mock_config, mock_channel):
     from dataclasses import replace
-    sink = MagicMock()
+    sink = MagicMock(spec=DaemonState())
     monitor = MCRNewsMonitor(
         replace(mock_config, mcr_poll_interval=3600), mock_channel, notify_current=True, sink=sink
     )

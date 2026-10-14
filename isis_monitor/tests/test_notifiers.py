@@ -223,7 +223,7 @@ def test_create_payload_url_action_only_when_url_given():
 # ---------------------------------------------------------------------------
 
 def test_notification_channel_routes_by_its_name_or_its_route():
-    notifiers = [MagicMock(), MagicMock()]
+    notifiers = [MagicMock(spec=Notifier), MagicMock(spec=Notifier)]
     channel = NotificationChannel("TestChannel")
     for notifier in notifiers:
         channel.add_notifier(notifier)

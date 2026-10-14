@@ -259,7 +259,7 @@ async def test_state_persistence_loop_samples_only_while_the_beam_feed_is_connec
 
 async def test_state_persistence_loop_survives_database_errors(tmp_path, caplog):
     config = app_config(tmp_path, sample_interval=0.01)
-    store = MagicMock()
+    store = MagicMock(spec=SQLiteStateStore)
     store.write_samples.side_effect = [sqlite3.OperationalError("disk I/O error"), None, None, None]
     store.run = AsyncMock(side_effect=lambda fn, *args: fn(*args))
     stop = asyncio.Event()

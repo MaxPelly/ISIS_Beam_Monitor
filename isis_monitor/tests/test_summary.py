@@ -12,18 +12,6 @@ from isis_monitor.storage import SQLiteStateStore
 from isis_monitor.summary import LAST_SENT_KEY, TargetSummary, compute_summary, daily_summary_loop
 
 
-def make_config(**overrides):
-    base = dict(
-        mcr_news_url="http://test.url/mcr",
-        isis_websocket_url="",
-        news_teams_url="",
-        beam_teams_url="",
-        experiment_teams_url="",
-    )
-    base.update(overrides)
-    return AppConfig(**base)
-
-
 # ---------------------------------------------------------------------------
 # compute_summary
 # ---------------------------------------------------------------------------
@@ -126,7 +114,7 @@ async def run_summary(store, state=None, now=None, **overrides):
 
     with patch("isis_monitor.summary.SUMMARY_CHECK_INTERVAL", 0.001), \
             patch("isis_monitor.summary.datetime", MagicMock(now=read_clock)):
-        await daily_summary_loop(make_config(**overrides), state or DaemonState(), store, channel, stop_event)
+        await daily_summary_loop(AppConfig(**overrides), state or DaemonState(), store, channel, stop_event)
     return channel
 
 

@@ -235,7 +235,7 @@ def test_counts_are_unknown_while_the_run_state_is():
 
 
 async def test_run_state_and_number_changes_poke_the_publisher():
-    sink = MagicMock()
+    sink = MagicMock(spec=DaemonState())
     pearl = InstrumentTracker(InstrumentConfig("PEARL", 130.0, "TS1"), fake_channel(), lambda b: "high", 15, sink=sink)
     for text in ("RUNNING", "RUNNING", "ENDING"):
         pearl.handle_run_state(text)
