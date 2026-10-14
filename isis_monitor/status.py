@@ -188,7 +188,7 @@ def render_text(status: dict) -> str:
         means = [None if not (known := [v for v in g if v is not None]) else sum(known) / len(known) for g in groups]
         floor = min((m for m in means if m is not None), default=0.0)  # gaps mustn't stretch the scale
         chars = sparkline_chars([floor if m is None else m for m in means], len(means))
-        spark = "".join("·" if m is None else c for m, c in zip(means, chars))  # a blank is a zero
+        spark = "".join("·" if m is None else "_" if c == " " else c for m, c in zip(means, chars))  # _ is zero
         spark = spark if spark.strip("·") else ""  # nothing for 24h
         since = f"since {local(beam['since'])}" if beam["since"] else ""
         lines.append(f"{beam['name']:<6}{number(beam['current']):>7} µA  {beam['power']:<8}{since:<13}{spark}".rstrip())

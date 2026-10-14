@@ -44,16 +44,13 @@ class DaemonState:
     health and recent run completions. Confined to the event-loop thread
     (it isn't thread-safe)."""
 
-    def __init__(
-        self,
-        history_maxlen: int = 1441,
-        instrument_names: Iterable[str] = (),
-    ):
+    def __init__(self, instrument_names: Iterable[str] = ()):
         self.beam_states: Dict[str, Dict[str, object]] = {
             beam: {"current": 0.0, "power": "unknown"} for beam in BEAM_NAMES
         }
         self.history: Dict[str, Deque[Tuple[datetime, float, str]]] = {
-            beam: deque(maxlen=history_maxlen) for beam in BEAM_NAMES
+            # Bounded by trim_history_before(), which the daemon calls every sample_interval
+            beam: deque() for beam in BEAM_NAMES
         }
         self.mcr_news = MCR_NEWS_PLACEHOLDER
         self.mcr_news_at: Optional[datetime] = None  # when this run of the daemon last saw it change

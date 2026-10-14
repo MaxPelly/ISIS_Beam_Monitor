@@ -260,7 +260,9 @@ def test_render_text_shows_beams_instruments_and_news_in_local_time(monkeypatch)
     lines = text.splitlines()
     assert lines[0].startswith("ISIS Beam Monitor v") and "at Tue 13 Oct 13:00:00 (daemon starting" in lines[0]
     assert lines[2].startswith("TS1     152.3 µA  high    since 12:00  ··") and lines[2].endswith("·▁█·")  # the last half-hour has none yet
-    assert lines[3] == "TS2         ? µA  unknown"
+    assert lines[3] == "TS2         ? µA  unknown"  # no data for 24h
+    state.history["Muons"].append((NOW - timedelta(minutes=5), 0.0, "off"))
+    assert render_text(build(state, {}, 60, NOW)).splitlines()[4].endswith("··_")  # off isn't a gap
     assert lines[7].split()[:5] == ["PEARL", "TS1", "127921", "RUNNING", "65.2/≈130"] and lines[7].endswith("y" * 39 + "…")
     assert lines[8].split() == ["WISH", "TS1", "-", "?", "?"]
     assert lines[-2:] == [f"MCR news (since {state.mcr_news_at.astimezone(ZoneInfo('Europe/London')):%a %d %b %H:%M}):",

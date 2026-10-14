@@ -188,10 +188,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
     """Run until stopped; returns True if the daemon should restart itself."""
     install_signal_handlers(stop_event)
 
-    state = DaemonState(
-        history_maxlen=int(HISTORY_WINDOW.total_seconds() / config.sample_interval) + 1,
-        instrument_names=[inst.name for inst in config.instruments],
-    )  # health starts as "starting"
+    state = DaemonState(instrument_names=[inst.name for inst in config.instruments])  # health starts as "starting"
 
     def _init_db():
         store = SQLiteStateStore(Path(config.daemon_db_path))
