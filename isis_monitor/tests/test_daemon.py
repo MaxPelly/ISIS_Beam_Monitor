@@ -330,7 +330,7 @@ async def test_run_daemon_serves_ipc_and_shuts_down_cleanly_with_a_client_attach
 
 
 async def test_run_daemon_teardown_closes_each_notifier_once_then_the_session_whatever_fails(tmp_path, caplog):
-    """A failing state save, or a notifier failing to close, still leaves the rest closed."""
+    """A failing state save, IPC server stop or notifier close still leaves the rest closed."""
     config = app_config(tmp_path, beam_teams_url="http://127.0.0.1:9/beam", push_url="http://127.0.0.1:9/ingest",
                         push_secret=b"s" * 32)
     order = []
@@ -343,13 +343,15 @@ async def test_run_daemon_teardown_closes_each_notifier_once_then_the_session_wh
     with patch.object(daemon.Notifier, "close", autospec=True, side_effect=close), \
             patch.object(daemon.aiohttp.ClientSession, "close", autospec=True,
                          side_effect=lambda s: order.append("session")), \
-            patch.object(daemon.SQLiteStateStore, "upsert_snapshot", side_effect=sqlite3.OperationalError("disk I/O")):
+            patch.object(daemon.SQLiteStateStore, "upsert_snapshot", side_effect=sqlite3.OperationalError("disk I/O")), \
+            patch.object(daemon.IPCServer, "stop", side_effect=OSError("gone")) as stop_ipc:
         async with running_daemon(config, LIVE_ARGS):
             pass
     # (The MCR monitor closes a session of its own earlier.)
     assert [type(n) for n in order if n != "session"] == [TeamsNotifier, WebhookNotifier]
     assert order[-1] == "session"
-    assert "Failed to save the state or stop the IPC server" in caplog.text
+    assert "Failed to save the state" in caplog.text and "Failed to stop the IPC server" in caplog.text
+    stop_ipc.assert_awaited_once()  # despite the failed save
     assert "Closing TeamsNotifier failed: RuntimeError('stuck')" in caplog.text
 
 

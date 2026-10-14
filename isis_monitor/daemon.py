@@ -303,9 +303,12 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
                 store.close()
 
             await store.run(_close_db)
+        except Exception:  # still stop the IPC server, send what's queued and close the rest
+            logger.exception("Failed to save the state")
+        try:
             await ipc_server.stop()
-        except Exception:  # still send what's queued and close the rest
-            logger.exception("Failed to save the state or stop the IPC server")
+        except Exception:
+            logger.exception("Failed to stop the IPC server")
         # Each notifier once (the push notifier is in every channel), all
         # within one CLOSE_TIMEOUT.
         notifiers = dict.fromkeys(n for ch in channels for n in ch.notifiers)
