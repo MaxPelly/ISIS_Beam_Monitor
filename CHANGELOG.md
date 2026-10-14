@@ -8,6 +8,7 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+- `[PUSH] url` can be `unix:` and a socket's absolute path, e.g. `unix:/run/isis-push-site/ingest.sock`: notifications go to `/ingest` and the status to `/ingest/status` over that socket, as push site 1.3.0 and later require.
 - `[PUSH] secret_file` is optional: unset, the daemon reads systemd's `push-secret` credential (`LoadCredential=push-secret:<file>`), so the secret file can stay root's.
 - `[DAEMON] sample_interval` must be at least 10s (was 1s): each status sent to the push site bins the last 24h of samples, which at 1s took most of a second.
 - A saved state that's corrupt (e.g. a number too large for a float) is logged and skipped, rather than stopping the daemon from starting.

@@ -108,14 +108,32 @@ async def run_until_stopped(coro, stop_event: asyncio.Event) -> None:
         task.result()
 
 
-def build_channels(config, dummy: bool, session: Optional[aiohttp.ClientSession] = None):
+UNIX_URL = "unix:"
+
+
+def push_url(config) -> str:
+    """Where push notifications are posted: [PUSH] url, or for a unix: url
+    the same path over that socket (the host name is then ignored)."""
+    return "http://localhost/ingest" if config.push_url.startswith(UNIX_URL) else config.push_url
+
+
+def push_session(config, session: aiohttp.ClientSession) -> aiohttp.ClientSession:
+    """`session`, or for a unix: [PUSH] url a session of its own over that socket."""
+    if not config.push_url.startswith(UNIX_URL):
+        return session
+    return aiohttp.ClientSession(connector=aiohttp.UnixConnector(config.push_url.removeprefix(UNIX_URL)))
+
+
+def build_channels(config, dummy: bool, session: Optional[aiohttp.ClientSession] = None,
+                   push: Optional[aiohttp.ClientSession] = None):
     """The beam, experiment and MCR channels. Each picks the Teams channel
     name that downstream flows route on: the beam target's, the instrument's
     (with `channel = instrument`) or else the NotificationChannel's own.
 
     Each Teams webhook gets its own notifier; one dummy or push notifier is
     shared by all three, so the push feed keeps its order. The HTTP
-    notifiers share `session`, which the caller closes."""
+    notifiers share `session` (the push notifier `push`, if given), which
+    the caller closes."""
     own_channel = {i.name for i in config.instruments if i.channel == "instrument"}
 
     def experiment_route(n: Notification) -> str:
@@ -123,7 +141,8 @@ def build_channels(config, dummy: bool, session: Optional[aiohttp.ClientSession]
 
     shared: Optional[Notifier] = DummyNotifier() if dummy else None
     if not dummy and config.push_url:
-        shared = WebhookNotifier(config.push_url, config.push_secret, timeout=config.push_timeout, session=session)
+        shared = WebhookNotifier(push_url(config), config.push_secret, timeout=config.push_timeout,
+                                 session=push or session)
 
     def channel(name: str, url: str, route=None) -> NotificationChannel:
         ch = NotificationChannel(name, route)
@@ -193,7 +212,8 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
     logger.info(f"ISIS Beam Monitor v{__version__} starting")
 
     session = aiohttp.ClientSession()  # for every HTTP notifier
-    channels = build_channels(config, args.dummy, session)
+    push = push_session(config, session)  # for the push notifier and status publisher
+    channels = build_channels(config, args.dummy, session, push)
     beam_channel, exp_channel, mcr_channel = channels
     beam_monitor = BeamMonitor(
         config,
@@ -265,7 +285,7 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
     loops = [beam_monitor.run, mcr_monitor.run]  # each run until stop_event
     if config.push_url and not args.dummy:
         publisher = StatusPublisher(
-            config.push_url, config.push_secret, current_status, config.sample_interval, session, config.push_timeout,
+            push_url(config), config.push_secret, current_status, config.sample_interval, push, config.push_timeout,
         )
         state.on_change = publisher.poke
         loops.append(publisher.run)
@@ -317,6 +337,8 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             if isinstance(result, Exception):
                 logger.error(f"Closing {type(notifier).__name__} failed: {result!r}")
         await session.close()
+        if push is not session:
+            await push.close()
     return restart_requested
 
 

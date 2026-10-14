@@ -434,6 +434,36 @@ async def test_run_daemon_publishes_the_status_with_a_push_url(tmp_path):
     assert site.received[0]["kind"] == "status" and site.received[0]["instruments"][0]["name"] == "PEARL"
 
 
+async def test_a_unix_push_url_posts_over_that_socket(tmp_path):
+    from aiohttp import web
+
+    from isis_monitor.tests.test_status import SECRET
+    received = []
+
+    async def ingest(request):
+        received.append((request.path, json.loads(await request.read())))
+        return web.Response(status=204)
+    app = web.Application()
+    app.router.add_post("/ingest/status", ingest)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.UnixSite(runner, str(tmp_path / "ingest.sock")).start()
+    try:
+        config = app_config(tmp_path, push_url=f"unix:{tmp_path / 'ingest.sock'}", push_secret=SECRET)
+        async with running_daemon(config, LIVE_ARGS):
+            await wait_until(lambda: received)
+    finally:
+        await runner.cleanup()
+    assert received[0][0] == "/ingest/status" and received[0][1]["kind"] == "status"
+    session = MagicMock()
+    push = daemon.push_session(config, session)
+    try:
+        (notifier,) = {n for ch in daemon.build_channels(config, False, session, push) for n in ch.notifiers}
+        assert (notifier.webhook_url, notifier._session) == ("http://localhost/ingest", push)
+    finally:
+        await push.close()
+
+
 @pytest.mark.parametrize("dummy, push_url", [(True, "http://127.0.0.1:9/ingest"), (False, "")])
 async def test_run_daemon_publishes_no_status_when_dummy_or_without_a_push_url(tmp_path, dummy, push_url):
     config = app_config(tmp_path, push_url=push_url, push_secret=b"s" * 32)

@@ -389,8 +389,12 @@ def _validate(config: AppConfig, config_path: Path) -> None:
         if getattr(config, name) and not getattr(config, name).lower().startswith("https://"):
             raise ConfigError(f"[WEBHOOKS] {name} must start with https://")
     if config.push_url:
-        if not config.push_url.startswith(("http://", "https://")):
-            raise ConfigError("[PUSH] url must start with http:// or https://")
+        if config.push_url.startswith("unix:"):
+            if not config.push_url.startswith("unix:/"):
+                raise ConfigError("[PUSH] url unix: must be followed by the socket's absolute path, "
+                                  "e.g. unix:/run/isis-push-site/ingest.sock")
+        elif not config.push_url.startswith(("http://", "https://")):
+            raise ConfigError("[PUSH] url must start with http://, https:// or unix:")
         if config.push_url.startswith("http://") and not _is_loopback(urlsplit(config.push_url).hostname or ""):
             config.warnings.append("[PUSH] url is plain http:// to another host, so notifications cross the network "
                                    "unencrypted (they're signed, so can't be forged); use https:// unless it's local")

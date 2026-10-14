@@ -28,10 +28,11 @@ news_teams_url =
 
 [PUSH]
 # Optional: also POST every notification as HMAC-signed JSON to this URL, e.g.
-# the push_site submodule (mobile push notifications), and the daemon's status,
-# for the push site's Status page, to this URL plus /status. Blank disables it.
-# http:// or https://; plain http:// to another host is warned about.
-# url = http://127.0.0.1:8765/ingest
+# the push site (mobile push notifications), and the daemon's status, for the
+# push site's Status page, to this URL plus /status. Blank disables it.
+# http:// or https:// (plain http:// to another host is warned about), or
+# unix: and a socket's absolute path, as for the push site, posting to /ingest.
+# url = unix:/run/isis-push-site/ingest.sock
 # The file holding the shared secret, 32 to 4096 characters; unset, the daemon
 # reads systemd's push-secret credential (LoadCredential=push-secret:<file>).
 # Create it e.g. `(umask 077; openssl rand -hex 32 > push.secret)`. Only the daemon reads

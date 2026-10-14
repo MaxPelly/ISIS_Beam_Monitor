@@ -194,6 +194,7 @@ NOTIF, PEARL = "[NOTIFICATIONS]\n", "[INSTRUMENT:PEARL]\n"
     (NOTIF + "summary_time = 25:00\n", "summary_time"),
     # [PUSH]
     ("[PUSH]\nurl = ftp://x\nsecret_file = s\n", r"\[PUSH\] url must start with"),
+    ("[PUSH]\nurl = unix:ingest.sock\n", r"\[PUSH\] url unix: must be followed by the socket's absolute path"),
     ("[PUSH]\ntimeout = 0\n", r"\[PUSH\] timeout must be between"),
 ])
 def test_invalid_config_raises_config_error(tmp_path, extra, match):

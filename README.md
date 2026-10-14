@@ -67,7 +67,7 @@ Times are in seconds unless the key says minutes.
 | `[WEBHOOKS]` | `beam_teams_url` | blank | `https://` URL | Teams webhook for beam cards and the daily summary; blank disables it. |
 | | `experiment_teams_url` | blank | `https://` URL | Teams webhook for every instrument's run and experiment cards; blank disables it. |
 | | `news_teams_url` | blank | `https://` URL | Teams webhook for MCR news cards; blank disables it. |
-| `[PUSH]` | `url` | blank | `http://` or `https://` URL | Also POST every notification, signed, here, and the status to this URL plus `/status`; blank disables it. Plain `http://` to a non-local host is warned about. |
+| `[PUSH]` | `url` | blank | `http://` or `https://` URL, or `unix:` and a socket's absolute path | Also POST every notification, signed, here, and the status to this URL plus `/status`; blank disables it. `unix:/run/isis-push-site/ingest.sock` posts to `/ingest` over the push site's socket. Plain `http://` to a non-local host is warned about. |
 | | `secret_file` | blank | file of 32 to 4096 characters | The shared signing secret; only the daemon reads it, and a world-readable file is warned about. Unset, the daemon reads systemd's `push-secret` credential (`LoadCredential=` in its unit), which it then needs. |
 | | `timeout` | 2 | 0.5 to 30 | Seconds before each push attempt is abandoned. |
 | `[PVS]` | `instrument_target` | `TS1` | `TS1`, `TS2`, `Muons` (any case; `Muon` too) | The `beam_target` of instruments that don't set one and that `CS:INSTLIST` doesn't put on TS1, TS2 or MUON. |
