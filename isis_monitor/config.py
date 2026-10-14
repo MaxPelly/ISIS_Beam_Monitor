@@ -426,6 +426,7 @@ def _read_parser(config_path: Path) -> Tuple[configparser.ConfigParser, str]:
 
 
 _PATH_FIELDS = ("daemon_db_path", "daemon_socket_path", "daemon_lock_file", "log_file", "push_secret_file")
+MAX_SOCKET_PATH = 107  # bytes: AF_UNIX's sun_path on Linux, less its NUL
 
 
 def parse_config(parser: configparser.ConfigParser, config_path: Path) -> AppConfig:
@@ -449,6 +450,9 @@ def parse_config(parser: configparser.ConfigParser, config_path: Path) -> AppCon
         path = values.get(name, getattr(AppConfig, name))
         if path:
             values[name] = str(config_path.absolute().parent / path)  # an absolute path is kept as is
+    if len(os.fsencode(values["daemon_socket_path"])) > MAX_SOCKET_PATH:
+        raise ConfigError(f"[DAEMON] socket_path {values['daemon_socket_path']} is longer than a Unix socket "
+                          f"path can be ({MAX_SOCKET_PATH} bytes); set a shorter one")
     if "instrument_target" in values:
         values["instrument_target"] = beam_name(values["instrument_target"]) or values["instrument_target"]
     config = AppConfig(**values, beams=_read_beams(parser), warnings=_unknown_settings(parser, config_path))

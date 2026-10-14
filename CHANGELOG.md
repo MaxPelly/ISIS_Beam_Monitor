@@ -14,6 +14,7 @@ own versions and changelog; each release here notes the version its
 - The daemon's IPC socket is now request and reply only, one connection per command: `get_snapshot`, `get_history`, `get_logs` and `subscribe_updates` are gone, and `get_status` returns the status page's payload. On Linux it refuses a connection from any other user (even root), as well as being owner-only.
 - `isis-monitor status <config.ini>` prints the daemon's status as plain text: each beam with its last 24h as a sparkline, each instrument's run and progress, the MCR news and health; `--json` prints the status page's JSON instead. `isis-monitor reconnect <config.ini>` makes the daemon reconnect to PVWS and re-read the MCR news, like the TUI's `r` key.
 - `isis-monitor config <config.ini>` opens the config editor on its own, without the TUI. It talks to the running daemon like the TUI's `c` key did, with a fresh connection for each request.
+- A `[DAEMON] socket_path` longer than a Unix socket path can be (107 bytes) is refused with a config error, instead of the daemon failing to start with a traceback.
 
 ## [1.3.0rc3] - 2026-10-14
 

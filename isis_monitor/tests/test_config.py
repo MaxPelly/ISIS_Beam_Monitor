@@ -484,3 +484,9 @@ def test_push_disabled_by_default(tmp_path):
     config = load_config(_write(tmp_path, ""))
     assert (config.push_url, config.push_secret, config.push_timeout) == ("", b"", 2.0)
     assert read_push_secret(config) == b""
+
+
+def test_a_socket_path_too_long_for_a_unix_socket_is_refused(tmp_path):
+    with pytest.raises(ConfigError, match=r"\[DAEMON\] socket_path .* is longer than a Unix socket path can be"):
+        load_config(_write(tmp_path, f"[DAEMON]\nsocket_path = {'s' * 108}\n"))
+    assert load_config(_write(tmp_path, f"[DAEMON]\nsocket_path = /{'s' * 106}\n")).daemon_socket_path == "/" + "s" * 106
