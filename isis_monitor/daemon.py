@@ -34,7 +34,7 @@ from isis_monitor.status import StatusPublisher, build as build_status
 from isis_monitor.storage import SQLiteStateStore
 from isis_monitor.summary import daily_summary_loop
 
-logger = logging.getLogger("MAIN")
+logger = logging.getLogger(__name__)
 
 # Set in the environment of a daemon that re-exec'd itself (see restart_process).
 RESTARTED_ENV = "ISIS_MONITOR_RESTARTED"

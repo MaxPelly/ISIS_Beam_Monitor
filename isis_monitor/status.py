@@ -10,20 +10,20 @@ import contextlib
 import logging
 import math
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Callable, Dict, Optional
 
 import aiohttp
 
 from isis_monitor import __version__
 from isis_monitor.config import BEAM_NAMES
-from isis_monitor.daemon_state import MCR_NEWS_PLACEHOLDER, DaemonState
+from isis_monitor.daemon_state import HISTORY_WINDOW, MCR_NEWS_PLACEHOLDER, DaemonState
 from isis_monitor.messages import get_timezone, sparkline_chars
 from isis_monitor.notifiers import signed_json
 
 logger = logging.getLogger(__name__)
 
-HISTORY = timedelta(hours=24)
+HISTORY = HISTORY_WINDOW  # all the daemon keeps
 HISTORY_POINTS = 144  # 10-minute bins
 # The push site's limits (its status.py); anything longer would make it refuse the whole status.
 SHORT, LABEL, MAX_TITLE, MAX_NEWS = 16, 32, 200, 1000

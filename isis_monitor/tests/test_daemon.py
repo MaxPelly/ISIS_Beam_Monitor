@@ -48,7 +48,6 @@ def test_single_instance_lock_rejects_second_holder(tmp_path):
                 pass
 
 
-
 # ---------------------------------------------------------------------------
 # run_until_stopped / signals
 # ---------------------------------------------------------------------------
@@ -377,7 +376,6 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
     assert set(reconnect) == {"beam", "mcr"}
 
 
-
 async def test_status_command_prints_the_daemons_status(tmp_path, capsys):
     async with daemon_with_file(tmp_path):
         await cli.run_status(app_config(tmp_path))
@@ -568,8 +566,6 @@ def test_restarted_daemon_does_not_replay_notify_current(tmp_path, monkeypatch, 
     assert daemon.RESTARTED_ENV not in os.environ
 
 
-
-
 async def test_run_daemon_stops_other_loops_when_one_crashes(tmp_path):
     persistence_cancelled = asyncio.Event()
 
@@ -641,7 +637,6 @@ async def test_run_daemon_publishes_the_status_with_a_push_url(tmp_path):
         async with running_daemon(config, argparse.Namespace(dummy=False, notify_current=False)):
             await wait_until(lambda: site.received)
     assert site.received[0]["kind"] == "status" and site.received[0]["instruments"][0]["name"] == "PEARL"
-
 
 
 @pytest.mark.parametrize("dummy, push_url", [(True, "http://127.0.0.1:9/ingest"), (False, "")])

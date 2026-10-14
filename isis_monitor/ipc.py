@@ -131,7 +131,7 @@ def _peer_uid(writer: asyncio.StreamWriter) -> Optional[int]:
     sock = writer.get_extra_info("socket")
     if sock is None or not hasattr(socket, "SO_PEERCRED"):
         return None
-    _pid, uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+    _pid, uid, _gid = struct.unpack("iII", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("iII")))
     return uid
 
 

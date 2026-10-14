@@ -20,7 +20,7 @@ from isis_monitor.ipc import ipc_request
 from isis_monitor.messages import set_timezone
 from isis_monitor.status import render_text as render_status
 
-logger = logging.getLogger("MAIN")
+logger = logging.getLogger(__name__)
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 LOG_MAX_BYTES, LOG_BACKUP_COUNT = 5_000_000, 3
@@ -94,7 +94,10 @@ async def run_config(config) -> None:
         except EOFError:
             return None
 
-    if not await run_config_editor(lambda payload: ipc_request(Path(config.daemon_socket_path), payload), read_line, print):
+    def request(payload: dict):
+        return ipc_request(Path(config.daemon_socket_path), payload)
+
+    if not await run_config_editor(request, read_line, print, lambda text: print(text, file=sys.stderr)):
         raise SystemExit(1)
 
 

@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Deque, Dict, List, Optional, Tuple
 
 from isis_monitor.config import AppConfig
-from isis_monitor.daemon_state import DaemonState
+from isis_monitor.daemon_state import HISTORY_WINDOW, DaemonState
 from isis_monitor.messages import daily_summary, get_timezone, sparkline_chars
 from isis_monitor.notifiers import NotificationChannel
 from isis_monitor.storage import SQLiteStateStore
@@ -15,7 +15,7 @@ from isis_monitor.storage import SQLiteStateStore
 logger = logging.getLogger(__name__)
 
 SUMMARY_CHECK_INTERVAL = 60.0
-SUMMARY_WINDOW = timedelta(hours=24)
+SUMMARY_WINDOW = HISTORY_WINDOW  # all the daemon keeps
 SPARKLINE_WIDTH = 60
 _OFF_LIKE = ("off", "unknown")
 # Persisted so a daemon restart later the same day doesn't resend the summary.

@@ -175,16 +175,18 @@ async def edit_settings(
         return None
 
 
-async def run_config_editor(request: Request, read_line: ReadLine, write: Write) -> bool:
+async def run_config_editor(request: Request, read_line: ReadLine, write: Write, error: Optional[Write] = None) -> bool:
     """Fetch the config from the daemon, let the user edit it, and save it.
-    False if that failed (the user quitting isn't a failure)."""
+    False if that failed (the user quitting isn't a failure). Failures go to
+    `error`, by default `write`."""
+    error = error or write
     try:
         reply = await request({"method": "get_config"})
     except (OSError, ValueError) as exc:
-        write(f"Could not reach the daemon: {exc}")
+        error(f"Could not reach the daemon: {exc}")
         return False
     if not reply.get("ok") or "config" not in reply:
-        write(f"Could not load the config: {reply.get('detail') or reply.get('error', 'unknown error')}")
+        error(f"Could not load the config: {reply.get('detail') or reply.get('error', 'unknown error')}")
         return False
 
     original = reply["config"]
@@ -199,13 +201,13 @@ async def run_config_editor(request: Request, read_line: ReadLine, write: Write)
             result = await request({"method": "update_config", "revision": reply.get("revision"), "settings": edited})
         except (OSError, ValueError) as exc:
             # e.g. the daemon was restarting; the revision check makes a retry safe.
-            write(f"Save failed: {exc}. Your changes are kept; save again once the daemon is back.")
+            error(f"Save failed: {exc}. Your changes are kept; save again once the daemon is back.")
             settings = edited
             continue
         if result.get("ok"):
             write("Saved. The daemon is restarting to apply it.")
             return True
-        write(f"Save failed ({result.get('error')}): {result.get('detail', '')}")
+        error(f"Save failed ({result.get('error')}): {result.get('detail', '')}")
         if result.get("error") != "invalid_config":
             return False
         settings = edited  # let the user fix the rejected value and try again

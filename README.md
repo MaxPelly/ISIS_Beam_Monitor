@@ -266,7 +266,7 @@ sudo systemctl status isis-beam-monitor.service
 ### Troubleshooting
 
 - **`Lock file already held`**: another daemon instance is running (or stale lock path configured).
-- **`No answer from the daemon`**: ensure the daemon is running and the command uses the same config file (both use `[DAEMON] socket_path`).
+- **`No answer from the daemon`**: ensure the daemon is running, and the command runs as the daemon's user (it refuses any other, even root) with the same config file (both use `[DAEMON] socket_path`).
 - **No live updates**: check the daemon's log (`journalctl -u isis-beam-monitor`, its terminal, or `[LOGGING] file` if set) for websocket/news source errors; `isis-monitor reconnect config.ini` forces a reconnect.
 
 ## Releases

@@ -154,7 +154,7 @@ async def test_config_command_without_a_daemon(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         await cli.run_config(app_config(tmp_path))
     assert exc.value.code == 1
-    assert "Could not reach the daemon" in capsys.readouterr().out
+    assert "Could not reach the daemon" in capsys.readouterr().err
 
 
 async def test_run_stop_gives_up_on_a_daemon_that_does_not_answer(tmp_path, capsys):
