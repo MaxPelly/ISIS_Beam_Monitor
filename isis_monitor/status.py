@@ -26,6 +26,7 @@ HISTORY = timedelta(hours=24)
 HISTORY_POINTS = 144  # 10-minute bins
 # The push site's limits (its status.py); anything longer would make it refuse the whole status.
 SHORT, LABEL, MAX_TITLE, MAX_NEWS = 16, 32, 200, 1000
+MAX_INSTRUMENTS = 64  # the push site refuses a status with more
 
 
 def _text(value: object, limit: int) -> str:
@@ -105,7 +106,7 @@ def build(state: DaemonState, since: Dict[str, Optional[datetime]], interval_s: 
         "monitor_version": _text(__version__, LABEL),
         "health": {_text(k, SHORT): _text(v, SHORT) for k, v in state.health.items()},
         "beams": beams,
-        "instruments": [_instrument(name, view) for name, view in state.instruments().items()],
+        "instruments": [_instrument(name, view) for name, view in state.instruments().items()][:MAX_INSTRUMENTS],
         "mcr": {"news": _text(news, MAX_NEWS), "seen_at": _iso(state.mcr_news_at)},
     }
 

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from isis_monitor.config import InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.instrument import InstrumentTracker
-from isis_monitor.status import HISTORY_POINTS, MAX_TITLE, build
+from isis_monitor.status import HISTORY_POINTS, MAX_INSTRUMENTS, MAX_TITLE, build
 from isis_monitor.tests.helpers import fake_channel
 
 NOW = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)
@@ -55,6 +55,11 @@ def test_instruments_come_from_the_trackers():
                  "title": "x" * MAX_TITLE, "started_at": None, "counts": 65.26, "target": 130.0, "auto": True,
                  "rb": "2610403"}
     assert w["counts"] is None  # nothing read yet
+
+
+def test_instruments_past_the_push_sites_limit_are_left_out():
+    trackers = [tracker(f"I{n}") for n in range(MAX_INSTRUMENTS + 1)]
+    assert len(build(state_with(*trackers), {}, 60, NOW)["instruments"]) == MAX_INSTRUMENTS
 
 
 def test_mcr_news_and_health():
@@ -136,19 +141,19 @@ async def publishing(url, interval=3600.0, build=lambda: {"n": 1}, debounce=0.05
 
 async def test_the_status_is_sent_signed_at_start_and_every_interval():
     async with receiver() as server:
-        async with publishing(str(server.make_url("/ingest")), interval=0.1):
+        async with publishing(str(server.make_url("/ingest")), interval=0.05):
             await wait_until(lambda: len(server.received) >= 3)
     assert server.received[0] == {"n": 1}
 
 
 async def test_a_change_sends_soon_but_at_most_once_per_debounce():
     async with receiver() as server:
-        async with publishing(str(server.make_url("/ingest/")), debounce=0.2) as publisher:
+        async with publishing(str(server.make_url("/ingest/")), debounce=0.05) as publisher:
             await wait_until(lambda: len(server.received) == 1)  # at start
             for _ in range(5):
                 publisher.poke()
             await wait_until(lambda: len(server.received) == 2)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.1)
             assert len(server.received) == 2  # the pokes were one send
 
 
