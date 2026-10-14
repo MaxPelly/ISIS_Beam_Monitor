@@ -188,14 +188,16 @@ def render_text(status: dict) -> str:
         means = [None if not (known := [v for v in g if v is not None]) else sum(known) / len(known) for g in groups]
         floor = min((m for m in means if m is not None), default=0.0)  # gaps mustn't stretch the scale
         chars = sparkline_chars([floor if m is None else m for m in means], len(means))
-        spark = "".join(" " if m is None else c for m, c in zip(means, chars))
+        spark = "".join("·" if m is None else c for m, c in zip(means, chars))  # a blank is a zero
+        spark = spark if spark.strip("·") else ""  # nothing for 24h
         since = f"since {local(beam['since'])}" if beam["since"] else ""
         lines.append(f"{beam['name']:<6}{number(beam['current']):>7} µA  {beam['power']:<8}{since:<13}{spark}".rstrip())
-    lines += ["", f"{'Instrument':<12}{'Beam':<6}{'Run':<10}{'State':<11}{'µA·h':>13}  Title"]
+    width = max([12] + [len(i["name"]) + 2 for i in status["instruments"]])
+    lines += ["", f"{'Instrument':<{width}}{'Beam':<6}{'Run':<10}{'State':<11}{'µA·h':>13}  Title"]
     for inst in status["instruments"]:
         target = "" if inst["target"] is None else f"/{'≈' if inst['auto'] else ''}{inst['target']:.0f}"
         title = inst["title"] if len(inst["title"]) <= TITLE_WIDTH else inst["title"][:TITLE_WIDTH - 1] + "…"
-        lines.append(f"{inst['name']:<12}{inst['beam']:<6}{inst['run_number'] or '-':<10}{inst['run_state'] or '?':<11}"
+        lines.append(f"{inst['name']:<{width}}{inst['beam']:<6}{inst['run_number'] or '-':<10}{inst['run_state'] or '?':<11}"
                      f"{number(inst['counts']) + target:>13}  {title}".rstrip())
     seen = f" (since {local(status['mcr']['seen_at'], '%a %d %b %H:%M')})" if status["mcr"]["seen_at"] else ""
     lines += ["", f"MCR news{seen}:", status["mcr"]["news"] or "(none yet)"]

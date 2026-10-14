@@ -141,14 +141,19 @@ async def test_stop_still_delivers_a_reply_already_written(tmp_path):
 
 
 async def test_ipc_request_surfaces_garbage_from_the_daemon(tmp_path):
+    garbage = b"this is not json\n"
+
     async def garbage_server(reader, writer):
-        writer.write(b"this is not json\n")
+        writer.write(garbage)
         await writer.drain()
         writer.close()
 
     srv = await asyncio.start_unix_server(garbage_server, path=str(tmp_path / "g.sock"))
     async with srv:
         with pytest.raises(json.JSONDecodeError):
+            await ipc_request(tmp_path / "g.sock", {"method": "get_status"})
+        garbage = b"[]\n"
+        with pytest.raises(ValueError, match="Not a reply"):
             await ipc_request(tmp_path / "g.sock", {"method": "get_status"})
 
 

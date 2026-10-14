@@ -135,9 +135,12 @@ async def ipc_request(socket_path: Path, payload: dict, timeout: Optional[float]
                 await writer.wait_closed()
         if not line:
             raise ConnectionError("The daemon closed the connection without answering")
-        return json.loads(line)
+        reply = json.loads(line)
+        if not isinstance(reply, dict):
+            raise ValueError(f"Not a reply: {line[:100]!r}")
+        return reply
 
-    timeout = timeout or REQUEST_TIMEOUT
+    timeout = REQUEST_TIMEOUT if timeout is None else timeout
     try:
         return await asyncio.wait_for(exchange(), timeout)
     except TimeoutError:
