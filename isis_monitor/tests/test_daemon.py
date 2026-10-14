@@ -229,17 +229,21 @@ async def test_state_persistence_loop_samples_only_while_the_beam_feed_is_connec
     state.update_beam_state("TS1", 150.0, "high")  # e.g. restored, beam health still "unknown"
     store = SQLiteStateStore(tmp_path / "state.db")
     stop = asyncio.Event()
+    ticks = []  # one per pass of the loop, which saves a snapshot each time
+    snapshot = state.snapshot
+    state.snapshot = lambda: (ticks.append(1), snapshot())[1]
 
     task = asyncio.create_task(daemon.state_persistence_loop(config, state, store, stop))
     try:
-        await wait_until(lambda: store.load_snapshot("daemon_state") is not None)
+        await wait_until(lambda: ticks)
         assert not state.history["TS1"]
         state.update_health("beam", "connected")
         await wait_until(lambda: len(state.history["TS1"]) >= 1)
         state.update_health("beam", "disconnected")
-        await asyncio.sleep(0.03)  # let any sample already under way finish
+        passes = len(ticks)
+        await wait_until(lambda: len(ticks) >= passes + 1)  # a pass already under way may still sample
         sampled = len(state.history["TS1"])
-        await asyncio.sleep(0.03)
+        await wait_until(lambda: len(ticks) >= passes + 4)
         assert len(state.history["TS1"]) == sampled
     finally:
         stop.set()

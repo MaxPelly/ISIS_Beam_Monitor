@@ -97,6 +97,11 @@ def test_load_config_requires_mcr_url_and_an_instrument(tmp_path, text, match):
         load_config(config_file)
 
 
+def test_an_unreadable_config_is_reported(tmp_path):
+    with pytest.raises(ConfigError, match="Could not read"):
+        load_config(tmp_path)  # a directory
+
+
 def test_load_config_blank_values(tmp_path):
     """Blank numbers fall back to their defaults; an empty isis_websocket_url is a warning, not an error."""
     config = load_config(_write(tmp_path, "isis_websocket_url =\n[DAEMON]\nretention_days =\nsample_interval =\n"))
