@@ -70,6 +70,8 @@ def test_restore_from_snapshot():
     "{bad_json: True",
     "[]",  # JSON, but not a snapshot
     json.dumps({"beam_states": ["TS1"]}),
+    '{"beam_states": {"TS1": {"current": 1%s}, "TS2": {"current": NaN}}}' % ("0" * 400),
+    '{"mcr_news": 1%s}' % ("0" * 5000),  # past Python's limit on integer digits
     json.dumps({"beam_states": {"TS1": "high", "TS2": {"current": "lots"}}}),
     json.dumps({"mcr_news": "Old News"}),  # from before run completions were saved
     json.dumps({"run_completions": {"not": "a list"}}),

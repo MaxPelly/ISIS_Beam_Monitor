@@ -162,7 +162,7 @@ class DaemonState:
             return
         try:
             snap = json.loads(raw)
-        except json.JSONDecodeError:
+        except ValueError:  # JSONDecodeError, or an integer too long to read
             snap = None
         if not isinstance(snap, dict):
             logger.warning("Corrupt daemon state snapshot, starting fresh.")
@@ -170,8 +170,8 @@ class DaemonState:
         beam_states = snap.get("beam_states")
         for beam in BEAM_NAMES:
             try:
-                current = float(beam_states[beam]["current"])
-            except (TypeError, KeyError, ValueError):  # missing or malformed: keep the default
+                (current,) = _finite_floats([beam_states[beam]["current"]])
+            except (TypeError, KeyError, ValueError, OverflowError):  # missing or malformed: keep the default
                 continue
             # The power is left "unknown" until the beam feed connects: the
             # saved one may be long out of date.
