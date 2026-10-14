@@ -252,3 +252,12 @@ def test_render_text_shows_beams_instruments_and_news_in_local_time():
     assert lines[8].split() == ["WISH", "TS1", "-", "?", "?"]
     assert lines[-2:] == [f"MCR news (since {state.mcr_news_at.astimezone(ZoneInfo('Europe/London')):%a %d %b %H:%M}):",
                           "Beam on"]
+
+
+async def test_a_slow_site_isnt_reported_unreachable(caplog):
+    """A timeout may pass; only a site that can't be connected to is warned of."""
+    caplog.set_level("DEBUG")
+    publisher = StatusPublisher("http://x/ingest", SECRET, dict, 60, MagicMock())
+    publisher.session.post.side_effect = TimeoutError
+    await publisher._send()
+    assert "Failed to send the status" in caplog.text and "Can't reach" not in caplog.text

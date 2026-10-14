@@ -169,7 +169,8 @@ class StatusPublisher:
                 self._took(resp.status)
         except (aiohttp.ClientError, TimeoutError) as exc:
             logger.debug(f"Failed to send the status: {exc!r}")
-            self._took(0)
+            if isinstance(exc, aiohttp.ClientConnectorError):  # not a slow or dropped send, which may pass
+                self._took(0)
         except Exception:  # a bug: logged, and the next send tries again
             logger.exception("Failed to send the status")
 

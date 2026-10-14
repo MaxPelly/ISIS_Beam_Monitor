@@ -274,7 +274,7 @@ config, so they work only while it runs under systemd, which creates
 
 - **Logs**: the daemon logs to stderr, so under systemd read them with `journalctl -u isis-beam-monitor` (add `-f` to follow); run by hand, they're on its terminal. `[LOGGING] file` adds a log file.
 - **`Configuration error: …`**: the named setting is missing or out of range; see the [configuration reference](#configuration-reference).
-- **`[DAEMON] socket_path … is longer than a Unix socket path can be`**: Unix socket paths are limited to 107 bytes, and a relative `socket_path` is made absolute from the config file's directory, so a deep checkout can exceed it. Set a shorter absolute `socket_path`.
+- **`[DAEMON] socket_path … is longer than a Unix socket path can be`**: Unix socket paths are limited to 107 bytes, and a relative `socket_path` is made absolute from the config file's directory, so a config in a deep directory can exceed it. Set a shorter absolute `socket_path`.
 - **`Lock file already held`**: another daemon is running with this config (or another config shares its `lock_file`).
 - **`No answer from the daemon`**: check the daemon is running, and that the command runs as the daemon's user (it refuses any other, even root, e.g. `sudo -u MONITOR_USER /path/to/ISIS_Beam_Monitor/.venv/bin/isis-monitor status /etc/isis-beam-monitor/config.ini`) with the same config file.
 - **No live updates**: check the log for PVWS or MCR news errors; `isis-monitor reconnect path/to/config.ini` forces a reconnect.
