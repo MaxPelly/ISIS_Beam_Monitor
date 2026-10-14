@@ -3,7 +3,6 @@ import hashlib
 import hmac
 import json
 import logging
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -93,23 +92,14 @@ def test_teams_card_breaks_markdown_links_in_remote_text():
     assert "](" not in payload["summary"]  # read by plain-text clients and flows
 
 
-async def test_teams_notifier_logs_error_on_bad_status(caplog):
-    notifier = TeamsNotifier("http://fake.webhook.url")
-    notifier._session = make_status_session(400)
-
-    with caplog.at_level(logging.ERROR):
-        await notifier.send(Notification(title="Test title", text="Test message"))
-
-    assert "HTTP 400: body" in caplog.text
-
-
-async def test_error_body_excerpt_is_bounded_and_has_no_escapes(caplog, no_retry_delay):
+async def test_bad_status_logs_an_error_with_a_bounded_body_excerpt_without_escapes(caplog, no_retry_delay):
     notifier = TeamsNotifier("http://fake.webhook.url")
     notifier._session = make_status_session(400)
     notifier._session.responses[0].content.read.return_value = b"\x1b[2Jbad"
     await notifier.send(Notification(title="t", text="x"))
     notifier._session.responses[0].content.read.assert_awaited_once_with(200)
-    assert "HTTP 400: [2Jbad" in caplog.text and "\x1b" not in caplog.text
+    assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
+        (logging.ERROR, "Teams webhook returned HTTP 400: [2Jbad")]
 
 
 # ---------------------------------------------------------------------------
@@ -170,51 +160,33 @@ def test_create_payload_header_style_follows_severity():
     }
 
 
-def test_create_payload_includes_facts():
+def test_create_payload_facts_footer_and_url_action():
     notifier = TeamsNotifier("http://fake.webhook.url")
+    ts = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
     notification = Notification(
-        title="Title", text="Text", facts=[("Current", "3.500 uA"), ("Previous", "off")]
+        title="Title", text="Text", facts=[("Current", "3.500 uA"), ("Previous", "off")],
+        timestamp=ts, url="https://example.com/news",
     )
 
-    payload = notifier._create_payload(notification, "")
-
-    card = payload["attachments"][0]["content"]
+    card = notifier._create_payload(notification, "")["attachments"][0]["content"]
     fact_sets = [item for item in card["body"] if item["type"] == "FactSet"]
     assert len(fact_sets) == 1
     assert fact_sets[0]["facts"] == [
         {"title": "Current", "value": "3.500 uA"},
         {"title": "Previous", "value": "off"},
     ]
-
-
-def test_create_payload_ends_with_the_timestamp_and_version():
-    notifier = TeamsNotifier("http://fake.webhook.url")
-    ts = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
-    notification = Notification(title="Title", text="Text", timestamp=ts)
-
-    payload = notifier._create_payload(notification, "")
-
-    body = payload["attachments"][0]["content"]["body"]
-    assert body[-1]["isSubtle"] is True
-    assert "Jan" in body[-1]["text"] and body[-1]["text"].endswith(f"ISIS Beam Monitor v{__version__}")
-
-
-def test_create_payload_ends_with_the_version_without_a_timestamp():
-    body = TeamsNotifier("http://fake.webhook.url")._create_payload(
-        Notification(title="Title", text="Text"), "")["attachments"][0]["content"]["body"]
-    assert body[-1]["text"] == f"ISIS Beam Monitor v{__version__}" and body[-1]["size"] == "Small"
-
-
-def test_create_payload_url_action_only_when_url_given():
-    notifier = TeamsNotifier("http://fake.webhook.url")
-    notification = Notification(title="Title", text="Text", url="https://example.com/news")
-
-    card = notifier._create_payload(notification, "")["attachments"][0]["content"]
+    # The card ends with the time and version, subtly.
+    footer = card["body"][-1]
+    assert footer["isSubtle"] is True and footer["size"] == "Small"
+    assert "Jan" in footer["text"] and footer["text"].endswith(f"ISIS Beam Monitor v{__version__}")
     assert card["actions"] == [
         {"type": "Action.OpenUrl", "title": "Open", "url": "https://example.com/news"}
     ]
 
-    card = notifier._create_payload(replace(notification, url=None), "")["attachments"][0]["content"]
+    # Without facts, timestamp or URL: no FactSet, just the version, no action.
+    card = notifier._create_payload(Notification(title="Title", text="Text"), "")["attachments"][0]["content"]
+    assert [item["type"] for item in card["body"]] == ["Container", "TextBlock", "TextBlock"]
+    assert card["body"][-1]["text"] == f"ISIS Beam Monitor v{__version__}"
     assert "actions" not in card
 
 
@@ -222,7 +194,7 @@ def test_create_payload_url_action_only_when_url_given():
 # NotificationChannel
 # ---------------------------------------------------------------------------
 
-def test_notification_channel_routes_by_its_name_or_its_route():
+def test_notification_channel_routes_by_its_name_or_its_route(caplog):
     notifiers = [MagicMock(spec=Notifier), MagicMock(spec=Notifier)]
     channel = NotificationChannel("TestChannel")
     for notifier in notifiers:
@@ -239,16 +211,11 @@ def test_notification_channel_routes_by_its_name_or_its_route():
     routed.broadcast(beam_card)
     notifiers[0].queue.assert_called_with(beam_card, "Muons")
 
-
-def test_notification_channel_empty_logs_debug(caplog):
-    """Broadcast on a channel with no notifiers should log at DEBUG level."""
-    channel = NotificationChannel("Beam Updates")
-
+    # A channel with no notifiers just says so, at DEBUG level.
     with caplog.at_level(logging.DEBUG):
-        channel.broadcast(Notification(title="Title", text="some message"))
-
-    assert "Beam Updates" in caplog.text
-    assert "no notifiers" in caplog.text
+        NotificationChannel("Beam Updates").broadcast(Notification(title="Title", text="some message"))
+    assert [r.levelno for r in caplog.records] == [logging.DEBUG]
+    assert "Beam Updates" in caplog.text and "no notifiers" in caplog.text
 
 
 class _FailingNotifier(DummyNotifier):
@@ -316,26 +283,19 @@ async def test_teams_notifier_retries_a_5xx_whose_body_cannot_be_read(no_retry_d
     assert notifier._session.post.call_count == 2
 
 
-async def test_teams_notifier_waits_between_retries(caplog):
+@pytest.mark.parametrize("statuses, headers, delays", [
+    ((503, 503, 503), None, [2.0, 4.0]),  # the default RETRY_DELAYS
+    ((429, 200), {"Retry-After": "7"}, [7.0]),  # the server's wait instead
+])
+async def test_teams_notifier_waits_between_retries(statuses, headers, delays, no_retry_delay, caplog):
     notifier = TeamsNotifier("http://example.invalid/hook")
-    notifier._session = make_status_session(503, 503, 503)
+    notifier._session = make_status_session(*statuses, headers=headers)
 
-    with patch("isis_monitor.notifiers.asyncio.sleep", new=AsyncMock()) as sleep:
-        with caplog.at_level(logging.WARNING):
-            await notifier.send(Notification(title="t", text="x"))
-
-    assert [c.args[0] for c in sleep.await_args_list] == [2.0, 4.0]
-    assert "retrying in 2s" in caplog.text
-
-
-async def test_teams_notifier_honours_retry_after():
-    notifier = TeamsNotifier("http://example.invalid/hook")
-    notifier._session = make_status_session(429, 200, headers={"Retry-After": "7"})
-
-    with patch("isis_monitor.notifiers.asyncio.sleep", new=AsyncMock()) as sleep:
+    with caplog.at_level(logging.WARNING):
         await notifier.send(Notification(title="t", text="x"))
 
-    sleep.assert_awaited_once_with(7.0)
+    assert [c.args[0] for c in no_retry_delay.await_args_list] == delays
+    assert f"retrying in {delays[0]:g}s" in caplog.text
 
 
 def test_retry_after_parsing():
@@ -361,17 +321,15 @@ async def test_closing_cancels_a_send_waiting_to_retry():
     assert notifier._session.post.call_count == 1
 
 
-async def test_teams_notifier_reuses_and_closes_its_own_session():
+async def test_teams_notifier_closes_its_own_session_but_leaves_a_shared_one():
     notifier = TeamsNotifier("http://example.invalid/hook")
     session = await notifier._get_session()
-    assert await notifier._get_session() is session
+    assert await notifier._get_session() is session  # reused
     await notifier.close()
     assert session.closed
     assert notifier._session is None
     await notifier.close()  # idempotent
 
-
-async def test_a_shared_session_is_left_to_its_owner():
     async with aiohttp.ClientSession() as session:
         notifier = TeamsNotifier("http://example.invalid/hook", session=session)
         assert await notifier._get_session() is session
@@ -389,36 +347,37 @@ class _SlowNotifier(Notifier):
         self.sent.append(notification.title)
 
 
-async def test_broadcast_returns_without_waiting_for_a_slow_webhook():
-    """A hung webhook mustn't hold up the caller (e.g. the beam WebSocket loop)."""
-    channel = NotificationChannel("Beam")
-    slow = _SlowNotifier(10)
-    channel.add_notifier(slow)
-    channel.broadcast(Notification(title="a", text=""))
-    assert slow.sent == []
-    await asyncio.wait_for(slow.close(0.05), 1)  # gives up on the unsent one rather than hanging
-
-
-async def test_a_hung_notifier_doesnt_delay_the_others():
-    """A Teams webhook that never answers doesn't hold up push, or the reverse."""
+async def test_a_hung_notifier_doesnt_delay_the_caller_or_the_others():
+    """A Teams webhook that never answers doesn't hold up the caller (e.g. the
+    beam WebSocket loop), or push, or the reverse."""
     for hung_first in (True, False):
         hung, quick = _SlowNotifier(10), _SlowNotifier(0)
         channel = NotificationChannel("Beam")
         for notifier in (hung, quick) if hung_first else (quick, hung):
             channel.add_notifier(notifier)
         channel.broadcast(Notification(title="a", text=""))
+        assert hung.sent == quick.sent == []  # broadcast returns without waiting
         channel.broadcast(Notification(title="b", text=""))
         assert await quick.flush(1)
         assert quick.sent == ["a", "b"] and hung.sent == []
-        await asyncio.gather(hung.close(0.01), quick.close())
+        # close gives up on the unsent one rather than hanging
+        await asyncio.wait_for(asyncio.gather(hung.close(0.01), quick.close()), 1)
 
 
-async def test_queued_notifications_are_sent_in_order_and_flushed_on_close():
+async def test_queued_notifications_are_sent_in_order_flushed_on_close_and_ignored_after(caplog):
     slow = _SlowNotifier(0.01)
     for title in "abc":
         slow.queue(Notification(title=title, text=""))
     await slow.close()
     assert slow.sent == ["a", "b", "c"]
+
+    worker = slow._worker
+    slow.queue(Notification(title="late", text=""))
+    await asyncio.sleep(0.01)
+    # Neither queued nor a new worker started for it.
+    assert slow.sent == ["a", "b", "c"] and slow._queue.empty()
+    assert slow._worker is worker and worker.done()
+    assert "_SlowNotifier is closed; not sending: late" in caplog.text
 
 
 async def test_full_queue_drops_the_oldest_notification(caplog):
@@ -431,11 +390,3 @@ async def test_full_queue_drops_the_oldest_notification(caplog):
     assert slow.sent == ["c", "d"]
     assert "dropped notification: a" in caplog.text and "dropped notification: b" in caplog.text
 
-
-async def test_queue_after_close_is_ignored(caplog):
-    slow = _SlowNotifier(0)
-    await slow.close()
-    slow.queue(Notification(title="late", text=""))
-    await asyncio.sleep(0.01)
-    assert slow.sent == [] and slow._worker is None
-    assert "_SlowNotifier is closed; not sending: late" in caplog.text
