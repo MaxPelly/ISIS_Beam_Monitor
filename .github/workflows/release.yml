@@ -48,4 +48,6 @@ jobs:
       run: |
         awk -v v="[${GITHUB_REF_NAME#v}]" '/^## /{p = index($0, v) > 0; next} p' CHANGELOG.md > notes.md
         grep -q . notes.md || { echo "::error::CHANGELOG.md has no section for $GITHUB_REF_NAME"; exit 1; }
-        gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md
+        # A release candidate (or alpha/beta) is a pre-release, so it isn't shown as the latest.
+        prerelease=$(echo "$GITHUB_REF_NAME" | grep -Eq '(a|b|rc)[0-9]+$' && echo --prerelease || true)
+        gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md $prerelease
