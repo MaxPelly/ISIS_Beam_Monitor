@@ -24,7 +24,7 @@ MCR news (HTTP) ───┘     daemon         └─> push site: /ingest (card
 - `mcr.py`: `MCRNewsMonitor` polls the MCR news page and backs off when fetches fail.
 - `messages.py`: `Notification`, one pure builder for each event, the shared formatting helpers and `strip_controls`.
 - `notifiers.py`: `TeamsNotifier` sends Adaptive Cards. `WebhookNotifier` sends signed JSON to the push site. `NotificationChannel` passes each notification to its notifiers.
-- `status.py`: `build()` makes the status page's payload from `DaemonState`. `StatusPublisher` posts it and `render_text()` formats it for `isis-monitor status`.
+- `status.py`: `build()` makes the status page's payload from `DaemonState`. `StatusPublisher` posts it when it changes (checked every `status_interval`) and at least every 30s, and `render_text()` formats it for `isis-monitor status`.
 - `summary.py`: `compute_summary()` and `daily_summary_loop` send the daily uptime card for each target.
 - `storage.py`: `SQLiteStateStore` stores beam samples and snapshots.
 - `config.py`: `AppConfig` and `parse_config()`, which checks all settings before the daemon starts. `editable_settings()` and `update_config_file()` let the daemon read and save the config.

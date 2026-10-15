@@ -73,17 +73,11 @@ class DaemonState:
             "beam": "unknown",
             "mcr": "unknown",
         }
-        # Called on each significant change (a beam's power, MCR news, health,
-        # a run completed), e.g. to send the status page a fresh status.
-        self.on_change: Callable[[], None] = lambda: None
 
     def update_beam_state(self, beam: str, current: float, power: str) -> None:
         if beam not in self.beam_states:
             return
-        changed = self.beam_states[beam]["power"] != power
         self.beam_states[beam] = {"current": float(current), "power": str(power)}
-        if changed:
-            self.on_change()
 
     def append_beam_sample(
         self,
@@ -117,7 +111,6 @@ class DaemonState:
 
     def update_mcr_news(self, news: str) -> None:
         self.mcr_news, self.mcr_news_at = news, datetime.now(timezone.utc)
-        self.on_change()
 
     def update_health(self, component: str, status: str) -> None:
         # Monitors re-report the same status on every successful poll; only
@@ -125,7 +118,6 @@ class DaemonState:
         if self.health.get(component) == status:
             return
         self.health[component] = status
-        self.on_change()
         if component == "beam" and status != "connected":
             # No readings arrive without the feed, so the last ones can't be
             # trusted; PVWS re-sends every value once it reconnects.
@@ -136,7 +128,6 @@ class DaemonState:
         """Record a completed run and the µA·h it collected (ignored for an unknown instrument)."""
         if instrument in self.instrument_names:
             self.run_completions.append((ts, instrument, run_number, uah))
-            self.on_change()
 
     def runs_completed_since(self, since: datetime, instruments: Iterable[str]) -> Dict[str, Tuple[int, float]]:
         """Each of `instruments`' runs completed at or after `since`, and their µA·h."""

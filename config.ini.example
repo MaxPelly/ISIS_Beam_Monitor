@@ -69,6 +69,9 @@ news_teams_url =
 # Seconds between beam history samples, which is also how often state is
 # saved (10-3600).
 # sample_interval = 60
+# Seconds between checks for a changed status to send to [PUSH] url (1-3600);
+# an unchanged one is sent every 30s, so the push site knows the daemon is up.
+# status_interval = 5
 # Days of beam history kept in the database (whole days, 1-365).
 # retention_days = 7
 

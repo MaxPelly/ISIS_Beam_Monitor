@@ -6,9 +6,9 @@ no live reading are sent as unknown, never as zero, so a feed outage doesn't
 look like the beam going off.
 """
 import asyncio
-import contextlib
 import logging
 import math
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Callable, Dict, Optional
@@ -114,11 +114,11 @@ def build(state: DaemonState, since: Dict[str, Optional[datetime]], interval_s: 
 
 class StatusPublisher:
     """POSTs the status to the push site (`url` + "/status", e.g.
-    .../ingest/status) every `interval` seconds, and soon after a
-    significant change (poke()), but at most once per DEBOUNCE. Nothing
-    queues: each send builds the latest status, and a failed one is only
-    logged, since the next replaces it."""
-    DEBOUNCE = 5.0
+    .../ingest/status): every `interval` seconds if it has changed, and at
+    least every HEARTBEAT, so the site can tell the monitor is up. Nothing
+    queues: each send is the latest status, and one the site didn't take is
+    sent again next time."""
+    HEARTBEAT = 30.0
 
     def __init__(self, url: str, secret: bytes, build: Callable[[], dict], interval: float,
                  session: aiohttp.ClientSession, timeout: float = 2.0, where: str = ""):
@@ -127,19 +127,25 @@ class StatusPublisher:
         self.where = where or self.url
         self.secret, self.build, self.interval = secret, build, interval
         self.session, self.timeout = session, timeout
-        self._changed = asyncio.Event()
         self._refused: Optional[int] = None  # the HTTP status the site last refused one with, 0 if unreachable
-
-    def poke(self) -> None:
-        self._changed.set()
+        self._sent: Optional[dict] = None  # the last status the site took, but for generated_at
+        self._sent_at = -math.inf  # when, by time.monotonic()
 
     async def run(self) -> None:
         while True:
-            await self._send()
-            await asyncio.sleep(self.DEBOUNCE)
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self._changed.wait(), max(self.interval - self.DEBOUNCE, 0))
-            self._changed.clear()
+            await self.publish(time.monotonic())
+            await asyncio.sleep(self.interval)
+
+    async def publish(self, now: float) -> None:
+        """Send the status if it has changed, or the last was HEARTBEAT ago."""
+        try:
+            status = self.build()
+        except Exception:  # a bug: logged, and the next try builds it again
+            logger.exception("Failed to build the status")
+            return
+        content = {k: v for k, v in status.items() if k != "generated_at"}
+        if (content != self._sent or now - self._sent_at >= self.HEARTBEAT) and await self._send(status):
+            self._sent, self._sent_at = content, now
 
     def _took(self, status: int) -> None:
         """Warns once when the site starts refusing the status (e.g. 400 for one it
@@ -159,20 +165,23 @@ class StatusPublisher:
         if status == 409:
             logger.debug("Push site didn't take the status: HTTP 409 (not newer than the last)")
 
-    async def _send(self) -> None:
-        """One status; any failure is only logged, and never stops the publisher."""
+    async def _send(self, status: dict) -> bool:
+        """Whether the site took the status (204, or 409 for one no newer than
+        its last); any failure is only logged, and never stops the publisher."""
         try:
             async with self.session.post(
                 self.url, timeout=aiohttp.ClientTimeout(total=self.timeout), allow_redirects=False,
-                **signed_json(self.build(), self.secret),
+                **signed_json(status, self.secret),
             ) as resp:
                 self._took(resp.status)
+                return resp.status in (204, 409)
         except (aiohttp.ClientError, TimeoutError) as exc:
             logger.debug(f"Failed to send the status: {exc!r}")
             if isinstance(exc, aiohttp.ClientConnectorError):  # not a slow or dropped send, which may pass
                 self._took(0)
         except Exception:  # a bug: logged, and the next send tries again
             logger.exception("Failed to send the status")
+        return False
 
 
 SPARK_BINS = 3  # 10-minute bins per sparkline character: 48 characters for 24h

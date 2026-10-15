@@ -278,17 +278,16 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             return {"restarting": True}
 
     def current_status() -> dict:
-        # interval_s is the interval it's really sent at, which the site judges staleness by.
+        # interval_s is the longest it goes unsent, which the site judges staleness by.
         return build_status(state, {name: b.since for name, b in beam_monitor.beams.items()},
-                            max(config.sample_interval, StatusPublisher.DEBOUNCE))
+                            max(config.status_interval, StatusPublisher.HEARTBEAT))
 
     loops = [beam_monitor.run, mcr_monitor.run]  # each run until stop_event
     if config.push_url and not args.dummy:
         publisher = StatusPublisher(
-            push_url(config), config.push_secret, current_status, config.sample_interval, push, config.push_timeout,
+            push_url(config), config.push_secret, current_status, config.status_interval, push, config.push_timeout,
             where=config.push_url,
         )
-        state.on_change = publisher.poke
         loops.append(publisher.run)
 
     ipc_server = IPCServer(Path(config.daemon_socket_path), command_handler, config_handler, current_status)

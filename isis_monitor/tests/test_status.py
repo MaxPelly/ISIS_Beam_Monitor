@@ -132,10 +132,10 @@ async def receiver(status=204):
 
 
 @contextlib.asynccontextmanager
-async def publishing(url, interval=3600.0, build=lambda: {"n": 1}, debounce=0.02):
+async def publishing(url, interval=0.02, build=lambda: {"n": 1}, heartbeat=0.05):
     async with aiohttp.ClientSession() as session:
         publisher = StatusPublisher(url, SECRET, build, interval, session, timeout=1)
-        with patch.object(StatusPublisher, "DEBOUNCE", debounce):
+        with patch.object(StatusPublisher, "HEARTBEAT", heartbeat):
             task = asyncio.create_task(publisher.run())
             try:
                 yield publisher
@@ -145,31 +145,31 @@ async def publishing(url, interval=3600.0, build=lambda: {"n": 1}, debounce=0.02
                     await task
 
 
-async def test_the_status_is_sent_signed_at_start_and_every_interval():
+async def test_the_status_is_sent_signed_at_start_and_every_heartbeat():
     """To <ingest URL>/status (the receiver serves only that), as is the next test's with a trailing slash."""
     async with receiver() as server:
-        async with publishing(str(server.make_url("/ingest")), interval=0.02):
+        async with publishing(str(server.make_url("/ingest"))):  # the same status each time
             await wait_until(lambda: len(server.received) >= 3)
     assert server.received[0] == {"n": 1}
 
 
-async def test_a_change_sends_soon_but_at_most_once_per_debounce():
-    async with receiver() as server:
-        async with publishing(str(server.make_url("/ingest/")), debounce=0.02) as publisher:
-            await wait_until(lambda: len(server.received) == 1)  # at start
-            for _ in range(5):
-                publisher.poke()
-            await wait_until(lambda: len(server.received) == 2)
-            await asyncio.sleep(0.05)
-            assert len(server.received) == 2  # the pokes were one send
+async def test_a_status_is_sent_only_when_it_changes_or_the_heartbeat_is_due():
+    content = {"n": 1}
+    async with receiver() as server, aiohttp.ClientSession() as session:
+        publisher = StatusPublisher(str(server.make_url("/ingest/")), SECRET, lambda: {**content, "generated_at": "now"},
+                                    5, session)
+        for now, n in ((0, 1), (5, 1), (10, 2), (15, 2), (20, 2), (40, 2)):  # HEARTBEAT is 30s
+            content["n"] = n
+            await publisher.publish(now)
+    assert [(r["n"]) for r in server.received] == [1, 2, 2]  # at 0, on the change at 10, and the heartbeat at 40
 
 
 async def test_a_receiver_that_is_down_or_refuses_doesnt_stop_publishing(caplog):
     caplog.set_level("DEBUG")
-    async with publishing("http://127.0.0.1:9/ingest", interval=0.02):
+    async with publishing("http://127.0.0.1:9/ingest"):
         await wait_until(lambda: caplog.text.count("Failed to send the status") >= 2)
     async with receiver(status=404) as server:  # an older push site, without /ingest/status
-        async with publishing(str(server.make_url("/ingest")), interval=0.02):
+        async with publishing(str(server.make_url("/ingest"))):  # refused, so sent again each time
             await wait_until(lambda: len(server.received) >= 2)
     assert caplog.text.count("Push site refuses the status: HTTP 404") == 1  # once, not every send
     assert caplog.text.count("Can't reach the push site at http://127.0.0.1:9/ingest/status") == 1
@@ -189,31 +189,10 @@ async def test_a_failing_build_or_unencodable_status_is_logged_and_retried(caplo
     # (A lone surrogate, e.g. from a bug, can't be encoded.)
     build = MagicMock(side_effect=itertools.chain([RuntimeError("bug"), {"t": "\ud800"}], itertools.repeat({"n": 2})))
     async with receiver() as server:
-        async with publishing(str(server.make_url("/ingest")), interval=0.02, build=build):
+        async with publishing(str(server.make_url("/ingest")), build=build):
             await wait_until(lambda: server.received)
-    assert caplog.text.count("Failed to send the status") == 2 and server.received[0] == {"n": 2}
-
-
-def test_significant_changes_poke_the_publisher():
-    state = DaemonState(instrument_names=["PEARL"])
-    state.on_change = poke = MagicMock()
-    state.update_beam_state("TS1", 150.0, "high")
-    state.update_beam_state("TS1", 151.0, "high")  # the same power: no
-    state.update_mcr_news("x")
-    state.update_health("beam", "connected")
-    state.update_health("beam", "connected")  # no change: no
-    state.record_run_completed("PEARL", NOW, "1", 5.0)
-    state.record_run_completed("MERLIN", NOW, "1", 5.0)  # not configured: no
-    assert poke.call_count == 4
-
-    # An instrument's run state and number, on a change.
-    sink = MagicMock(spec=DaemonState())
-    pearl = InstrumentTracker(InstrumentConfig("PEARL", 130.0, "TS1"), fake_channel(), lambda b: "high", 15, sink=sink)
-    for text in ("RUNNING", "RUNNING", "ENDING"):
-        pearl.handle_run_state(text)
-    for text in ("00010", "10", "00011"):
-        pearl.handle_run_number(text)
-    assert sink.on_change.call_count == 4
+    assert "Failed to build the status" in caplog.text and "Failed to send the status" in caplog.text
+    assert server.received[0] == {"n": 2}
 
 
 def test_every_string_fits_the_push_sites_limits():
@@ -259,5 +238,5 @@ async def test_a_slow_site_isnt_reported_unreachable(caplog):
     caplog.set_level("DEBUG")
     publisher = StatusPublisher("http://x/ingest", SECRET, dict, 60, MagicMock())
     publisher.session.post.side_effect = TimeoutError
-    await publisher._send()
+    assert await publisher._send({"n": 1}) is False
     assert "Failed to send the status" in caplog.text and "Can't reach" not in caplog.text

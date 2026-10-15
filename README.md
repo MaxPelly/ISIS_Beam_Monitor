@@ -78,6 +78,7 @@ Times are in seconds unless the key says minutes.
 | | `socket_path` | `isis_beam_monitor.sock` | path of at most 107 bytes once made absolute | Unix socket the other commands use to reach the daemon. Keep it out of shared directories such as `/tmp`. |
 | | `lock_file` | `isis_beam_monitor.lock` | path | Lock that keeps to one daemon per config. |
 | | `sample_interval` | 60 | 10 to 3600 | Seconds between beam history samples, which is also how often state is saved. |
+| | `status_interval` | 5 | 1 to 3600 | Seconds between checks for a changed status to send to `[PUSH] url`; an unchanged one is sent every 30s. |
 | | `retention_days` | 7 | whole number, 1 to 365 | Days of beam history kept in the database. |
 | `[LOGGING]` | `level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` (any case) | The daemon's log level. It always logs to stderr (journald under systemd). |
 | | `file` | blank | path | Also log to this rotating file (5 MB × 3); blank for none. |
@@ -136,8 +137,8 @@ well as to Teams. It's meant for the optional companion
 [ISIS Push Site](https://github.com/MaxPelly/ISIS_Push_Site) (mobile push notifications,
 v2.0.0 or later), but any receiver that checks the signature will work. It also sends
 the daemon's status (beams, instruments, MCR news, health), signed the same way, to the
-URL plus `/status` (e.g. `/ingest/status`) every `[DAEMON] sample_interval` and soon
-after a change, for the push site's Status page.
+URL plus `/status` (e.g. `/ingest/status`), for the push site's Status page: within
+`[DAEMON] status_interval` (5s) of any change, and at least every 30s.
 
 The push site is installed on its own; its README covers setting it up, sharing the
 secret with the monitor, and inviting people's phones. With its standard layout, set

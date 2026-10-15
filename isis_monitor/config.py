@@ -52,6 +52,7 @@ _BOUNDS = {
     "webhook_timeout": (1, 300, False),
     "push_timeout": (0.5, 30, False),
     "sample_interval": (10, 3600, False),  # each status bins the last 24h of samples
+    "status_interval": (1, 3600, False),
     "retention_days": (1, 365, False),
     "debounce_seconds": (0, 3600, False),
     "stall_minutes": (0, _WEEK_MINUTES, True),
@@ -180,6 +181,8 @@ class AppConfig:
     retention_days: int = _ini("DAEMON", 7)
     # Seconds between beam history samples, which are also when state is saved
     sample_interval: float = _ini("DAEMON", 60.0)
+    # Seconds between checks for a changed status to send the push site
+    status_interval: float = _ini("DAEMON", 5.0)
 
     # The daemon logs to stderr (journald under systemd), and also to this
     # rotating file if it's set.
