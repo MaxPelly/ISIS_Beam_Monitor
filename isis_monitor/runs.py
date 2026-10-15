@@ -485,8 +485,7 @@ class RunTracker:
                 if not isinstance(run, dict):
                     raise TypeError("run isn't an object")
                 run = RunInfo(**{**run, "started_at": _time(run["started_at"]),
-                                 "ended_at": _time(run["ended_at"]) if run["ended_at"] else None,
-                                 "begun_title": run.get("begun_title") or run.get("title")})
+                                 "ended_at": _time(run["ended_at"]) if run["ended_at"] else None})
                 _check_run(run)
             values = (
                 _of(saved, "run_number", str), _of(saved, "last_completed", str), _of(saved, "rb", str),

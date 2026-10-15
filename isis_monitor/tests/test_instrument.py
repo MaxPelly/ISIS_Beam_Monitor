@@ -491,35 +491,6 @@ async def test_the_snapshot_round_trips():
     assert restored.tracker.runs.restored and list(restored.tracker.runs.run_totals) == [40.0]
 
 
-async def test_the_1_3_0rc_saved_state_carries_on_without_a_reset():
-    """1.3.0rc's format 2 had the run tracker's state as "shadow", its runs
-    without begun_title."""
-    r = await begun()
-    await r((60, "TOTALUAMPS", 8.0))
-    shadow = json.loads(json.dumps(r.tracker.runs.to_snapshot()))
-    del shadow["run"]["begun_title"]
-    rc = {"format": 2, "notify_counts": 1000.0, "auto": False, "run_name": "Run ten", "counts": 8.0,
-          "end_notified": False, "shadow": shadow}
-    upgraded = Live(saved=rc, state=r.state, channel=r.channel, at=100)
-    assert upgraded.tracker.runs.run.number == "00010" and upgraded.tracker.runs.rb == "123"
-    await upgraded(*[(100, s, v) for _, s, v in BEGIN[1:3]], (100, "RUNSTATE_STR", "RUNNING"),
-                   (100, "STARTTIME", "Tue 13-Oct-2026 10:00:07"))
-    await upgraded((110, "TOTALUAMPS", 9.0))
-    await upgraded(*END, offset=200)
-    assert r.titles == [NEW_RUN] and r.completions == [("PEARL", "10", 9.0)]
-
-
-async def test_a_finishing_card_sent_under_1_3_0rc_isnt_sent_again():
-    """1.3.0rc kept that in the old logic's state; its shadow never sent one."""
-    r = await begun()
-    shadow = json.loads(json.dumps(r.tracker.runs.to_snapshot()))
-    upgraded = Live(saved={"format": 2, "notify_counts": 1000.0, "auto": False, "end_notified": True,
-                           "shadow": shadow}, state=r.state, channel=r.channel, at=100)
-    await upgraded(*[(100, s, v) for _, s, v in BEGIN[1:3]], (100, "RUNSTATE_STR", "RUNNING"),
-                   (100, "STARTTIME", "Tue 13-Oct-2026 10:00:07"), (110, "TOTALUAMPS", 1500.0))
-    assert r.titles == [NEW_RUN]  # past its target, but no second finishing card
-
-
 async def test_a_retitled_rebegin_during_a_reconnect_gets_its_restart_card():
     r = await begun()
     r.reconnect(100)
@@ -527,19 +498,6 @@ async def test_a_retitled_rebegin_during_a_reconnect_gets_its_restart_card():
     await r((100, "WDTITLE", "Run ten at 100K"), (100, "STARTTIME", "Tue 13-Oct-2026 10:01:30"),
             (100, "RUNNUMBER", "00010"), (100, "RUNSTATE_STR", "RUNNING"))
     assert r.titles == [NEW_RUN, "PEARL: Run 10 restarted"] and r.cards[-1].text == "Run ten at 100K"
-
-
-async def test_a_run_from_1_3_0rc_retitled_and_rebegun_gets_a_restart_card():
-    r = await begun()
-    shadow = json.loads(json.dumps(r.tracker.runs.to_snapshot()))
-    del shadow["run"]["begun_title"]
-    upgraded = Live(saved={"format": 2, "notify_counts": 1000.0, "auto": False, "shadow": shadow},
-                    state=r.state, channel=r.channel, at=100)
-    await upgraded((100, "RUNNUMBER", "00010"), (100, "RUNSTATE_STR", "RUNNING"), (100, "WDTITLE", "Run ten"),
-                   (100, "STARTTIME", "Tue 13-Oct-2026 10:00:07"), (120, "RUNSTATE_STR", "ABORTING"),
-                   (121, "RUNSTATE_STR", "SETUP"), (125, "WDTITLE", "Run ten at 100K"),
-                   (130, "RUNSTATE_STR", "RUNNING"), (130, "STARTTIME", "Tue 13-Oct-2026 10:02:10"))
-    assert r.titles == [NEW_RUN, "PEARL: Run 10 restarted"]
 
 
 SAVED_RUN = {"number": "00010", "title": "Run ten", "started_at": "2026-10-13T08:00:00+00:00", "start_text": None,
@@ -561,7 +519,6 @@ def entry(runs):
     ("junk", "ignoring saved state from an older version"),
     ({}, "ignoring saved state from an older version"),
     ({"format": 2, "run_name": "Run 4", "counts": 3.0}, "ignoring saved state from an older version"),
-    ({"format": 2, "shadow": None}, "ignoring malformed saved run state (not an object)"),
     (entry("junk"), "ignoring malformed saved run state"),
     (entry(saved_runs(run={**SAVED_RUN, "started_at": "yesterday"})), "ignoring malformed saved run state"),
     (entry(saved_runs(run={**SAVED_RUN, "end_notified": "yes"})), "ignoring malformed saved run state"),

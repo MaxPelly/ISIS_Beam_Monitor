@@ -293,14 +293,7 @@ class InstrumentTracker:
         """Restore state saved by to_snapshot() after a restart; a malformed or
         older-format entry is logged and ignored."""
         name = self.instrument.name
-        if isinstance(saved, dict) and saved.get("format") == 2 and "shadow" in saved:
-            # 1.3.0rc's: the shadow's state is now the live one, with whether the
-            # run in progress has had its finishing card, which the shadow never sent.
-            runs = saved["shadow"]
-            if isinstance(runs, dict) and isinstance(runs.get("run"), dict) and not runs["run"].get("ended_at"):
-                runs = {**runs, "run": {**runs["run"], "end_notified": saved.get("end_notified") is True}}
-            saved = {**saved, "runs": runs}
-        elif not isinstance(saved, dict) or saved.get("format") != SNAPSHOT_FORMAT:
+        if not isinstance(saved, dict) or saved.get("format") != SNAPSHOT_FORMAT:
             logger.warning(f"{name}: ignoring saved state from an older version")
             return
         # A finishing card sent for, or a target from, another notify_counts
