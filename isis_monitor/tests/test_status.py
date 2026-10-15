@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 from isis_monitor.config import InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.instrument import InstrumentTracker
+from isis_monitor.runs import RunInfo
 from isis_monitor.status import (
     HISTORY_POINTS,
     MAX_INSTRUMENTS,
@@ -25,6 +26,13 @@ def state_with(*instruments):
 
 def tracker(name="PEARL", **config):
     return InstrumentTracker(InstrumentConfig(name, 130.0, "TS1", **config), fake_channel(), lambda b: "high", 15)
+
+
+def in_run(t, title="Run 1", counts=-1.0, number="00127921", state="RUNNING"):
+    """`t` with run `number` under way."""
+    t.runs.run = RunInfo(number, title, NOW, None, 0, 130.0, 0, last_counts=counts)
+    t.runs.run_number, t.runs.run_state = number, state
+    return t
 
 
 def test_beams_news_and_health():
@@ -59,17 +67,14 @@ def test_history_is_24h_in_10_minute_bins_on_fixed_boundaries():
 
 
 def test_instruments_come_from_the_trackers():
-    pearl = tracker(auto_counts=True)
-    pearl.state.run_name, pearl.state.current_counts, pearl.state.rb_number = "x" * 300, 65.256, "2610403"
-    pearl.runs.run_number, pearl.runs.run_state = "00127921", "RUNNING"  # as the PV pads it
+    pearl = in_run(tracker(auto_counts=True), "x" * 300, 65.256, "00127921")  # as the PV pads it
+    pearl.runs.rb = "2610403"
     wish = tracker("WISH")
     # E.g. MERLIN's IOC or the gateway is down: not the last counts as if live.
-    merlin = tracker("MERLIN")
-    merlin.state.current_counts = 50.0
-    merlin.runs.run_state = ""
+    merlin = in_run(tracker("MERLIN"), counts=50.0, state="")
     (p, w, m) = build(state_with(pearl, wish, merlin), {}, 60, NOW)["instruments"]
     assert p == {"name": "PEARL", "beam": "TS1", "run_number": "127921", "run_state": "RUNNING",
-                 "title": "x" * MAX_TITLE, "started_at": None, "counts": 65.26, "target": 130.0, "auto": True,
+                 "title": "x" * MAX_TITLE, "started_at": "2026-10-13T12:00:00+00:00", "counts": 65.26, "target": 130.0, "auto": True,
                  "rb": "2610403"}
     assert w["counts"] is None  # nothing read yet
     assert m["counts"] is None  # while its run state is unknown
@@ -79,7 +84,7 @@ def test_a_long_status_stays_within_the_push_sites_limits():
     """20 instruments with the longest titles and news; the site takes up to 64 KB."""
     trackers = [tracker(f"INSTRUMENT{n:02d}") for n in range(20)]
     for t in trackers:
-        t.state.run_name = "é" * 300
+        in_run(t, "é" * 300, 1234.5678)
     state = state_with(*trackers)
     state.update_mcr_news("é" * 1000)
     for name in state.history:
@@ -203,24 +208,14 @@ def test_significant_changes_poke_the_publisher():
     state.update_health("beam", "connected")  # no change: no
     state.record_run_completed("PEARL", NOW, "1", 5.0)
     state.record_run_completed("MERLIN", NOW, "1", 5.0)  # not configured: no
-    assert poke.call_count == 4
-
-    # An instrument's run state and number, on a change.
-    sink = MagicMock(spec=DaemonState())
-    pearl = InstrumentTracker(InstrumentConfig("PEARL", 130.0, "TS1"), fake_channel(), lambda b: "high", 15, sink=sink)
-    for text in ("RUNNING", "RUNNING", "ENDING"):
-        pearl.handle_run_state(text)
-    for text in ("00010", "10", "00011"):
-        pearl.handle_run_number(text)
-    assert sink.on_change.call_count == 4
+    assert poke.call_count == 4  # (an instrument's run state and number: below)
 
 
 def test_every_string_fits_the_push_sites_limits():
     """A longer one would make the site refuse the whole status."""
     long = "x" * 2000
-    pearl = tracker("P" * 40)
-    pearl.state.run_name, pearl.state.rb_number, pearl.beam_target = long + "\ud800", long, long
-    pearl.runs.run_number, pearl.runs.run_state = long, long
+    pearl = in_run(tracker("P" * 40), long + "\ud800", number=long, state=long)
+    pearl.runs.rb, pearl.beam_target = long, long
     state = state_with(pearl)
     state.mcr_news = long
     status = build(state, {}, 60, NOW)
@@ -251,3 +246,13 @@ def test_render_text_shows_beams_instruments_and_news_in_local_time():
     assert lines[8].split() == ["WISH", "TS1", "-", "?", "?"]
     assert lines[-2:] == [f"MCR news (since {state.mcr_news_at.astimezone(ZoneInfo('Europe/London')):%a %d %b %H:%M}):",
                           "Beam on"]
+
+
+async def test_run_state_and_number_changes_poke_the_publisher():
+    sink = MagicMock()
+    pearl = InstrumentTracker(InstrumentConfig("PEARL", 130.0, "TS1"), fake_channel(), lambda b: "high", 15, sink=sink)
+    handlers = pearl.pv_handlers()
+    for pv, text in (("RUNSTATE_STR", "SETUP"), ("RUNSTATE_STR", "SETUP"), ("RUNNUMBER", "00010"),
+                     ("RUNNUMBER", "00010"), ("RUNSTATE_STR", "PROCESSING"), ("RUNNUMBER", "00011")):
+        await handlers[f"IN:PEARL:DAE:{pv}"]({"text": text}, NOW)
+    assert sink.on_change.call_count == 4

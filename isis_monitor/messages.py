@@ -159,27 +159,42 @@ def startup_status(beam: str, *, state: str, beam_val: float, time_now: datetime
 def run_started(
     instrument: str,
     *,
+    run_number: str,
     new_run_name: str,
-    prev_run_name: str,
-    prev_duration: timedelta,
-    prev_counts: float,
     time_now: datetime,
     target: float,
     target_note: str = "",  # e.g. "auto, from 5 runs"
+    prev_run_name: Optional[str] = None,  # None: the previous run isn't known (e.g. runs were missed)
+    prev_duration: Optional[timedelta] = None,
+    prev_counts: float = -1.0,  # negative: its final total isn't known
 ) -> Notification:
-    """Build a card for a new run starting — its target, and a report on the
-    run that just ended."""
+    """Build a card for a new run starting: its number and target, and a
+    report on the run just before it."""
+    facts = [("Run number", run_number)]
+    if prev_run_name is not None:
+        facts.append(("Previous run", prev_run_name))
+        if prev_duration is not None:
+            facts.append(("Duration", fmt_duration(prev_duration)))
+        facts.append(("Final total collected", f"{prev_counts:.1f} µA·h" if prev_counts >= 0 else "unknown"))
+    facts.append(("Target", f"{target:g} µA·h" + (f" ({target_note})" if target_note else "")))
     return Notification(
         title=f"{instrument}: New run started",
         text=new_run_name,
         emoji=NEW_RUN_EMOJI,
-        facts=[
-            ("Previous run", prev_run_name),
-            ("Duration", fmt_duration(prev_duration)),
-            # Negative means no reading ever arrived for that run.
-            ("Final total collected", f"{prev_counts:.1f} µA·h" if prev_counts >= 0 else "unknown"),
-            ("Target", f"{target:g} µA·h" + (f" ({target_note})" if target_note else "")),
-        ],
+        facts=facts,
+        timestamp=time_now,
+        topic=instrument,
+    )
+
+
+def run_restarted(instrument: str, *, run_number: str, run_name: str, time_now: datetime) -> Notification:
+    """A run aborted and begun again under its number with a new title (e.g. a
+    new temperature): new in all but number, so not counted as another run."""
+    return Notification(
+        title=f"{instrument}: Run {run_number} restarted",
+        text=run_name,
+        emoji=NEW_RUN_EMOJI,
+        facts=[("Run number", run_number)],
         timestamp=time_now,
         topic=instrument,
     )

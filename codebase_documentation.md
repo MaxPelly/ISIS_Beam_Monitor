@@ -18,8 +18,8 @@ MCR news (HTTP) ───┘     daemon         └─> push site: /ingest (card
 - `ipc.py`: `IPCServer` (`get_status`, `command`, `get_config`, `update_config`) and `ipc_request`.
 - `daemon_state.py`: `DaemonState` holds beam states and 24h history, MCR news, health and completed runs. It saves and restores them as a JSON snapshot. Instrument state belongs to each tracker.
 - `beam.py`: `BeamMonitor` keeps the one PVWS connection and routes each PV to its handler. `BeamChangeAggregator` debounces beam power changes.
-- `instrument.py`: `InstrumentTracker` follows one instrument's runs, counts, stalls, finishing ETA and RB-number experiments.
-- `runs.py`: `RunTracker` detects runs by run number and is deterministic, so recorded PV sequences replay exactly. It also has `auto_target()`.
+- `instrument.py`: `InstrumentTracker` is `RunTracker`'s listener: it sends one instrument's run, restarted, experiment, finishing and stall cards.
+- `runs.py`: `RunTracker` detects runs and experiments from the DAE's PVs and is deterministic, so recorded PV sequences replay exactly. It keeps each run (`RunInfo`), the targets (`auto_target()`) and the saved state.
 - `instlist.py`: `parse_instlist()` decodes `CS:INSTLIST`, which gives each instrument's PV prefix and target station.
 - `mcr.py`: `MCRNewsMonitor` polls the MCR news page and backs off when fetches fail.
 - `messages.py`: `Notification`, one pure builder for each event, the shared formatting helpers and `strip_controls`.
@@ -38,7 +38,7 @@ MCR news (HTTP) ───┘     daemon         └─> push site: /ingest (card
 - **One notification per beam target.** Readers follow TS1, TS2 and Muons separately, so beam cards and daily summaries are never merged.
 - **Startup cards are intentional.** A target's first reading after the daemon starts always sends a card (`startup_status`).
 - **Teams channel.** Run and experiment cards go to "Experiment Updates" by default. An instrument with `channel = instrument` uses its own name instead. Beam cards use the target's name and MCR news uses "MCR News".
-- **A run is identified by its run number (`DAE:RUNNUMBER`).** Today `InstrumentTracker` still sends the cards. It uses the title and counts logic, and a run's number is only shown on its finishing and stall cards. Alongside it, a `RunTracker` runs in shadow: it only logs its decisions with a `[shadow]` prefix, and any failure in it is only logged. It replaces the title and counts logic in 1.3.0.
+- **A run is identified by its run number (`DAE:RUNNUMBER`).** `RunTracker` decides when runs start, end and begin again (an abort keeps the number); `InstrumentTracker`, its listener, sends their cards. A run picked up mid-way or only seen ending gets no new-run card but is still recorded.
 - **A config save restarts the daemon in place.** After a successful `update_config`, `run_daemon` returns `True` and `restart_process()` re-execs the same command (same PID) with `ISIS_MONITOR_RESTARTED=1`. The config `revision` makes a retried save safe.
 - **Failures stay contained.** Each loop catches and logs its own errors and keeps going: reconnects, backoff, retried writes, and the stall check runs separately for each tracker. Each notifier has its own queue and worker, so a slow or failing webhook holds up nothing else. If an exception does escape a loop, the daemon shuts down cleanly rather than continuing half-running.
 
@@ -50,10 +50,10 @@ MCR news (HTTP) ───┘     daemon         └─> push site: /ingest (card
 3. If it uses a new `topic`, add it to the push site's topics (`BASE_TOPICS` in its `push_site/prefs.py`).
 
 **A new instrument field**
-1. If it comes from a PV, add a property on `InstrumentConfig` and a handler in `InstrumentTracker.pv_handlers()`.
-2. Add it to `InstrumentState`, `to_snapshot()`/`from_snapshot()` and `view()`. If the saved layout changes, bump `SNAPSHOT_FORMAT`.
+1. If it comes from a PV, add a property on `InstrumentConfig` and a handler in `runs.pv_handlers()`.
+2. Keep it in `RunTracker` (or `RunInfo`) with its `to_snapshot()`/`from_snapshot()`, and show it in `InstrumentTracker.view()`. If the saved layout changes, bump `SNAPSHOT_FORMAT`.
 3. If the status page shows it, add it to `status._instrument()` and the push site's `push_site/status.py` (which checks the payload) and `static/app.js`.
-4. Test it in `test_beam.py` (or `test_runs.py`) and `test_status.py`.
+4. Test it in `test_runs.py`, `test_instrument.py` and `test_status.py`.
 
 **A new config key**
 1. Add an `AppConfig` field with `_ini(section, default)`. If it's numeric, add a range to `_BOUNDS`; checks go in `_validate()`.

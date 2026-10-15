@@ -18,6 +18,16 @@ own versions and changelog; each release here notes the version its
 - `isis-monitor config <config.ini>` opens the config editor on its own, without the TUI. It talks to the running daemon like the TUI's `c` key did, with a fresh connection for each request.
 - A `[DAEMON] socket_path` longer than a Unix socket path can be (107 bytes) is refused with a config error, instead of the daemon failing to start with a traceback.
 
+## [1.3.0] - 2026-10-15
+
+Run detection by run number goes live, replacing the title and counts heuristics, after the 1.3.0rc releases ran it in shadow alongside them (over a day of live data it matched every real run, and found every live-only card to be a retitle or an abort). Includes push site v1.1.4. No config change; from 1.3.0rc each instrument's saved state carries on. A run the old logic had already counted after a retitle is counted again when it really ends, so the next daily summary may count one run twice.
+
+- Runs are detected by run number (`DAE:RUNNUMBER`), as the 1.3.0rc releases did in shadow, instead of by their title changing or their counts resetting. So retitling a run, or setting the next run's title before it begins, no longer sends a new-run card or counts as a run (SETUP retitles sent cards before), and an abort and re-begin under the same number isn't another run. The new-run card shows the run number, and a run begun again with a new title (e.g. a furnace's next temperature) gets a "Run … restarted" card. A run the daemon only saw end (after a reconnect, say) is recorded without a card.
+- Stalls are only checked while a run is under way in RUNNING or VETOING and has collected something (a muon instrument's µA·h stay 0); the guess that a run at its target had probably ended is gone.
+- Upgrading from 1.3.0rc: each instrument's saved state is carried over (the shadow's becomes the live one), so nothing resets. The `[shadow]` log lines are gone; run decisions are logged without the prefix.
+- The `push_site` submodule points at push site v1.1.4, which pushes MCR news and a beam coming back on with high urgency, so an idle phone shows them straight away.
+- Since rc3, the run detection makes a run the new experiment's when the RB number changes within 30s of its begin, by its STARTTIME, while it's under way (it checked for no counts yet, which with beam on there almost always are), and records a run first seen ending even when the DAE sends SETUP before the next run number.
+
 ## [1.3.0rc3] - 2026-10-14
 
 1.3.0rc2 with the fixes from the 14 Oct review, so the shadow week runs on the run detection 1.3.0 will ship. Includes push site v1.1.3 (deploy it first). No config change and no reset of saved state: from rc2 it carries on where it left off.
