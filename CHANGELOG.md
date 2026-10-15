@@ -8,6 +8,11 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-15
+
+The Rich TUI goes, and the monitor becomes an installed command, `isis-monitor`. Includes push site v1.2.0. Upgrading from 1.3.0: run `pip install -e .` in the checkout and change the systemd unit's `ExecStart` to `<venv>/bin/isis-monitor daemon <config.ini>`, in one go with the restart. The config and each instrument's saved state carry on unchanged.
+
+- The `push_site` submodule points at push site v1.2.0 (dependencies only in its `pyproject.toml`, and HTTP 503 rather than 500 while its database is locked).
 - A 1.3.0rc release's saved instrument state is no longer read (1.3.0 converted it on its first save), so upgrade from 1.3.0, not straight from an rc.
 - `[DAEMON] sample_interval` must be at least 10s (was 1s): each status sent to the push site bins the last 24h of samples, which at 1s took most of a second.
 - A saved state that's corrupt (e.g. a number too large for a float) is logged and skipped, rather than stopping the daemon from starting.
