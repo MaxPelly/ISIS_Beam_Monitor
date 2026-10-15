@@ -142,7 +142,11 @@ class StatusPublisher:
     def _took(self, status: int) -> None:
         """Warns once when the site starts refusing the status (e.g. 400 for one it
         can't read, 401 for a wrong secret, 404 for an older site), and when it
-        takes it again; 409 (not newer than the last, e.g. after a clock step) is routine."""
+        takes it again; 409 (not newer than the last, e.g. after a clock step) is routine,
+        and a 5xx (e.g. 503 while an admin command holds its database) passes."""
+        if status >= 500:
+            logger.debug(f"Push site didn't take the status: HTTP {status}")
+            return
         refused = None if status in (204, 409) else status
         if refused != self._refused:
             if refused:
