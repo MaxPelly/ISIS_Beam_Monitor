@@ -184,10 +184,12 @@ def test_refusals_are_warned_of_once_and_recovery_noted(caplog):
     caplog.set_level("INFO")
     publisher = StatusPublisher("http://x/ingest", SECRET, dict, 60, MagicMock())
     assert publisher.url == StatusPublisher("http://x/ingest/", SECRET, dict, 60, MagicMock()).url == "http://x/ingest/status"
-    for status in (204, 400, 400, 409, 204, 409):
+    for status in (204, 400, 400, 409, 204, 409, 503, 204, 401, 503, 401):
         publisher._took(status)
     assert caplog.text.count("refuses the status: HTTP 400") == 1
+    assert caplog.text.count("refuses the status: HTTP 401") == 1  # a busy site in between isn't a recovery
     assert caplog.text.count("takes the status again") == 1
+    assert "503" not in caplog.text  # passing, so only at debug
 
 
 async def test_a_failing_build_or_unencodable_status_is_logged_and_retried(caplog):

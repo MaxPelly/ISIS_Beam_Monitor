@@ -14,6 +14,12 @@ Works with push site 2.0.0, which must be installed by then (see its README).
 - **Breaking (deployment):** the `push_site` submodule is gone: the push site is installed on its own. `deploy/isis-beam-monitor.service` keeps the checkout read-only and the daemon's files outside it: the config in `/etc/isis-beam-monitor` (the daemon's user's, for `isis-monitor config`), the database in `/var/lib/isis-beam-monitor`, the socket and lock in `/run/isis-beam-monitor` and the log file in `/var/log/isis-beam-monitor`, with those paths set in `config.ini` (see the README). Copy the old `beam_monitor.db` to the new `db_path` before starting it, or the daemon starts afresh. With the push site, the unit gives the daemon the site's secret as its `push-secret` credential and the `isis-ingest` group for the site's socket.
 - `[PUSH] url` can be `unix:` and a socket's absolute path, e.g. `unix:/run/isis-push-site/ingest.sock`: notifications go to `/ingest` and the status to `/ingest/status` over that socket, as push site 2.0.0 and later require.
 - `[PUSH] secret_file` is optional: unset, the daemon reads systemd's `push-secret` credential (`LoadCredential=push-secret:<file>`), so the secret file can stay root's.
+
+## [2.0.0] - 2026-10-15
+
+The Rich TUI goes, and the monitor becomes an installed command, `isis-monitor`. Includes push site v1.2.0. Upgrading from 1.3.0: run `pip install -e .` in the checkout and change the systemd unit's `ExecStart` to `<venv>/bin/isis-monitor daemon <config.ini>`, in one go with the restart. The config and each instrument's saved state carry on unchanged.
+
+- The `push_site` submodule points at push site v1.2.0 (dependencies only in its `pyproject.toml`, and HTTP 503 rather than 500 while its database is locked).
 - A 1.3.0rc release's saved instrument state is no longer read (1.3.0 converted it on its first save), so upgrade from 1.3.0, not straight from an rc.
 - `[DAEMON] sample_interval` must be at least 10s (was 1s): each status sent to the push site bins the last 24h of samples, which at 1s took most of a second.
 - A saved state that's corrupt (e.g. a number too large for a float) is logged and skipped, rather than stopping the daemon from starting.
@@ -23,6 +29,8 @@ Works with push site 2.0.0, which must be installed by then (see its README).
 - The daemon's IPC socket is now request and reply only, one connection per command: `get_snapshot`, `get_history`, `get_logs` and `subscribe_updates` are gone, and `get_status` returns the status page's payload. On Linux it refuses a connection from any other user (even root), as well as being owner-only.
 - `isis-monitor status <config.ini>` prints the daemon's status as plain text: each beam with its last 24h as a sparkline, each instrument's run and progress, the MCR news and health; `--json` prints the status page's JSON instead. `isis-monitor reconnect <config.ini>` makes the daemon reconnect to PVWS and re-read the MCR news, like the TUI's `r` key.
 - `isis-monitor config <config.ini>` opens the config editor on its own, without the TUI. It talks to the running daemon like the TUI's `c` key did, with a fresh connection for each request.
+- The commands exit 1 on failure (with the error on stderr) and 130 on Ctrl-C. A command gives up on a daemon that hasn't replied within 10s, and the daemon closes a connection left idle for 30s.
+- A push site busy with its database (HTTP 5xx, e.g. push site 1.2.0's 503 while an `isis-push` command holds it) is logged at debug, not warned of as refusing the status: the next send replaces it.
 - A `[DAEMON] socket_path` longer than a Unix socket path can be (107 bytes) is refused with a config error, instead of the daemon failing to start with a traceback.
 
 ## [1.3.0] - 2026-10-15

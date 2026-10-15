@@ -152,7 +152,11 @@ class StatusPublisher:
         can't read, 401 for a wrong secret, 404 for an older site) or can't be
         reached (status 0, e.g. its socket missing or not this user's to use),
         and when it takes it again; 409 (not newer than the last, e.g. after a
-        clock step) is routine."""
+        clock step) is routine, and a 5xx (e.g. 503 while an admin command holds
+        its database) passes."""
+        if status >= 500:
+            logger.debug(f"Push site didn't take the status: HTTP {status}")
+            return
         refused = None if status in (204, 409) else status
         if refused != self._refused:
             if refused == 0:
