@@ -85,7 +85,8 @@ number: the run is begun again under it (seen by its `DAE:STARTTIME`), which isn
 another run; if its title changed since it began (e.g. a new temperature), a "Run …
 restarted" card says so. After a reconnect, a restart or an outage, PVWS re-sends every
 PV in no fixed order, so nothing is decided until both the run number and state have
-come; a run begun and ended unseen meanwhile is still recorded, its final total unknown.
+come; a run begun and ended unseen meanwhile is still recorded, with its final total
+if the DAE's counts still show it.
 A daemon started mid-run picks the run up without a card. Stalls are only checked while
 a run is under way and the DAE is RUNNING or VETOING, so a paused run, a run-control
 wait or a run ended short of its target isn't reported as one. Names may contain letters, digits, `_` and `-`, and are

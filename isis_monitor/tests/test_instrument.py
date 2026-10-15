@@ -415,6 +415,15 @@ async def test_a_resumed_card_follows_a_stall_warning(gap):
     assert r.cards[-1].text == "µA·h are being collected again, after 8m without."
 
 
+async def test_a_run_that_has_collected_nothing_isnt_warned_of():
+    """E.g. a muon instrument, whose µA·h stay 0."""
+    r = (await Live()(*[u for u in RUNNING if u[1] != "TOTALUAMPS"], (0, "TOTALUAMPS", 0.0))).settle()
+    await r.counts((0, 0.0), (5, 0.0))
+    await r.check(420)
+    await r.check(600)
+    assert r.titles == []
+
+
 async def test_a_resumed_card_follows_even_a_stall_longer_than_the_sample_window():
     """Flat counts send no updates, so the last sample before the window is kept as the baseline."""
     r = await stalled()
@@ -498,6 +507,26 @@ async def test_the_1_3_0rc_saved_state_carries_on_without_a_reset():
     await upgraded((110, "TOTALUAMPS", 9.0))
     await upgraded(*END, offset=200)
     assert r.titles == [NEW_RUN] and r.completions == [("PEARL", "10", 9.0)]
+
+
+async def test_a_finishing_card_sent_under_1_3_0rc_isnt_sent_again():
+    """1.3.0rc kept that in the old logic's state; its shadow never sent one."""
+    r = await begun()
+    shadow = json.loads(json.dumps(r.tracker.runs.to_snapshot()))
+    upgraded = Live(saved={"format": 2, "notify_counts": 1000.0, "auto": False, "end_notified": True,
+                           "shadow": shadow}, state=r.state, channel=r.channel, at=100)
+    await upgraded(*[(100, s, v) for _, s, v in BEGIN[1:3]], (100, "RUNSTATE_STR", "RUNNING"),
+                   (100, "STARTTIME", "Tue 13-Oct-2026 10:00:07"), (110, "TOTALUAMPS", 1500.0))
+    assert r.titles == [NEW_RUN]  # past its target, but no second finishing card
+
+
+async def test_a_retitled_rebegin_during_a_reconnect_gets_its_restart_card():
+    r = await begun()
+    r.reconnect(100)
+    # Aborted and begun again under a new title, unseen; the replay brings it all before it ends.
+    await r((100, "WDTITLE", "Run ten at 100K"), (100, "STARTTIME", "Tue 13-Oct-2026 10:01:30"),
+            (100, "RUNNUMBER", "00010"), (100, "RUNSTATE_STR", "RUNNING"))
+    assert r.titles == [NEW_RUN, "PEARL: Run 10 restarted"] and r.cards[-1].text == "Run ten at 100K"
 
 
 async def test_a_run_from_1_3_0rc_retitled_and_rebegun_gets_a_restart_card():

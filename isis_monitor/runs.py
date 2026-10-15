@@ -113,15 +113,15 @@ class RunTracker:
     """One instrument's runs and experiments, from its DAE's PVs.
 
     `call_later(seconds, callback)` schedules the settle timer (by default on
-    the running loop); `log_prefix` marks its decisions in the log.
+    the running loop).
     """
 
     def __init__(self, instrument: InstrumentConfig, listener: Optional[RunListener] = None,
-                 call_later: Optional[Callable] = None, log_prefix: str = ""):
+                 call_later: Optional[Callable] = None):
         self.instrument = instrument
         self.listener = listener
         self._call_later = call_later
-        self._log = f"{log_prefix}{instrument.name}"
+        self._log = instrument.name
         # Saved across restarts
         self.run_number = ""  # as last seen: the current run's, or the next one's
         self.run: Optional[RunInfo] = None
@@ -184,11 +184,12 @@ class RunTracker:
         if run and run.number != self.run_number and self.last_completed != run.number:
             self._end_unseen(now)
         elif run and run.number == self.run_number:  # what was re-sent meanwhile is this run's
-            # A STARTTIME that changed under the same number is a re-begin;
-            # checked first, as the counts re-sent are then the new attempt's.
+            # A STARTTIME that changed under the same number is a re-begin
+            # (under the title re-sent); checked before the counts, which are
+            # then the new attempt's.
+            run.title = self.title or run.title
             if run.start_text and self.start_text and self.start_text != run.start_text:
                 self._rebegin(now)
-            run.title = self.title or run.title
             if self.counts is not None and self.credited():
                 run.last_counts = self.counts
         self._maybe_start(now)

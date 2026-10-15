@@ -9,7 +9,7 @@ own versions and changelog; each release here notes the version its
 ## [Unreleased]
 
 - Runs are detected by run number (`DAE:RUNNUMBER`), as the 1.3.0rc releases did in shadow, instead of by their title changing or their counts resetting. So retitling a run, or setting the next run's title before it begins, no longer sends a new-run card or counts as a run (SETUP retitles sent cards before), and an abort and re-begin under the same number isn't another run. The new-run card shows the run number, and a run begun again with a new title (e.g. a furnace's next temperature) gets a "Run … restarted" card. A run the daemon only saw end (after a reconnect, say) is recorded without a card.
-- Stalls are only checked while a run is under way in RUNNING or VETOING; the guess that a run at its target had probably ended is gone.
+- Stalls are only checked while a run is under way in RUNNING or VETOING and has collected something (a muon instrument's µA·h stay 0); the guess that a run at its target had probably ended is gone.
 - Upgrading from 1.3.0rc: each instrument's saved state is carried over (the shadow's becomes the live one), so nothing resets. The `[shadow]` log lines are gone; run decisions are logged without the prefix.
 - The `push_site` submodule points at push site v1.1.4, which pushes MCR news and a beam coming back on with high urgency, so an idle phone shows them straight away.
 - The shadow run detection makes a run the new experiment's when the RB number changes within 30s of its begin, by its STARTTIME, while it's under way (it checked for no counts yet, which with beam on there almost always are), and records a run first seen ending even when the DAE sends SETUP before the next run number.

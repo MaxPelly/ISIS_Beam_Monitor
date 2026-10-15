@@ -129,7 +129,7 @@ class InstrumentTracker:
             async def handler(update: dict, time_now: datetime) -> None:
                 seen = (self.runs.run_number, self.runs.run_state)
                 handle(update, time_now)
-                if pv == counts_pv and self.runs.counts is not None and self.runs.credited():
+                if pv == counts_pv and "value" in update and self.runs.counts is not None and self.runs.credited():
                     self._counted(time_now)
                 if self.sink and (self.runs.run_number, self.runs.run_state) != seen:
                     self.sink.on_change()
@@ -238,7 +238,8 @@ class InstrumentTracker:
         runs, run = self.runs, self.runs.run
         if not run or run.number != runs.run_number or runs.last_completed == run.number:
             return
-        if runs.run_state not in COUNTING_RUN_STATES:
+        if runs.run_state not in COUNTING_RUN_STATES or run.last_counts <= 0:
+            # (Nothing ever collected, as on muon instruments, whose µA·h stay 0, isn't a stall.)
             self.reset_stall_clock()
             return
         baseline = None  # the latest sample at or before the window's start
@@ -293,7 +294,12 @@ class InstrumentTracker:
         older-format entry is logged and ignored."""
         name = self.instrument.name
         if isinstance(saved, dict) and saved.get("format") == 2 and "shadow" in saved:
-            saved = {**saved, "runs": saved["shadow"]}  # 1.3.0rc's: the shadow's state is now the live one
+            # 1.3.0rc's: the shadow's state is now the live one, with whether the
+            # run in progress has had its finishing card, which the shadow never sent.
+            runs = saved["shadow"]
+            if isinstance(runs, dict) and isinstance(runs.get("run"), dict) and not runs["run"].get("ended_at"):
+                runs = {**runs, "run": {**runs["run"], "end_notified": saved.get("end_notified") is True}}
+            saved = {**saved, "runs": runs}
         elif not isinstance(saved, dict) or saved.get("format") != SNAPSHOT_FORMAT:
             logger.warning(f"{name}: ignoring saved state from an older version")
             return
