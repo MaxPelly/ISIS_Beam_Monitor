@@ -101,21 +101,22 @@ async def test_unreadable_beam_current_is_unknown_not_off(mock_config, mock_chan
 # _handle_update — beam-current arm
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("values, cancel, sent", [
-    ([45.0], False, None),  # no change of power: no card
+@pytest.mark.parametrize("values, power, cancel, sent", [
+    ([45.0], "low", False, None),  # no change of power: no card
     # A confirmed change is sent only after the debounce window.
-    ([60.0], False, "low → medium"),
+    ([60.0], "medium", False, "low → medium"),
     # A change that reverts before the debounce window elapses is dropped entirely.
-    ([60.0, 10.0], False, None),
+    ([60.0, 10.0], "low", False, None),
     # cancel_all() (called on shutdown) must stop pending timers from firing.
-    ([60.0], True, None),
+    ([60.0], "medium", True, None),
 ])
-async def test_beam_changes_are_debounced(mock_config, mock_channels, values, cancel, sent):
+async def test_beam_changes_are_debounced(mock_config, mock_channels, values, power, cancel, sent):
     beam_channel, _ = mock_channels
     m = make_monitor(mock_config, mock_channels)
 
     # The first reading for a target is a startup card, sent with no debounce.
     await m._handle_update({"pv": TS1_PV, "value": "10.0"})
+    assert (m.beams["TS1"].current, m.beams["TS1"].power) == (10.0, "low")
     (startup,) = [c.args[0] for c in beam_channel.broadcast.call_args_list]
     assert "online" in startup.title and startup.title.endswith("TS1 is low") and startup.beam == "TS1"
     beam_channel.broadcast.reset_mock()
@@ -123,13 +124,14 @@ async def test_beam_changes_are_debounced(mock_config, mock_channels, values, ca
     for value in values:
         await m._handle_update({"pv": TS1_PV, "value": str(value)})
     # The state updates immediately, but no card yet.
-    assert (m.beams["TS1"].current, m.beams["TS1"].power) == (values[-1], m._get_power_label(values[-1], TS1))
+    assert (m.beams["TS1"].current, m.beams["TS1"].power) == (values[-1], power)
     beam_channel.broadcast.assert_not_called()
     if cancel:
         m.change_aggregator.cancel_all()
-        assert m.change_aggregator._pending == {}
         await m.change_aggregator._flush("TS1")  # nothing pending: nothing to send
     await asyncio.sleep(SETTLE)
+    if cancel:
+        assert m.change_aggregator._pending == {}  # no timer added work back
 
     if sent is None:
         beam_channel.broadcast.assert_not_called()
@@ -668,11 +670,13 @@ async def test_instlist_sets_the_beam_target_and_resubscribes_a_new_prefix(mock_
 
 @pytest.mark.parametrize("instrument, lists, target, warned, not_logged", [
     # Not on a target station: [PVS] instrument_target, with one warning.
-    ({}, [[("PEARL", "IN:PEARL:", "MISC")]] * 2, "TS2", "PEARL: CS:INSTLIST doesn't put it on TS1, TS2 or MUON", None),
-    ({"beam_target": "TS1"}, [[("PEARL", "IN:PEARL:", "MUON")]], "TS1", None, "CS:INSTLIST"),  # configured wins
+    pytest.param({}, [[("PEARL", "IN:PEARL:", "MISC")]] * 2, "TS2",
+                 "PEARL: CS:INSTLIST doesn't put it on TS1, TS2 or MUON", None, id="not-on-a-station"),
+    pytest.param({"beam_target": "TS1"}, [[("PEARL", "IN:PEARL:", "MUON")]], "TS1", None, "CS:INSTLIST",
+                 id="configured-wins"),
     # Unlisted: keeps its PVs, with one warning, and not Muons from the older list.
-    ({}, [[("PEARL", "IN:PEARL:", "MUON")]] + [[("WISH", "IN:WISH:", "TS2")]] * 2, "TS2",
-     "PEARL isn't in CS:INSTLIST", "MUON"),
+    pytest.param({}, [[("PEARL", "IN:PEARL:", "MUON")]] + [[("WISH", "IN:WISH:", "TS2")]] * 2, "TS2",
+                 "PEARL isn't in CS:INSTLIST", "MUON", id="unlisted"),
 ])
 async def test_instlist_beam_target_fallbacks(mock_config, mock_channels, caplog, instrument, lists, target, warned,
                                               not_logged):

@@ -139,6 +139,8 @@ async def test_recorded_sequences(name, titles, completed):
     r = await replay(name)
     assert r.titles == titles
     assert r.completions == completed
+    if name == "larmor_abort":  # the restart card names the run and its new title
+        assert (r.cards[0].text, dict(r.cards[0].facts)) == ("{RT1_Standard}_TRANS", {"Run number": "101373"})
 
 
 @pytest.mark.parametrize("next_runs, facts", [
@@ -173,16 +175,16 @@ async def test_an_abort_and_rebegin_under_the_same_number(retitled):
     await r((2401, "RUNSTATE_STR", "ABORTING"), (2402, "RUNSTATE_STR", "SETUP"),
             (2460, "WDTITLE", "Run ten at 100K" if retitled else "Run ten"),
             (2500, "RUNSTATE_STR", "BEGINNING"), (2500, "TOTALUAMPS", 0.0), (2505, "RUNSTATE_STR", "RUNNING"),
-            (2505, "STARTTIME", "Tue 13-Oct-2026 10:41:45"))
+            (2505, "STARTTIME", "Tue 13-Oct-2026 10:41:40"))  # 2500s: before it's seen
     restarted = ["PEARL: Run 10 restarted"] if retitled else []
     assert r.titles == [NEW_RUN, "PEARL: Run about to finish", *restarted]
     if retitled:  # the card names the run and its new title, at its STARTTIME
         card = r.cards[-1]
         assert (card.text, dict(card.facts)) == ("Run ten at 100K", {"Run number": "10"})
-        assert card.timestamp == T0 + timedelta(seconds=2505)
+        assert card.timestamp == T0 + timedelta(seconds=2500)
     assert r.completions == []
     run = r.tracker.runs.run
-    assert run.started_at == T0 + timedelta(seconds=2505) and run.last_counts == 0.0
+    assert run.started_at == T0 + timedelta(seconds=2500) and run.last_counts == 0.0
 
     await r((3000, "TOTALUAMPS", 26.0))
     await r(*END, offset=3600)

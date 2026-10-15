@@ -193,7 +193,8 @@ STARTS = {"running": running, "fresh": Replay, "restarted": restarted}
     # PVWS sometimes delivers an update twice, back to back.
     pytest.param("running", [u for u in RUNNING[1:4] + NEXT_RUN for _ in (1, 2)],
                  [("done", "00010", 8.0), ("start", "00011", "00010")], {}, id="duplicates"),
-    # Connected mid-run (no card) is the running() start; seen between runs first, it's announced.
+    # Connected mid-run: started silently (no card); seen between runs first, it's announced.
+    pytest.param("fresh", RUNNING, [("start", "00010", "silent")], {}, id="first start seen mid-run"),
     pytest.param("fresh", [(0, "RUNNUMBER", "00011"), (0, "RUNSTATE_STR", "SETUP"), (5, "RUNSTATE_STR", "RUNNING")],
                  [("start", "00011", None)], {}, id="first start seen between runs"),
     # Connected between runs: the STARTTIME seen is the last run's, so the next
@@ -251,11 +252,6 @@ STARTS = {"running": running, "fresh": Replay, "restarted": restarted}
                              (110, "TOTALUAMPS", 0.0), (120, "TOTALUAMPS", 0.6)],
                  [("done", "00010", None), ("start", "00011", "00010")],
                  {"run.start_text": "Tue 13-Oct-2026 10:01:00"}, id="a new run's start time re-sent first"),
-    # A title re-sent while replaying isn't given to the old run.
-    pytest.param("running", [reconnect(), (100, "WDTITLE", "Run eleven"), (100, "RUNSTATE_STR", "RUNNING"),
-                             (100, "RUNNUMBER", "00011")],
-                 [("done", "00010", None), ("start", "00011", "00010")],
-                 {"listener.previous.title": "Run ten", "run.title": "Run eleven"}, id="a title re-sent"),
     # A run whose final is unknown makes the experiment "at least".
     pytest.param("running", [reconnect(), (100, "RUNSTATE_STR", "RUNNING"), (100, "RUNNUMBER", "00011")],
                  [("done", "00010", None), ("start", "00011", "00010")], {"exp_partial": True, "exp_runs": 1},
@@ -387,12 +383,20 @@ def test_constructed_sequences(start, updates, decisions, state):
     assert state_of(r.tracker, state) == state
 
 
+def test_a_title_re_sent_while_replaying_is_not_given_to_the_old_run():
+    r = running()(reconnect(), (100, "WDTITLE", "Run eleven"), (100, "RUNSTATE_STR", "RUNNING"),
+                  (100, "RUNNUMBER", "00011")).settle()
+    assert r.log[1:] == [("done", "00010", None), ("start", "00011", "00010")]
+    assert (r.decisions.previous.title, r.tracker.run.title) == ("Run ten", "Run eleven")
+
+
 def test_resubscribe_replays():
     # Counts while replaying aren't credited.
     r = running()(reconnect(50), (50, "TOTALUAMPS", 0.0))
     assert r.tracker.run.last_counts == 8.0 and r.tracker.counts == 0.0
 
     # A replay that never comes times out...
+    r = running()(reconnect(50))
     r.at(50 + REPLAY_TIMEOUT.total_seconds())
     assert r.tracker.replaying  # without the run number: what's credited and started depends on it
     r((61, "RUNNUMBER", "00010"))
