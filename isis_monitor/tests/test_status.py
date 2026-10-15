@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from isis_monitor.config import InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.instrument import InstrumentTracker
+from isis_monitor.runs import RunInfo
 from isis_monitor.status import HISTORY_POINTS, MAX_INSTRUMENTS, MAX_TITLE, build
 from isis_monitor.tests.helpers import fake_channel
 
@@ -18,6 +19,13 @@ def state_with(*instruments):
 
 def tracker(name="PEARL", **config):
     return InstrumentTracker(InstrumentConfig(name, 130.0, "TS1", **config), fake_channel(), lambda b: "high", 15)
+
+
+def in_run(t, title="Run 1", counts=-1.0, number="00127921", state="RUNNING"):
+    """`t` with run `number` under way."""
+    t.runs.run = RunInfo(number, title, NOW, None, 0, 130.0, 0, last_counts=counts)
+    t.runs.run_number, t.runs.run_state = number, state
+    return t
 
 
 def test_beams_report_live_values_and_unknown_ones_as_unknown():
@@ -46,13 +54,12 @@ def test_history_is_24h_in_10_minute_bins_on_fixed_boundaries():
 
 
 def test_instruments_come_from_the_trackers():
-    pearl = tracker(auto_counts=True)
-    pearl.state.run_name, pearl.state.current_counts, pearl.state.rb_number = "x" * 300, 65.256, "2610403"
-    pearl.runs.run_number, pearl.runs.run_state = "00127921", "RUNNING"  # as the PV pads it
+    pearl = in_run(tracker(auto_counts=True), "x" * 300, 65.256, "00127921")  # as the PV pads it
+    pearl.runs.rb = "2610403"
     wish = tracker("WISH")
     (p, w) = build(state_with(pearl, wish), {}, 60, NOW)["instruments"]
     assert p == {"name": "PEARL", "beam": "TS1", "run_number": "127921", "run_state": "RUNNING",
-                 "title": "x" * MAX_TITLE, "started_at": None, "counts": 65.26, "target": 130.0, "auto": True,
+                 "title": "x" * MAX_TITLE, "started_at": "2026-10-13T12:00:00+00:00", "counts": 65.26, "target": 130.0, "auto": True,
                  "rb": "2610403"}
     assert w["counts"] is None  # nothing read yet
 
@@ -77,7 +84,7 @@ def test_a_long_status_stays_well_under_the_push_sites_limit():
     """20 instruments with the longest titles and news; the site takes up to 64 KB."""
     trackers = [tracker(f"INSTRUMENT{n:02d}") for n in range(20)]
     for t in trackers:
-        t.state.run_name = "é" * 300
+        in_run(t, "é" * 300, 1234.5678)
     state = state_with(*trackers)
     state.update_mcr_news("é" * 1000)
     for name in state.history:
@@ -213,9 +220,8 @@ async def test_an_unencodable_status_doesnt_stop_the_publisher(caplog):
 def test_every_string_fits_the_push_sites_limits():
     """A longer one would make the site refuse the whole status."""
     long = "x" * 2000
-    pearl = tracker("P" * 40)
-    pearl.state.run_name, pearl.state.rb_number, pearl.beam_target = long + "\ud800", long, long
-    pearl.runs.run_number, pearl.runs.run_state = long, long
+    pearl = in_run(tracker("P" * 40), long + "\ud800", number=long, state=long)
+    pearl.runs.rb, pearl.beam_target = long, long
     state = state_with(pearl)
     state.mcr_news = long
     status = build(state, {}, 60, NOW)
@@ -227,17 +233,15 @@ def test_every_string_fits_the_push_sites_limits():
 
 def test_counts_are_unknown_while_the_run_state_is():
     """E.g. the instrument's IOC or the gateway is down: not the last counts as if live."""
-    pearl = tracker()
-    pearl.state.current_counts = 50.0
-    pearl.runs.run_state = ""
+    pearl = in_run(tracker(), counts=50.0, state="")
     assert build(state_with(pearl), {}, 60, NOW)["instruments"][0]["counts"] is None
 
 
 async def test_run_state_and_number_changes_poke_the_publisher():
     sink = MagicMock()
     pearl = InstrumentTracker(InstrumentConfig("PEARL", 130.0, "TS1"), fake_channel(), lambda b: "high", 15, sink=sink)
-    for text in ("RUNNING", "RUNNING", "ENDING"):
-        pearl.handle_run_state(text)
-    for text in ("00010", "10", "00011"):
-        pearl.handle_run_number(text)
+    handlers = pearl.pv_handlers()
+    for pv, text in (("RUNSTATE_STR", "SETUP"), ("RUNSTATE_STR", "SETUP"), ("RUNNUMBER", "00010"),
+                     ("RUNNUMBER", "00010"), ("RUNSTATE_STR", "PROCESSING"), ("RUNNUMBER", "00011")):
+        await handlers[f"IN:PEARL:DAE:{pv}"]({"text": text}, NOW)
     assert sink.on_change.call_count == 4

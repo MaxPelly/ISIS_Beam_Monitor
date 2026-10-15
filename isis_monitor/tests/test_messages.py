@@ -14,6 +14,7 @@ from isis_monitor.messages import (
     get_timezone,
     mcr_news,
     run_finishing,
+    run_restarted,
     run_started,
     set_timezone,
     startup_status,
@@ -105,7 +106,7 @@ def test_to_summary_is_one_line_with_details():
 # Typical arguments for each builder; tests override what they check.
 CHANGE = dict(prev_state="low", new_state="high", beam_val=150.0, prev_val=20.0, high_threshold=140.0,
               time_in_prev_state=timedelta(hours=1), time_now=DT)
-STARTED = dict(new_run_name="Run 2", prev_run_name="Run 1", prev_duration=timedelta(hours=1), prev_counts=1000.0,
+STARTED = dict(run_number="12346", new_run_name="Run 2", prev_run_name="Run 1", prev_duration=timedelta(hours=1), prev_counts=1000.0,
                time_now=DT, target=130.0)
 FINISHING = dict(run_name="Run 1", counts_collected=150.0, counts_target=130.0, rate_per_second=0.5,
                  instrument_state="high", time_now=DT)
@@ -179,15 +180,25 @@ def test_run_started_builder():
     assert n.severity == Severity.INFO
     assert n.emoji == "🚀"
     assert n.facts == [
+        ("Run number", "12346"),
         ("Previous run", "Run 12345"),
         ("Duration", "2h 0m"),
         ("Final total collected", "1000.0 µA·h"),
         ("Target", "128 µA·h (auto, from 5 runs)"),
     ]
-    # Negative counts mean no reading ever arrived for the previous run.
+    # Negative counts: the previous run's final total isn't known.
     n = run_started("PEARL", **kw(STARTED, prev_counts=-1.0))
     assert ("Final total collected", "unknown") in n.facts
     assert ("Target", "130 µA·h") in n.facts
+    # No previous run known (e.g. runs were missed): no report on it.
+    n = run_started("PEARL", **kw(STARTED, prev_run_name=None, prev_duration=None))
+    assert n.facts == [("Run number", "12346"), ("Target", "130 µA·h")]
+
+
+def test_run_restarted_builder():
+    n = run_restarted("POLARIS", run_number="167102", run_name="MgTiO3 ... 1425K", time_now=DT)
+    assert (n.title, n.text, n.emoji, n.topic) == ("POLARIS: Run 167102 restarted", "MgTiO3 ... 1425K", "🚀", "POLARIS")
+    assert n.facts == [("Run number", "167102")] and n.severity == Severity.INFO
 
 
 def test_run_finishing_builder():

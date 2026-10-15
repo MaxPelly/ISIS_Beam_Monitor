@@ -20,6 +20,7 @@ from isis_monitor.config import DEFAULT_BEAMS, AppConfig, InstrumentConfig
 from isis_monitor.daemon_state import DaemonState
 from isis_monitor.instrument import InstrumentTracker
 from isis_monitor.ipc import IPCClient
+from isis_monitor.runs import RunInfo
 from isis_monitor.notifiers import DummyNotifier, TeamsNotifier, WebhookNotifier
 from isis_monitor.storage import SQLiteStateStore
 from isis_monitor.tests.helpers import FakePVWS, fake_channel, never_answers, serving, wait_until
@@ -187,10 +188,16 @@ async def test_install_signal_handlers_sets_stop_event():
 # build_channels
 # ---------------------------------------------------------------------------
 
-def _saved_instrument(inst: InstrumentConfig, **changes) -> dict:
-    """A snapshot entry for `inst`, as its tracker saves one, with `changes`."""
+def _saved_instrument(inst: InstrumentConfig, rb: str = "", **run) -> dict:
+    """A snapshot entry for `inst`, as its tracker saves one, mid-run if `run`
+    gives RunInfo fields (number, title, started_at, ...)."""
     tracker = InstrumentTracker(inst, fake_channel(), lambda _target: "unknown", stall_minutes=10)
-    return {**json.loads(json.dumps(tracker.to_snapshot())), **changes}
+    if run:
+        tracker.runs.run = RunInfo(**{"start_text": None, "exp_gen": 0, "target": inst.notify_counts,
+                                      "auto_runs": 0, **run})
+        tracker.runs.run_number = run["number"]
+    tracker.runs.rb = rb
+    return json.loads(json.dumps(tracker.to_snapshot()))
 
 
 def _config(tmp_path, **overrides) -> AppConfig:
@@ -253,7 +260,7 @@ TEAMS_ROUTES = [
 def _card(kind):
     now = datetime.now(timezone.utc)
     hour = timedelta(hours=1)
-    run = dict(new_run_name="run", prev_run_name="old", prev_duration=hour, prev_counts=5, time_now=now, target=10)
+    run = dict(run_number="1", new_run_name="run", prev_run_name="old", prev_duration=hour, prev_counts=5, time_now=now, target=10)
     return {
         "beam_change": lambda: messages.beam_change(
             "TS1", prev_state="high", new_state="off", beam_val=0, prev_val=150, high_threshold=140,
@@ -442,7 +449,7 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
     ts = datetime.now(timezone.utc) - timedelta(minutes=5)
     store = SQLiteStateStore(tmp_path / "state.db")
     pearl = InstrumentConfig("PEARL", 130.0, "TS1")
-    saved = _saved_instrument(pearl, run_name="Run 30", run_started_at=ts.isoformat(), counts=12.5, rb_number="A")
+    saved = _saved_instrument(pearl, rb="A", number="00030", title="Run 30", begun_title="Run 30", started_at=ts, last_counts=12.5)
     store.write_samples([(ts, "TS2", 7.0, "low")])
     store.upsert_snapshot("daemon_state", json.dumps({"mcr_news": "old news", "instruments": {"PEARL": saved}}))
     store.commit()
@@ -460,7 +467,9 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
 
     assert snap["mcr_news"] == "old news"
     assert mcr_cls.call_args.kwargs["old_news"] == "old news"
-    assert snap["instruments"] == {"PEARL": {**saved, "beam_target": "TS1", "run_number": "", "run_state": ""}}
+    assert snap["instruments"] == {"PEARL": {
+        **saved, "beam_target": "TS1", "run_number": "30", "run_state": "", "run_name": "Run 30",
+        "run_started_at": ts.isoformat(), "counts": 12.5, "target": 130.0, "auto_runs": 0, "rb_number": "A"}}
     assert history["TS2"][0]["current"] == 7.0
     assert set(reconnect) == {"beam", "mcr"}
 
@@ -1052,11 +1061,11 @@ async def test_run_daemon_stops_other_loops_when_one_crashes(tmp_path):
 
 
 async def test_run_daemon_seeds_trackers_from_the_restored_snapshot(tmp_path):
-    started = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    started = datetime.now(timezone.utc) - timedelta(hours=2)
     store = SQLiteStateStore(tmp_path / "state.db")
     pearl = InstrumentConfig("PEARL", 130.0, "TS1")
     store.upsert_snapshot("daemon_state", json.dumps({"instruments": {"PEARL": _saved_instrument(
-        pearl, run_name="Run 9", run_started_at=started, counts=150.0, end_notified=True,
+        pearl, number="00009", title="Run 9", started_at=started, last_counts=150.0, end_notified=True,
     )}}))
     store.commit()
     store.close()
@@ -1067,12 +1076,12 @@ async def test_run_daemon_seeds_trackers_from_the_restored_snapshot(tmp_path):
 
     def spy(self, saved):
         real_restore(self, saved)
-        seeded.update({name: vars(t.state).copy() for name, t in self.instruments.items()})
+        seeded.update({name: t.runs.run for name, t in self.instruments.items()})
 
     with patch.object(main.BeamMonitor, "restore_instruments", spy):
         async with daemon(config):
             pass
-    assert seeded["PEARL"]["run_name"] == "Run 9" and seeded["PEARL"]["end_notified"] is True
+    assert (seeded["PEARL"].title, seeded["PEARL"].started_at, seeded["PEARL"].end_notified) == ("Run 9", started, True)
 
 
 async def test_config_save_is_refused_once_shutdown_has_started(tmp_path):

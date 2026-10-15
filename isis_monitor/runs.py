@@ -97,13 +97,14 @@ class RunInfo:
     last_counts: float = -1.0  # µA·h credited to it; -1 = none read
     ended_at: Optional[datetime] = None  # when its number moved on (or a later start found it gone)
     final_known: bool = False  # whether last_counts is its final total
+    begun_title: str = ""  # its title when it (last) began, to tell a retitled re-begin
 
 
 class RunListener(Protocol):
-    """What RunTracker's decisions are acted on by (None in shadow mode)."""
+    """What RunTracker's decisions are acted on by: InstrumentTracker, which sends their cards."""
     def run_started(self, run: RunInfo, previous: Optional[RunInfo], silent: bool) -> None: ...
     def run_completed(self, run: RunInfo) -> None: ...
-    def run_rebegun(self, run: RunInfo) -> None: ...
+    def run_rebegun(self, run: RunInfo, previous_title: str) -> None: ...
     def experiment_finished(self, rb: str, runs: int, uah: float, since: datetime, partial: bool,
                             now: datetime) -> None: ...
 
@@ -274,6 +275,7 @@ class RunTracker:
         self.title = title
         if not self.replaying and self.run and self.run.number == self.run_number:
             self.run.title = title  # while replaying, it may be the next run's: see _seen
+            self.run.begun_title = self.run.begun_title or title  # it began before any title came
 
     def credited(self) -> bool:
         """Whether counts now belong to the run (see on_counts)."""
@@ -416,7 +418,7 @@ class RunTracker:
             credit = False
         self.run = RunInfo(
             self.run_number, self.title, started_at, start_text, self.exp_gen, target, auto_runs,
-            last_counts=self.counts if credit else -1.0,
+            last_counts=self.counts if credit else -1.0, begun_title=self.title,
         )
         silent = (previous is None and not self.restored and not self._seen_idle) or adopted
         if previous and not _follows(previous.number, self.run_number):
@@ -450,9 +452,10 @@ class RunTracker:
         run.start_text = self.start_text
         run.started_at = (parse_start_time(self.start_text, now) if self.start_text else None) or now
         run.last_counts, run.end_notified = 0.0, False
+        previous_title, run.begun_title = run.begun_title or run.title, run.title
         logger.info(f"{self._log}: run {run.number} begun again (an abort)")
         if self.listener:
-            self.listener.run_rebegun(run)
+            self.listener.run_rebegun(run, previous_title)
 
     # --- Persistence -----------------------------------------------------
 
@@ -481,7 +484,8 @@ class RunTracker:
                 if not isinstance(run, dict):
                     raise TypeError("run isn't an object")
                 run = RunInfo(**{**run, "started_at": _time(run["started_at"]),
-                                 "ended_at": _time(run["ended_at"]) if run["ended_at"] else None})
+                                 "ended_at": _time(run["ended_at"]) if run["ended_at"] else None,
+                                 "begun_title": run.get("begun_title") or run.get("title")})
                 _check_run(run)
             values = (
                 _of(saved, "run_number", str), _of(saved, "last_completed", str), _of(saved, "rb", str),
@@ -531,7 +535,7 @@ def _time(text: Any) -> datetime:
 
 
 def _check_run(run: RunInfo) -> None:
-    for name, kind in (("number", str), ("title", str), ("exp_gen", int), ("auto_runs", int),
+    for name, kind in (("number", str), ("title", str), ("begun_title", str), ("exp_gen", int), ("auto_runs", int),
                        ("end_notified", bool), ("final_known", bool)):
         _of(asdict(run), name, kind)
     for name in ("target", "last_counts"):

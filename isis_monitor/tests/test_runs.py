@@ -24,7 +24,7 @@ class Decisions:
     def run_completed(self, run):
         self.log.append(("done", run.number, round(run.last_counts, 3) if run.final_known else None))
 
-    def run_rebegun(self, run):
+    def run_rebegun(self, run, previous_title):
         self.log.append(("rebegin", run.number))
 
     def experiment_finished(self, rb, runs, uah, since, partial, now):

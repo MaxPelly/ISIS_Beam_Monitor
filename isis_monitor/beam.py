@@ -225,7 +225,7 @@ class BeamMonitor:
                 old += tracker.pv_handlers()
                 tracker.instrument = replace(tracker.instrument, pv_prefix=prefix)
                 if self._current_ws is not None:  # otherwise the connection will resubscribe it
-                    tracker.resubscribed()  # the new PVs' values come in as on a reconnect
+                    tracker.resubscribed(datetime.now(timezone.utc))  # the new PVs' values come in as on a reconnect
                 new += tracker.pv_handlers()
         return old, new
 
@@ -416,7 +416,7 @@ class BeamMonitor:
                     backoff, last_kind, failed_attempts, down_since = 0.0, "", 0, None
                     self._set_health("connected")
                     for tracker in self.instruments.values():
-                        tracker.resubscribed()
+                        tracker.resubscribed(datetime.now(timezone.utc))
                     await ws.send(json.dumps({"type": "subscribe", "pvs": list(self.routes)}))
                     async for raw in ws:
                         await self._handle_message(raw)
