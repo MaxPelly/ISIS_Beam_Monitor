@@ -139,12 +139,8 @@ async def test_recorded_sequences(name, titles, completed):
     r = await replay(name)
     assert r.titles == titles
     assert r.completions == completed
-
-
-async def test_a_retitled_rebegin_card_names_the_run_and_its_new_title():
-    (card,) = (await replay("larmor_abort")).cards
-    assert (card.text, dict(card.facts)) == ("{RT1_Standard}_TRANS", {"Run number": "101373"})
-    assert card.timestamp == datetime(2026, 10, 13, 10, 39, 19, tzinfo=timezone.utc)  # its STARTTIME
+    if name == "larmor_abort":  # the restart card names the run and its new title
+        assert (r.cards[0].text, dict(r.cards[0].facts)) == ("{RT1_Standard}_TRANS", {"Run number": "101373"})
 
 
 @pytest.mark.parametrize("next_runs, facts", [
@@ -179,14 +175,16 @@ async def test_an_abort_and_rebegin_under_the_same_number(retitled):
     await r((2401, "RUNSTATE_STR", "ABORTING"), (2402, "RUNSTATE_STR", "SETUP"),
             (2460, "WDTITLE", "Run ten at 100K" if retitled else "Run ten"),
             (2500, "RUNSTATE_STR", "BEGINNING"), (2500, "TOTALUAMPS", 0.0), (2505, "RUNSTATE_STR", "RUNNING"),
-            (2505, "STARTTIME", "Tue 13-Oct-2026 10:41:45"))
+            (2505, "STARTTIME", "Tue 13-Oct-2026 10:41:40"))  # 2500s: before it's seen
     restarted = ["PEARL: Run 10 restarted"] if retitled else []
     assert r.titles == [NEW_RUN, "PEARL: Run about to finish", *restarted]
-    if retitled:
-        assert r.cards[-1].text == "Run ten at 100K"
+    if retitled:  # the card names the run and its new title, at its STARTTIME
+        card = r.cards[-1]
+        assert (card.text, dict(card.facts)) == ("Run ten at 100K", {"Run number": "10"})
+        assert card.timestamp == T0 + timedelta(seconds=2500)
     assert r.completions == []
     run = r.tracker.runs.run
-    assert run.started_at == T0 + timedelta(seconds=2505) and run.last_counts == 0.0
+    assert run.started_at == T0 + timedelta(seconds=2500) and run.last_counts == 0.0
 
     await r((3000, "TOTALUAMPS", 26.0))
     await r(*END, offset=3600)
@@ -271,38 +269,29 @@ async def test_the_finishing_card_is_sent_ahead_of_the_target_on_its_eta():
     assert len(r.cards) == 1
 
 
-@pytest.mark.parametrize("readings", [
-    [(0, 90.0), (2, 99.0)],  # too little history to trust the rate
-    [(0, 0.0), (5, 5.0)],  # rising, but ETA 95 minutes
-    [(0, 90.0), (5, 90.0)],  # not rising at all
+@pytest.mark.parametrize("readings, last, warning", [
+    ([(0, 90.0), (2, 99.0)], (6, 100.5), 15),  # too little history to trust the rate
+    ([(0, 0.0), (5, 5.0)], (6, 100.5), 15),  # rising, but ETA 95 minutes
+    ([(0, 90.0), (5, 90.0)], (6, 100.5), 15),  # not rising at all
+    ([(0, 90.0), (5, 99.0), (6, 100.0)], (7, 100.1), 0),  # finish_warning_minutes = 0: only past the target
 ])
-async def test_the_finishing_card_waits_for_the_target_without_a_near_eta(readings):
-    r = await under_way(target=100.0)
+async def test_the_finishing_card_waits_for_the_target_without_a_near_eta(readings, last, warning):
+    r = await under_way(target=100.0, finish_warning_minutes=warning)
     await r.counts(*readings)
     assert r.titles == []
-    await r.counts((6, 100.5))
+    await r.counts(last)
     assert r.titles == ["PEARL: Run about to finish"]
 
 
-async def test_the_eta_rate_fit_is_rate_limited():
+async def test_the_eta_rate_fit():
+    t = T0
+    assert _fit_rate([]) == _fit_rate([(t, 10.0)]) == _fit_rate([(t, 1.0), (t, 5.0)]) == 0.0
+    assert _fit_rate([(t, 0.0), (t + timedelta(seconds=10), 100.0)]) == pytest.approx(10.0)
+    # It's rate-limited.
     r = await under_way()
     with patch("isis_monitor.instrument._fit_rate", wraps=_fit_rate) as fit:
         await r.counts(*[(i / 12, i * 0.1) for i in range(12 * 6)])  # every 5s for 6 minutes
     assert fit.call_count == 6  # every 30s once there are 3 minutes of history
-
-
-async def test_finish_warning_minutes_zero_only_sends_at_the_target():
-    r = await under_way(target=100.0, finish_warning_minutes=0)
-    await r.counts((0, 90.0), (5, 99.0), (6, 100.0))
-    assert r.titles == []
-    await r.counts((7, 100.1))
-    assert r.titles == ["PEARL: Run about to finish"]
-
-
-def test_fit_rate():
-    t = T0
-    assert _fit_rate([]) == _fit_rate([(t, 10.0)]) == _fit_rate([(t, 1.0), (t, 5.0)]) == 0.0
-    assert _fit_rate([(t, 0.0), (t + timedelta(seconds=10), 100.0)]) == pytest.approx(10.0)
 
 
 @pytest.mark.parametrize("totals, expected", [
@@ -362,20 +351,17 @@ async def test_a_stall_is_warned_of_while_the_instruments_beam_is_on(power, warn
         assert dict(r.cards[0].facts) == {"Run number": "10"}
 
 
-async def test_no_stall_without_enough_history():
-    r = await under_way()
-    await r.counts((0, 100.0))
-    await r.check(120)
-    await r.check(300)
-    assert r.titles == [] and r.tracker.stalled_since is None
-
-
-async def test_counts_updated_in_batches_arent_a_stall():
-    """Movement is judged over STALL_CHECK_WINDOW, not since the last check."""
-    r = await under_way()
-    await r.counts((0, 50.0), (2, 100.0))  # at 60s and 180s
-    await r.check(420)
-    await r.check(479)
+@pytest.mark.parametrize("first, readings, checks", [
+    (5.0, [(0, 100.0)], (120, 300)),  # not enough history
+    # Counts updated in batches: movement is judged over STALL_CHECK_WINDOW, not since the last check.
+    (5.0, [(0, 50.0), (2, 100.0)], (420, 479)),  # at 60s and 180s
+    (0.0, [(0, 0.0), (5, 0.0)], (420, 600)),  # nothing collected yet, e.g. a muon instrument, whose µA·h stay 0
+])
+async def test_not_a_stall(first, readings, checks):
+    r = (await Live()(*[u for u in RUNNING if u[1] != "TOTALUAMPS"], (0, "TOTALUAMPS", first))).settle()
+    await r.counts(*readings)
+    for t in checks:
+        await r.check(t)
     assert r.titles == [] and r.tracker.stalled_since is None
 
 
@@ -397,9 +383,15 @@ async def test_stalls_are_only_checked_while_a_run_is_counting(updates, checked)
     assert r.titles == (["PEARL: Data collection stalled"] if checked else [])
 
 
-@pytest.mark.parametrize("gap", [None, "paused", "disconnected"])
-async def test_a_resumed_card_follows_a_stall_warning(gap):
-    """Pausing (e.g. to fix it) or a PVWS drop doesn't lose the stall's start."""
+@pytest.mark.parametrize("gap, resumed, after", [
+    (None, 900, "8m"),
+    # Pausing (e.g. to fix it) or a PVWS drop doesn't lose the stall's start.
+    ("paused", 900, "8m"),
+    ("disconnected", 900, "8m"),
+    # Flat counts send no updates, so the last sample before the window is kept as the baseline.
+    (None, 1260, "14m"),  # longer than the sample window
+])
+async def test_a_resumed_card_follows_a_stall_warning(gap, resumed, after):
     r = await stalled()
     await r.check(480)
     if gap == "paused":
@@ -408,30 +400,11 @@ async def test_a_resumed_card_follows_a_stall_warning(gap):
         await r((800, "RUNSTATE_STR", "RUNNING"))
     elif gap == "disconnected":
         r.at(700).tracker.reset_stall_clock()  # as BeamMonitor does while PVWS is down
-    await r((900, "TOTALUAMPS", 101.0))
-    await r.check(900)
-    await r.check(960)
+    await r((resumed, "TOTALUAMPS", 101.0))
+    await r.check(resumed)
+    await r.check(resumed + 60)
     assert r.titles == ["PEARL: Data collection stalled", "PEARL: Data collection resumed"]
-    assert r.cards[-1].text == "µA·h are being collected again, after 8m without."
-
-
-async def test_a_run_that_has_collected_nothing_isnt_warned_of():
-    """E.g. a muon instrument, whose µA·h stay 0."""
-    r = (await Live()(*[u for u in RUNNING if u[1] != "TOTALUAMPS"], (0, "TOTALUAMPS", 0.0))).settle()
-    await r.counts((0, 0.0), (5, 0.0))
-    await r.check(420)
-    await r.check(600)
-    assert r.titles == []
-
-
-async def test_a_resumed_card_follows_even_a_stall_longer_than_the_sample_window():
-    """Flat counts send no updates, so the last sample before the window is kept as the baseline."""
-    r = await stalled()
-    await r.check(480)
-    await r((1260, "TOTALUAMPS", 101.0))
-    await r.check(1260)
-    assert r.titles == ["PEARL: Data collection stalled", "PEARL: Data collection resumed"]
-    assert r.cards[-1].text == "µA·h are being collected again, after 14m without."
+    assert r.cards[-1].text == f"µA·h are being collected again, after {after} without."
 
 
 async def test_a_new_run_after_a_stall_warning_sends_no_resumed_card():

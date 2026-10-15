@@ -59,45 +59,16 @@ def make_monitor(mock_config, mock_channels, counts_target=100, sink=None):
 
 
 # ---------------------------------------------------------------------------
-# _parse_current
+# _parse_current, _get_power_label
 # ---------------------------------------------------------------------------
 
-def test_parse_current(mock_config, mock_channels):
+def test_parse_current_and_power_labels(mock_config, mock_channels):
     m = make_monitor(mock_config, mock_channels)
     assert m._parse_current("123.4") == 123.4
     assert m._parse_current(0) == 0.0
     for junk in ("NaN", "nan", "inf", "bad_string", None):
         assert m._parse_current(junk) is None
 
-
-@pytest.mark.parametrize("junk", ["NaN", None, "bad_string"])
-async def test_unreadable_beam_current_is_ignored_not_off(mock_config, mock_channels, junk):
-    """E.g. PVWS's NaN before a PV has a value: no "beam off" card or sample."""
-    beam_channel, _ = mock_channels
-    m = make_monitor(mock_config, mock_channels)
-    await m._handle_update({"pv": TS1_PV, "value": junk})
-    beam_channel.broadcast.assert_not_called()
-    assert m.beams["TS1"].power == ""
-    await m._handle_update({"pv": TS1_PV, "value": "60.0"})
-    await m._handle_update({"pv": TS1_PV, "value": junk})
-    assert (m.beams["TS1"].power, m.beams["TS1"].current) == ("medium", 60.0)
-
-
-async def test_unreadable_beam_current_shows_as_unknown(mock_config, mock_channels):
-    """Unknown isn't sampled into the history, so a dead PV doesn't count as uptime."""
-    sink = MagicMock()
-    m = make_monitor(mock_config, mock_channels, sink=sink)
-    await m._handle_update({"pv": TS1_PV, "value": "60.0"})
-    await m._handle_update({"pv": TS1_PV, "value": "NaN"})
-    sink.update_beam_state.assert_called_with("TS1", 60.0, "unknown")
-
-
-# ---------------------------------------------------------------------------
-# _get_power_label
-# ---------------------------------------------------------------------------
-
-def test_get_power_label(mock_config, mock_channels):
-    m = make_monitor(mock_config, mock_channels)
     assert m._get_power_label(-5, TS1) == "off"
     assert m._get_power_label(0, TS1) == "off"
     assert m._get_power_label(20, TS1) == "low"
@@ -109,73 +80,64 @@ def test_get_power_label(mock_config, mock_channels):
     assert m._get_power_label(30, TS2) == "high"
 
 
+@pytest.mark.parametrize("junk", ["NaN", None, "bad_string"])
+async def test_unreadable_beam_current_is_unknown_not_off(mock_config, mock_channels, junk):
+    """E.g. PVWS's NaN before a PV has a value: no "beam off" card or sample.
+    Unknown isn't sampled into the history, so a dead PV doesn't count as uptime."""
+    beam_channel, _ = mock_channels
+    sink = MagicMock() if junk == "NaN" else None  # with a sink and without
+    m = make_monitor(mock_config, mock_channels, sink=sink)
+    await m._handle_update({"pv": TS1_PV, "value": junk})
+    beam_channel.broadcast.assert_not_called()
+    assert m.beams["TS1"].power == ""
+    await m._handle_update({"pv": TS1_PV, "value": "60.0"})
+    await m._handle_update({"pv": TS1_PV, "value": junk})
+    assert (m.beams["TS1"].power, m.beams["TS1"].current) == ("medium", 60.0)
+    if sink:
+        sink.update_beam_state.assert_called_with("TS1", 60.0, "unknown")
+
+
 # ---------------------------------------------------------------------------
 # _handle_update — beam-current arm
 # ---------------------------------------------------------------------------
 
-async def test_handle_update_beam_startup_sends_immediately(mock_config, mock_channels):
-    """The first reading for a target is a startup card, sent with no debounce."""
-    beam_channel, exp_channel = mock_channels
+@pytest.mark.parametrize("values, power, cancel, sent", [
+    ([45.0], "low", False, None),  # no change of power: no card
+    # A confirmed change is sent only after the debounce window.
+    ([60.0], "medium", False, "low → medium"),
+    # A change that reverts before the debounce window elapses is dropped entirely.
+    ([60.0, 10.0], "low", False, None),
+    # cancel_all() (called on shutdown) must stop pending timers from firing.
+    ([60.0], "medium", True, None),
+])
+async def test_beam_changes_are_debounced(mock_config, mock_channels, values, power, cancel, sent):
+    beam_channel, _ = mock_channels
     m = make_monitor(mock_config, mock_channels)
 
+    # The first reading for a target is a startup card, sent with no debounce.
     await m._handle_update({"pv": TS1_PV, "value": "10.0"})
-
-    assert m.beams["TS1"].current == 10.0
-    assert m.beams["TS1"].power == "low"
-    beam_channel.broadcast.assert_called_once()
-    notification = beam_channel.broadcast.call_args[0][0]
-    assert "online" in notification.title and notification.title.endswith("TS1 is low")
-    assert notification.beam == "TS1"
-
-
-async def test_handle_update_beam_no_change_no_broadcast(mock_config, mock_channels):
-    beam_channel, exp_channel = mock_channels
-    m = make_monitor(mock_config, mock_channels)
-
-    await m._handle_update({"pv": TS1_PV, "value": "10.0"})
+    assert (m.beams["TS1"].current, m.beams["TS1"].power) == (10.0, "low")
+    (startup,) = [c.args[0] for c in beam_channel.broadcast.call_args_list]
+    assert "online" in startup.title and startup.title.endswith("TS1 is low") and startup.beam == "TS1"
     beam_channel.broadcast.reset_mock()
 
-    await m._handle_update({"pv": TS1_PV, "value": "45.0"})
-    await asyncio.sleep(SETTLE)
-
-    assert m.beams["TS1"].current == 45.0
-    assert m.beams["TS1"].power == "low"
+    for value in values:
+        await m._handle_update({"pv": TS1_PV, "value": str(value)})
+    # The state updates immediately, but no card yet.
+    assert (m.beams["TS1"].current, m.beams["TS1"].power) == (values[-1], power)
     beam_channel.broadcast.assert_not_called()
-
-
-async def test_handle_update_beam_change_is_debounced(mock_config, mock_channels):
-    """A confirmed state change is not sent immediately — only after the debounce window."""
-    beam_channel, exp_channel = mock_channels
-    m = make_monitor(mock_config, mock_channels)
-
-    await m._handle_update({"pv": TS1_PV, "value": "10.0"})  # startup
-    beam_channel.broadcast.reset_mock()
-
-    await m._handle_update({"pv": TS1_PV, "value": "60.0"})
-    assert m.beams["TS1"].power == "medium"  # state updates immediately
-    beam_channel.broadcast.assert_not_called()  # but no card yet — still pending
-
+    if cancel:
+        m.change_aggregator.cancel_all()
+        await m.change_aggregator._flush("TS1")  # nothing pending: nothing to send
     await asyncio.sleep(SETTLE)
+    if cancel:
+        assert m.change_aggregator._pending == {}  # no timer added work back
 
-    beam_channel.broadcast.assert_called_once()
-    notification = beam_channel.broadcast.call_args[0][0]
-    assert "low → medium" in notification.title
-    assert notification.beam == "TS1"
-
-
-async def test_handle_update_beam_flapping_sends_nothing(mock_config, mock_channels):
-    """A change that reverts before the debounce window elapses is dropped entirely."""
-    beam_channel, exp_channel = mock_channels
-    m = make_monitor(mock_config, mock_channels)
-
-    await m._handle_update({"pv": TS1_PV, "value": "10.0"})  # startup
-    beam_channel.broadcast.reset_mock()
-
-    await m._handle_update({"pv": TS1_PV, "value": "60.0"})  # -> medium
-    await m._handle_update({"pv": TS1_PV, "value": "10.0"})  # -> low again
-    await asyncio.sleep(SETTLE)
-
-    beam_channel.broadcast.assert_not_called()
+    if sent is None:
+        beam_channel.broadcast.assert_not_called()
+    else:
+        (card,) = [c.args[0] for c in beam_channel.broadcast.call_args_list]
+        assert sent in card.title and card.beam == "TS1"
 
 
 async def test_handle_update_beam_trip_notes_other_targets(mock_config, mock_channels):
@@ -245,34 +207,36 @@ def title(name, pv=PEARL_TITLE):
     return {"pv": pv, "b64byt": base64.b64encode(raw).decode()}
 
 
-@pytest.mark.parametrize("update, expected", [
+@pytest.mark.parametrize("updates, field, expected", [
     # No terminal escape sequences into `status`, the log or cards
-    (title(b"\x1b]0;pwn\x07Run\x1b[2J 1\x00\x00"), "]0;pwn Run [2J 1"),
-    (title(b"\x00\x00\x00"), "Run 0"),  # blank: ignored
-    ({"pv": PEARL_TITLE, "b64byt": "!!!not base64"}, "Run 0"),
-    ({"pv": PEARL_TITLE, "b64byt": "nan"}, "Run 0"),  # disconnected
+    ([title(b"\x1b]0;pwn\x07Run\x1b[2J 1\x00\x00")], "title", "]0;pwn Run [2J 1"),
+    ([title(b"\x00\x00\x00")], "title", "Run 0"),  # blank: ignored
+    ([{"pv": PEARL_TITLE, "b64byt": "!!!not base64"}], "title", "Run 0"),
+    ([{"pv": PEARL_TITLE, "b64byt": "nan"}], "title", "Run 0"),  # disconnected
+    # Unreadable counts leave them unchanged, no crash.
+    ([{"pv": PEARL_UAMPS, "value": "bad_format"}, {"pv": PEARL_UAMPS, "value": float("inf")},
+      {"pv": PEARL_UAMPS, "text": "50/90"}], "counts", None),  # old dashboard format: not routed
+    ([{"pv": PEARL_UAMPS, "value": 0}], "counts", 0.0),  # 0 at a run's start is a real reading
 ])
-async def test_run_titles_are_decoded_and_cleaned(mock_config, mock_channels, update, expected):
+async def test_run_titles_and_counts_are_decoded_and_cleaned(mock_config, mock_channels, updates, field, expected):
     m = make_monitor(mock_config, mock_channels)
     await m._handle_update(title("Run 0"))
-    await m._handle_update(update)
-    assert tracker(m).runs.title == expected
-
-
-async def test_handle_update_counts_malformed(mock_config, mock_channels):
-    m = make_monitor(mock_config, mock_channels, counts_target=100)
-
-    await m._handle_update({"pv": PEARL_UAMPS, "value": "bad_format"})
-    await m._handle_update({"pv": PEARL_UAMPS, "value": float("inf")})
-    await m._handle_update({"pv": PEARL_UAMPS, "text": "50/90"})  # old dashboard format: not routed
-    assert tracker(m).runs.counts is None  # unchanged, no crash
-    await m._handle_update({"pv": PEARL_UAMPS, "value": 0})  # 0 at a run's start is a real reading
-    assert tracker(m).runs.counts == 0.0
+    for update in updates:
+        await m._handle_update(update)
+    assert getattr(tracker(m).runs, field) == expected
 
 
 # ---------------------------------------------------------------------------
 # _run_loop() against a real local WebSocket server
 # ---------------------------------------------------------------------------
+
+def two_instrument_monitor(mock_config, mock_channels, sink=None):
+    config = replace(mock_config, instruments=[
+        InstrumentConfig("PEARL", 100.0, "TS1"),
+        InstrumentConfig("WISH", 50.0, "TS2"),
+    ])
+    return BeamMonitor(replace(config, debounce_seconds=DEBOUNCE_SECONDS), *mock_channels, sink=sink)
+
 
 def ws_monitor(mock_config, mock_channels, url, sink=None, reconnect_interval=60.0, **kw):
     config = replace(mock_config, isis_websocket_url=url, beam_reconnect_interval=reconnect_interval)
@@ -283,15 +247,16 @@ async def test_run_loop_subscribes_and_dispatches_updates(mock_config, mock_chan
     sink = MagicMock()
     update = {"type": "update", "pv": TS1_PV, "value": 150.0}
     async with FakePVWS([update]) as server:
-        m = ws_monitor(mock_config, mock_channels, server.url, sink=sink)
+        m = two_instrument_monitor(replace(mock_config, isis_websocket_url=server.url), mock_channels, sink=sink)
         async with running(m):
             await wait_until(lambda: sink.update_beam_state.called)
 
-    assert set(server.subscriptions[0]["pvs"]) == {
-        "CS:INSTLIST", TS1_PV, TS2_PV,
-        MUONS_PV, PEARL_UAMPS, PEARL_TITLE,
-        "IN:PEARL:DAE:RUNSTATE_STR", "IN:PEARL:DAE:RUNNUMBER", "IN:PEARL:DAE:_RBNUMBER", "IN:PEARL:DAE:STARTTIME",
-    }
+    pvs = server.subscriptions[0]["pvs"]
+    assert pvs[:4] == ["CS:INSTLIST", TS1_PV, TS2_PV, MUONS_PV]
+    # Each instrument's RB and run numbers first, then its title before its
+    # counts, so a run changed while disconnected is started by its title.
+    assert pvs[4:] == [f"IN:{name}:DAE:{pv}" for name in ("PEARL", "WISH")
+                       for pv in ("_RBNUMBER", "RUNNUMBER", "WDTITLE", "TOTALUAMPS", "RUNSTATE_STR", "STARTTIME")]
     sink.update_beam_state.assert_called_with("TS1", 150.0, "high")
     sink.update_health.assert_any_call("beam", "connected")
 
@@ -352,17 +317,16 @@ async def test_reconnect_repopulates_beam_states_marked_unknown(mock_config, moc
     beam_channel.broadcast.assert_called_once()  # just the startup card
 
 
-def test_request_reconnect_without_a_pvws_url_says_so(mock_config, mock_channels):
-    assert ws_monitor(mock_config, mock_channels, "").request_reconnect() is None
-
-
 async def test_request_reconnect_while_connected_reconnects_immediately(mock_config, mock_channels):
     sink = MagicMock()
     async with FakePVWS() as server:
         m = ws_monitor(mock_config, mock_channels, server.url, sink=sink, reconnect_interval=60.0)
+        m._force_reconnect.set()  # as if r was pressed mid-handshake
         async with running(m):
             await asyncio.wait_for(server.connected.wait(), 2)
             await wait_until(lambda: m._current_ws is not None)
+            # The new connection satisfies a request made while it was being set
+            # up, so this one isn't ignored as "already pending".
             assert m.request_reconnect() is True
             assert m.request_reconnect() is False  # already pending
             await wait_until(lambda: server.connections == 2)
@@ -404,8 +368,9 @@ async def test_run_cancels_promptly_and_cancels_pending_debounce(mock_config, mo
     assert m.change_aggregator._pending == {}
 
 
-async def test_run_without_url_returns_immediately(mock_config, mock_channels, caplog):
+async def test_without_a_pvws_url_run_returns_and_reconnect_says_so(mock_config, mock_channels, caplog):
     m = ws_monitor(mock_config, mock_channels, "")
+    assert m.request_reconnect() is None
     await asyncio.wait_for(m.run(), 1)
     assert "will not run" in caplog.text
 
@@ -419,12 +384,6 @@ async def test_collection_check_loop_calls_progress_check(mock_config, mock_chan
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
-
-
-async def test_aggregator_flush_without_pending_is_noop(mock_config, mock_channels):
-    m = make_monitor(mock_config, mock_channels)
-    await m.change_aggregator._flush("TS1")
-    mock_channels[0].broadcast.assert_not_called()
 
 
 async def test_run_loop_bad_url_marks_health_and_retries(mock_config, mock_channels, caplog):
@@ -569,14 +528,6 @@ async def test_a_run_begun_over_pvws_gets_its_new_run_card(mock_config, mock_cha
     assert m.instrument_views()["PEARL"]["run_number"] == "10"
 
 
-def two_instrument_monitor(mock_config, mock_channels):
-    config = replace(mock_config, instruments=[
-        InstrumentConfig("PEARL", 100.0, "TS1"),
-        InstrumentConfig("WISH", 50.0, "TS2"),
-    ])
-    return BeamMonitor(replace(config, debounce_seconds=DEBOUNCE_SECONDS), *mock_channels)
-
-
 async def test_updates_are_routed_to_their_own_instrument(mock_config, mock_channels):
     _, exp_channel = mock_channels
     m = two_instrument_monitor(mock_config, mock_channels)
@@ -588,24 +539,6 @@ async def test_updates_are_routed_to_their_own_instrument(mock_config, mock_chan
     assert (wish.runs.title, wish.runs.counts) == ("Wish run", 60.0)
     assert (pearl.runs.title, pearl.runs.counts) == ("", None)
     exp_channel.broadcast.assert_not_called()
-
-
-async def test_run_loop_subscribes_to_every_instruments_pvs(mock_config, mock_channels):
-    async with FakePVWS([]) as server:
-        config = replace(mock_config, isis_websocket_url=server.url)
-        m = two_instrument_monitor(config, mock_channels)
-        async with running(m):
-            await wait_until(lambda: server.subscriptions)
-
-    pvs = server.subscriptions[0]["pvs"]
-    assert pvs[:4] == ["CS:INSTLIST", *(b.pv for b in DEFAULT_BEAMS)]
-    # Each instrument's RB and run numbers first, then its title before its
-    # counts, so a run changed while disconnected is started by its title.
-    for name in ("PEARL", "WISH"):
-        assert [pv for pv in pvs if pv.startswith(f"IN:{name}:")] == [
-            f"IN:{name}:DAE:{pv}" for pv in ("_RBNUMBER", "RUNNUMBER", "WDTITLE", "TOTALUAMPS", "RUNSTATE_STR",
-                                              "STARTTIME")
-        ]
 
 
 @pytest.mark.parametrize("pv", ["CS:INSTLIST", TS1_PV, PEARL_UAMPS, PEARL_TITLE, "IN:PEARL:DAE:RUNSTATE_STR",
@@ -691,18 +624,6 @@ async def test_dropped_flicker_does_not_reset_time_in_state(mock_config, mock_ch
     assert dict(card.facts)["Was high for"].startswith("10h")
 
 
-async def test_reconnect_requested_during_handshake_does_not_block_later_ones(mock_config, mock_channels):
-    """The new connection satisfies a request made while it was being set up."""
-    async with FakePVWS() as server:
-        m = ws_monitor(mock_config, mock_channels, server.url)
-        m._force_reconnect.set()  # as if r was pressed mid-handshake
-        async with running(m):
-            await asyncio.wait_for(server.connected.wait(), 2)
-            await wait_until(lambda: m._current_ws is not None)
-            assert m.request_reconnect() is True  # not ignored as "already pending"
-            await wait_until(lambda: server.connections == 2)
-
-
 # ---------------------------------------------------------------------------
 # CS:INSTLIST: PV prefixes and default beam targets
 # ---------------------------------------------------------------------------
@@ -747,33 +668,36 @@ async def test_instlist_sets_the_beam_target_and_resubscribes_a_new_prefix(mock_
     m._current_ws.send.assert_not_awaited()
 
 
-async def test_instlist_misc_falls_back_to_instrument_target_with_one_warning(mock_config, mock_channels, caplog):
-    m = listed_monitor(mock_config, mock_channels)
-    for _ in range(2):
-        await m._handle_update(instlist(("PEARL", "IN:PEARL:", "MISC")))
-    assert tracker(m).beam_target == "TS2"
-    assert caplog.text.count("PEARL: CS:INSTLIST doesn't put it on TS1, TS2 or MUON") == 1
+@pytest.mark.parametrize("instrument, lists, target, warned, not_logged", [
+    # Not on a target station: [PVS] instrument_target, with one warning.
+    pytest.param({}, [[("PEARL", "IN:PEARL:", "MISC")]] * 2, "TS2",
+                 "PEARL: CS:INSTLIST doesn't put it on TS1, TS2 or MUON", None, id="not-on-a-station"),
+    pytest.param({"beam_target": "TS1"}, [[("PEARL", "IN:PEARL:", "MUON")]], "TS1", None, "CS:INSTLIST",
+                 id="configured-wins"),
+    # Unlisted: keeps its PVs, with one warning, and not Muons from the older list.
+    pytest.param({}, [[("PEARL", "IN:PEARL:", "MUON")]] + [[("WISH", "IN:WISH:", "TS2")]] * 2, "TS2",
+                 "PEARL isn't in CS:INSTLIST", "MUON", id="unlisted"),
+])
+async def test_instlist_beam_target_fallbacks(mock_config, mock_channels, caplog, instrument, lists, target, warned,
+                                              not_logged):
+    m = listed_monitor(mock_config, mock_channels, **instrument)
+    for entries in lists:
+        await m._handle_update(instlist(*entries))
+    assert tracker(m).beam_target == target and PEARL_UAMPS in m.routes
+    if warned:
+        assert caplog.text.count(warned) == 1
+    if not_logged:
+        assert not_logged not in caplog.text
 
 
-async def test_a_configured_beam_target_wins_over_instlist(mock_config, mock_channels):
-    m = listed_monitor(mock_config, mock_channels, beam_target="TS1")
-    await m._handle_update(instlist(("PEARL", "IN:PEARL:", "MUON")))
-    assert tracker(m).beam_target == "TS1"
-
-
-async def test_an_unlisted_instrument_keeps_its_pvs_with_one_warning(mock_config, mock_channels, caplog):
-    m = listed_monitor(mock_config, mock_channels)
-    await m._handle_update(instlist(("PEARL", "IN:PEARL:", "MUON")))
-    for _ in range(2):
-        await m._handle_update(instlist(("WISH", "IN:WISH:", "TS2")))
-    assert caplog.text.count("PEARL isn't in CS:INSTLIST") == 1 and "MUON" not in caplog.text
-    assert PEARL_UAMPS in m.routes and tracker(m).beam_target == "TS2"  # not Muons from the older list
-
-
-async def test_an_unreadable_instlist_changes_nothing(mock_config, mock_channels):
+async def test_a_new_instlist_is_saved_and_an_unreadable_one_changes_nothing(mock_config, mock_channels):
     state = DaemonState(instrument_names=["PEARL"])
-    state.instlist = {"PEARL": ("IN:PEARL:", "TS1")}
     m = listed_monitor(mock_config, mock_channels, sink=state)
+    await m._handle_update(instlist(("PEARL", "IN:PEARL:", "TS1")))
+    restored = DaemonState()
+    restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
+    assert restored.instlist == {"PEARL": ("IN:PEARL:", "TS1")}  # for the next start
+
     await m._handle_update({"pv": "CS:INSTLIST", "b64byt": "!!!"})
     assert tracker(m).beam_target == "TS1" and PEARL_UAMPS in m.routes
     assert state.instlist == {"PEARL": ("IN:PEARL:", "TS1")}  # the last good one is kept
@@ -788,13 +712,3 @@ async def test_the_cached_instlist_is_used_from_the_first_connection(mock_config
             await wait_until(lambda: server.subscriptions)
     assert "IN:PEARL_5B:DAE:TOTALUAMPS" in server.subscriptions[0]["pvs"]
     assert m.instrument_views()["PEARL"]["beam_target"] == "Muons"
-
-
-async def test_a_new_instlist_is_saved_for_the_next_start(mock_config, mock_channels):
-    state = DaemonState(instrument_names=["PEARL"])
-    m = listed_monitor(mock_config, mock_channels, sink=state)
-    await m._handle_update(instlist(("PEARL", "IN:PEARL:", "TS1")))
-    restored = DaemonState()
-    restored.restore_from_snapshot_json(json.dumps(state.snapshot()))
-    assert restored.instlist == {"PEARL": ("IN:PEARL:", "TS1")}
-
