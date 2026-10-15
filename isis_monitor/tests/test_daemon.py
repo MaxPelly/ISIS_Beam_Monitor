@@ -18,6 +18,7 @@ from isis_monitor.daemon_state import DaemonState
 from isis_monitor.instrument import InstrumentTracker
 from isis_monitor.ipc import ipc_request
 from isis_monitor.notifiers import DummyNotifier, TeamsNotifier, WebhookNotifier
+from isis_monitor.runs import RunInfo
 from isis_monitor.storage import SQLiteStateStore
 from isis_monitor.tests.helpers import (
     FakePVWS,
@@ -104,10 +105,16 @@ async def test_install_signal_handlers_sets_stop_event():
 # build_channels
 # ---------------------------------------------------------------------------
 
-def _saved_instrument(inst: InstrumentConfig, **changes) -> dict:
-    """A snapshot entry for `inst`, as its tracker saves one, with `changes`."""
+def _saved_instrument(inst: InstrumentConfig, rb: str = "", **run) -> dict:
+    """A snapshot entry for `inst`, as its tracker saves one, mid-run if `run`
+    gives RunInfo fields (number, title, started_at, ...)."""
     tracker = InstrumentTracker(inst, fake_channel(), lambda _target: "unknown", stall_minutes=10)
-    return {**json.loads(json.dumps(tracker.to_snapshot())), **changes}
+    if run:
+        tracker.runs.run = RunInfo(**{"start_text": None, "exp_gen": 0, "target": inst.notify_counts,
+                                      "auto_runs": 0, **run})
+        tracker.runs.run_number = run["number"]
+    tracker.runs.rb = rb
+    return json.loads(json.dumps(tracker.to_snapshot()))
 
 
 def test_build_channels_only_configured_webhooks_or_dummy_everywhere(tmp_path):
@@ -154,7 +161,7 @@ TEAMS_ROUTES = [
 def _card(kind):
     now = datetime.now(timezone.utc)
     hour = timedelta(hours=1)
-    run = dict(new_run_name="run", prev_run_name="old", prev_duration=hour, prev_counts=5, time_now=now, target=10)
+    run = dict(run_number="1", new_run_name="run", prev_run_name="old", prev_duration=hour, prev_counts=5, time_now=now, target=10)
     return {
         "beam_change": lambda: messages.beam_change(
             "TS1", prev_state="high", new_state="off", beam_val=0, prev_val=150, high_threshold=140,
@@ -363,8 +370,8 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
     ts = datetime.now(timezone.utc) - timedelta(minutes=5)
     store = SQLiteStateStore(tmp_path / "state.db")
     pearl = InstrumentConfig("PEARL", 130.0, "TS1")
-    saved = _saved_instrument(pearl, run_name="Run 30", run_started_at=ts.isoformat(), counts=12.5, rb_number="A",
-                              end_notified=True)
+    saved = _saved_instrument(pearl, rb="A", number="00030", title="Run 30", begun_title="Run 30", started_at=ts,
+                              last_counts=12.5, end_notified=True)
     store.write_samples([(ts, "TS2", 7.0, "low")])
     store.upsert_snapshot("daemon_state", json.dumps({"mcr_news": "old news", "instruments": {"PEARL": saved}}))
     store.commit()
@@ -376,7 +383,7 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
 
     def spy(self, saved):
         real_restore(self, saved)
-        seeded.update({name: vars(t.state).copy() for name, t in self.instruments.items()})
+        seeded.update({name: t.runs.run for name, t in self.instruments.items()})
 
     with patch("isis_monitor.daemon.MCRNewsMonitor", wraps=daemon.MCRNewsMonitor) as mcr_cls, \
             patch.object(daemon.BeamMonitor, "restore_instruments", spy):
@@ -390,7 +397,7 @@ async def test_run_daemon_restores_history_and_state_on_restart(tmp_path):
     (inst,) = status["instruments"]
     assert (inst["name"], inst["title"], inst["rb"], inst["beam"]) == ("PEARL", "Run 30", "A", "TS1")
     # The trackers are seeded with all they saved, not just what the status shows.
-    assert seeded["PEARL"]["run_name"] == "Run 30" and seeded["PEARL"]["end_notified"] is True
+    assert seeded["PEARL"].title == "Run 30" and seeded["PEARL"].end_notified is True
     assert [v for v, _ in status["beams"][1]["history"]["values"] if v is not None] == [7.0]
     assert set(reconnect) == {"beam", "mcr"}
 

@@ -30,7 +30,7 @@ class Decisions:
     def run_completed(self, run):
         self.log.append(("done", run.number, round(run.last_counts, 3) if run.final_known else None))
 
-    def run_rebegun(self, run):
+    def run_rebegun(self, run, previous_title):
         self.log.append(("rebegin", run.number))
 
     def experiment_finished(self, rb, runs, uah, since, partial, now):
@@ -475,9 +475,13 @@ def test_a_timer_that_fires_early_waits_out_the_rest():
 
 
 
-def test_a_run_first_seen_ending_after_a_reconnect_is_recorded():
+@pytest.mark.parametrize("next_number", [
+    [(120, "RUNNUMBER", "00012"), (120, "RUNSTATE_STR", "SETUP")],
+    [(120, "RUNSTATE_STR", "SETUP"), (121, "RUNNUMBER", "00012")],  # SETUP first, as ZOOM often sends them
+])
+def test_a_run_first_seen_ending_after_a_reconnect_is_recorded(next_number):
     r = reconnect(running())((100, "RUNNUMBER", "00011"), (100, "RUNSTATE_STR", "ENDING"), (100, "TOTALUAMPS", 4.0),
-                             (120, "RUNNUMBER", "00012"), (120, "RUNSTATE_STR", "SETUP")).settle()
+                             *next_number).settle()
     # Run 10's final is unknown (11 came and went unseen); 11 is adopted as it ends.
     assert r.log[1:] == [("done", "00010", None), ("start", "00011", "silent"), ("done", "00011", 4.0)]
 
@@ -498,20 +502,27 @@ def test_a_final_still_due_when_another_run_passes_is_unknown():
 
 
 def test_a_replayed_ending_of_a_later_run_isnt_taken_as_the_runs_final():
-    """Run 10 ended and 11 ran unseen; the replay lands in 11's ENDING, and SETUP comes before 12."""
+    """Run 10 ended and 11 ran unseen; the replay lands in 11's ENDING, and SETUP comes before 12.
+    Run 10's final is unknown; run 11 is adopted once its number moves on, with its own final."""
     r = reconnect(running())((100, "RUNSTATE_STR", "ENDING"), (100, "RUNNUMBER", "00011"), (100, "TOTALUAMPS", 30.0),
                              (100, "STARTTIME", "Tue 13-Oct-2026 10:30:00"),  # not run 10's
                              (102, "RUNSTATE_STR", "SETUP"), (102, "RUNNUMBER", "00012")).settle()
-    assert r.log[1:] == [("done", "00010", None)]
+    assert r.log[1:] == [("done", "00010", None), ("start", "00011", "silent"), ("done", "00011", 30.0)]
 
 
-def test_an_rb_change_just_after_begin_makes_the_run_the_new_experiments():
-    """No counts yet, so the run in progress is the new experiment's first (and gets its target)."""
+@pytest.mark.parametrize("rb_at, new_experiments", [(29, True), (27 + 31, False)])
+def test_an_rb_change_just_after_begin_makes_the_run_the_new_experiments(rb_at, new_experiments):
+    """Within NEW_EXPERIMENT_WINDOW of its begin, though counts have come (with beam on they
+    do within a second), the run in progress is the new experiment's first, with its target."""
     r = running(auto=True)
     r.tracker.run_totals.extend([20.0] * 3)
-    r(*NEXT_RUN).settle()
+    r(*NEXT_RUN, (28, "TOTALUAMPS", 0.02)).settle()
     assert r.tracker.run.target == 20.0
-    r((29, "_RBNUMBER", "456"), (40, "TOTALUAMPS", 3.0), (50, "RUNSTATE_STR", "ENDING"),
+    if not new_experiments:  # later, it's the old one's
+        r((rb_at, "_RBNUMBER", "456"))
+        assert ("experiment", "123", 2, 8.02, True) in r.log and r.tracker.run.target == 20.0
+        return
+    r((rb_at, "_RBNUMBER", "456"), (40, "TOTALUAMPS", 3.0), (50, "RUNSTATE_STR", "ENDING"),
       (51, "RUNNUMBER", "00012"), (51, "RUNSTATE_STR", "SETUP")).settle()
     assert ("experiment", "123", 1, 8.0, True) in r.log  # run 11 isn't counted in it
     assert (r.tracker.exp_runs, r.tracker.exp_uah) == (1, 3.0)  # but in the new one
@@ -533,3 +544,51 @@ def test_counts_arent_credited_after_a_replay_timeout_without_the_run_number():
     r.at(100 + REPLAY_TIMEOUT.total_seconds())  # gave up waiting
     r((112, "TOTALUAMPS", 50.0))
     assert r.tracker.replaying and r.tracker.run.last_counts == 8.0
+
+
+NO_START_TIME = [u for u in RUNNING if u[1] != "STARTTIME"]
+
+
+def test_without_its_start_time_a_run_isnt_taken_as_just_begun():
+    """It may have begun long before the daemon saw it."""
+    r = Replay()(*NO_START_TIME, (10, "TOTALUAMPS", 8.0)).settle()
+    r((20, "_RBNUMBER", "456"))
+    assert ("experiment", "123", 1, 8.0, True) in r.log
+
+
+def test_a_run_ending_when_the_rb_number_changes_stays_the_old_experiments():
+    r = running()(*NEXT_RUN, (30, "TOTALUAMPS", 2.0), (40, "RUNSTATE_STR", "ENDING")).settle()
+    r((45, "_RBNUMBER", "456"))
+    assert ("experiment", "123", 2, 10.0, True) in r.log  # runs 10 and 11, though 11 began 18s before
+
+
+def test_counts_a_previous_run_took_as_its_final_arent_an_adopted_runs_too():
+    """Run 10 had no STARTTIME, so a replay of 11's ENDING with SETUP first can't be told
+    from 10's: 10 takes the counts, and 11 is recorded without them, not counted twice."""
+    r = Replay()(*NO_START_TIME, (10, "TOTALUAMPS", 8.0)).settle()
+    reconnect(r)((100, "RUNSTATE_STR", "ENDING"), (100, "RUNNUMBER", "00011"), (100, "TOTALUAMPS", 30.0),
+                 (102, "RUNSTATE_STR", "SETUP"), (103, "RUNNUMBER", "00012")).settle()
+    assert r.log[1:] == [("done", "00010", 30.0), ("start", "00011", "silent"), ("done", "00011", None)]
+    assert (r.tracker.exp_runs, r.tracker.exp_uah) == (1, 30.0)
+
+
+def test_an_adopted_run_without_counts_has_no_final():
+    r = reconnect(running())((100, "RUNNUMBER", "00011"), (100, "RUNSTATE_STR", "ENDING"), (100, "TOTALUAMPS", "NaN"),
+                             (120, "RUNSTATE_STR", "SETUP"), (121, "RUNNUMBER", "00012")).settle()
+    assert r.log[-2:] == [("start", "00011", "silent"), ("done", "00011", None)]
+
+
+def test_a_start_time_that_cant_be_read_doesnt_make_a_run_just_begun():
+    r = Replay()(*NO_START_TIME, (0, "STARTTIME", "Sat 10-Oct-2026 09:00:00"), (10, "TOTALUAMPS", 8.0)).settle()
+    r((15, "_RBNUMBER", "456"))  # its STARTTIME is days old, so ignored: it began long ago
+    assert ("experiment", "123", 1, 8.0, True) in r.log
+
+
+def test_runs_that_both_end_on_zero_counts_keep_their_finals():
+    """With the beam off, an adopted run's 0 µA·h matching the previous run's is no clash."""
+    r = running()((15, "TOTALUAMPS", 0.0))
+    r.tracker.run.start_text = None  # as if no STARTTIME was read
+    r(*NEXT_RUN[:3]).settle()
+    reconnect(r)((100, "RUNSTATE_STR", "ENDING"), (100, "RUNNUMBER", "00012"), (100, "TOTALUAMPS", 0.0),
+                 (102, "RUNSTATE_STR", "SETUP"), (103, "RUNNUMBER", "00013")).settle()
+    assert ("done", "00012", 0.0) in r.log
