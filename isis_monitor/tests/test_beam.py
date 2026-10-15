@@ -246,7 +246,7 @@ def title(name, pv=PEARL_TITLE):
 
 
 @pytest.mark.parametrize("update, expected", [
-    # No terminal escape sequences into the TUI, log or cards
+    # No terminal escape sequences into `status`, the log or cards
     (title(b"\x1b]0;pwn\x07Run\x1b[2J 1\x00\x00"), "]0;pwn Run [2J 1"),
     (title(b"\x00\x00\x00"), "Run 0"),  # blank: ignored
     ({"pv": PEARL_TITLE, "b64byt": "!!!not base64"}, "Run 0"),
