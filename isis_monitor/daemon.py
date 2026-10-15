@@ -5,6 +5,7 @@ import asyncio
 import fcntl
 import json
 import logging
+import math
 import os
 import signal
 import sys
@@ -278,9 +279,10 @@ async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
             return {"restarting": True}
 
     def current_status() -> dict:
-        # interval_s is the longest it goes unsent, which the site judges staleness by.
-        return build_status(state, {name: b.since for name, b in beam_monitor.beams.items()},
-                            max(config.status_interval, StatusPublisher.HEARTBEAT))
+        # interval_s is the longest it goes unsent (the heartbeat falls on a check), which the
+        # site judges staleness by.
+        unsent = math.ceil(StatusPublisher.HEARTBEAT / config.status_interval) * config.status_interval
+        return build_status(state, {name: b.since for name, b in beam_monitor.beams.items()}, unsent)
 
     loops = [beam_monitor.run, mcr_monitor.run]  # each run until stop_event
     if config.push_url and not args.dummy:
