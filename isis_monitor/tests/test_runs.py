@@ -570,3 +570,19 @@ def test_an_adopted_run_without_counts_has_no_final():
     r = reconnect(running())((100, "RUNNUMBER", "00011"), (100, "RUNSTATE_STR", "ENDING"), (100, "TOTALUAMPS", "NaN"),
                              (120, "RUNSTATE_STR", "SETUP"), (121, "RUNNUMBER", "00012")).settle()
     assert r.log[-2:] == [("start", "00011", "silent"), ("done", "00011", None)]
+
+
+def test_a_start_time_that_cant_be_read_doesnt_make_a_run_just_begun():
+    r = Replay()(*NO_START_TIME, (0, "STARTTIME", "Sat 10-Oct-2026 09:00:00"), (10, "TOTALUAMPS", 8.0)).settle()
+    r((15, "_RBNUMBER", "456"))  # its STARTTIME is days old, so ignored: it began long ago
+    assert ("experiment", "123", 1, 8.0, True) in r.log
+
+
+def test_runs_that_both_end_on_zero_counts_keep_their_finals():
+    """With the beam off, an adopted run's 0 µA·h matching the previous run's is no clash."""
+    r = running()((15, "TOTALUAMPS", 0.0))
+    r.tracker.run.start_text = None  # as if no STARTTIME was read
+    r(*NEXT_RUN[:3]).settle()
+    reconnect(r)((100, "RUNSTATE_STR", "ENDING"), (100, "RUNNUMBER", "00012"), (100, "TOTALUAMPS", 0.0),
+                 (102, "RUNSTATE_STR", "SETUP"), (103, "RUNNUMBER", "00013")).settle()
+    assert ("done", "00012", 0.0) in r.log

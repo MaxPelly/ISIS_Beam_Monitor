@@ -334,8 +334,9 @@ class RunTracker:
         in_progress = run and self.last_completed != run.number and run.exp_gen == self.exp_gen
         # Only just begun (by its STARTTIME), and still under way, it's the new experiment's first
         # run (and gets its target).
-        just_begun = (in_progress and run.number == self.run_number and run.start_text is not None
-                      and self.run_state in ACTIVE_STATES and now - run.started_at <= NEW_EXPERIMENT_WINDOW)
+        just_begun = (in_progress and run.number == self.run_number and self.run_state in ACTIVE_STATES
+                      and run.start_text is not None and parse_start_time(run.start_text, now) is not None
+                      and now - run.started_at <= NEW_EXPERIMENT_WINDOW)
         if old:
             extra = run.last_counts if in_progress and not just_begun and run.last_counts > 0 else 0.0
             runs = self.exp_runs + (extra > 0)
@@ -409,7 +410,7 @@ class RunTracker:
         start_text = self.start_text if self._start_text_fresh else None
         started_at = (parse_start_time(start_text, now) if start_text else None) or now
         credit = self.counts is not None and (adopted or self.run_state in CREDITED_STATES)
-        if adopted and credit and previous and previous.final_known and previous.last_counts == self.counts:
+        if adopted and credit and self.counts > 0 and previous and previous.final_known and previous.last_counts == self.counts:
             # The previous run took these as its final (SETUP came first, and it had no STARTTIME
             # to tell): they can't be both runs', and which run's they are can't be told now.
             credit = False

@@ -8,7 +8,7 @@ own versions and changelog; each release here notes the version its
 
 ## [Unreleased]
 
-- The shadow run detection makes a run the new experiment's when the RB number changes within 30s of its begin (it checked for no counts yet, which with beam on there almost always are), and records a run first seen ending even when the DAE sends SETUP before the next run number.
+- The shadow run detection makes a run the new experiment's when the RB number changes within 30s of its begin, by its STARTTIME, while it's under way (it checked for no counts yet, which with beam on there almost always are), and records a run first seen ending even when the DAE sends SETUP before the next run number.
 
 ## [1.3.0rc3] - 2026-10-14
 
