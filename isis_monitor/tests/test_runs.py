@@ -451,18 +451,36 @@ def test_a_rebegin_in_a_gap_waits_for_its_title_to_tell_a_retitle(before, title,
     assert r.tracker.run.begun_title == title
 
 
+GAP_REBEGIN = [reconnect(), (100, "STARTTIME", "Tue 13-Oct-2026 10:01:30"), (100, "TOTALUAMPS", 0.2),
+               (100, "RUNNUMBER", "00010"), (100, "RUNSTATE_STR", "RUNNING")]
+
+
+@pytest.mark.parametrize("then, restarted", [
+    # Its title re-sent after another reconnect, before RUNNUMBER and RUNSTATE: the replay settles it.
+    ([reconnect(101), (101, "WDTITLE", "Run ten b"), (101, "RUNNUMBER", "00010"), (101, "RUNSTATE_STR", "RUNNING")],
+     "Run ten b"),
+    # Twice re-begun: retitled since the title before the first.
+    ([(101, "STARTTIME", "Tue 13-Oct-2026 10:01:31"), (102, "WDTITLE", "Run ten x")], "Run ten x"),
+    # Its number moved on first: the title is the next run's.
+    ([(101, "RUNSTATE_STR", "ENDING"), (102, "RUNNUMBER", "00011"), (103, "WDTITLE", "Run eleven")], None),
+    # Too late to be the re-begin's: a retitle later in the run.
+    ([(100 + REPLAY_TIMEOUT.total_seconds() + 1, "WDTITLE", "Run ten b")], None),
+], ids=["in a replay", "twice", "number moved on", "too late"])
+def test_a_rebegin_waiting_for_its_title(then, restarted):
+    r = running()((50, "WDTITLE", "Run ten x"), *GAP_REBEGIN, *then).settle()
+    rebegins = [d for d in r.log if d[0] == "rebegin"]
+    assert len(rebegins) == 1 + bool(restarted) + (then[0][1] == "STARTTIME")
+    assert r.tracker._rebegun_untitled is None
+    if restarted:
+        assert r.decisions.retitled == ("Run ten", restarted)
+
+
 def test_a_title_replayed_while_a_run_is_ending_is_the_next_runs():
     r = running()((20, "RUNSTATE_STR", "ENDING"), (20.5, "WDTITLE", "Run eleven"), reconnect(25),
                   (25, "WDTITLE", "Run eleven"), (25, "RUNNUMBER", "00010"), (25, "RUNSTATE_STR", "ENDING"),
                   *[(t + 10, suffix, value) for t, suffix, value in NEXT_RUN[1:]]).settle()
     assert r.log[1:] == [("done", "00010", 8.0), ("start", "00011", "00010")]
     assert r.decisions.previous.title == "Run ten"
-
-
-def test_a_run_that_goes_back_from_ending_can_be_retitled_and_rebegun():
-    r = running()((20, "RUNSTATE_STR", "ENDING"), (21, "RUNSTATE_STR", "RUNNING"), (22, "WDTITLE", "Run ten b"),
-                  (23, "STARTTIME", "Tue 13-Oct-2026 10:00:23")).settle()
-    assert r.log[1:] == [("rebegin", "00010")] and r.tracker.run.title == "Run ten b"
 
 
 def test_resubscribe_replays():

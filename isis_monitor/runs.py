@@ -153,7 +153,8 @@ class RunTracker:
         self._replay_deadline: Optional[datetime] = None
         self._seen_number = self._seen_state = False
         self._seen_title = False  # since resubscribing or its last NaN: see _maybe_start
-        self._rebegun_untitled: Optional[str] = None  # a re-begin's previous title, while its own hasn't come
+        # A re-begin's previous title, and until when its own may come: see _rebegin
+        self._rebegun_untitled: Optional[Tuple[str, datetime]] = None
         self.rb_resync = True  # the first RB number after (re)subscribing may have changed unwatched
         self._pending: Optional[Tuple[str, datetime]] = None  # (number, since) of a start that's settling
         self._final_due = False  # a run ended unseen, and its final counts are still to come
@@ -198,6 +199,8 @@ class RunTracker:
             # then the new attempt's.
             if self._ending != run.number:  # see _retitle
                 run.title = self.title or run.title
+            if self._seen_title:
+                self._retitled_rebegin(now)
             if run.start_text and self.start_text and self.start_text != run.start_text:
                 self._rebegin(now)
             if self.counts is not None and self.credited():
@@ -270,8 +273,6 @@ class RunTracker:
         self._seen_state = True
         if self.run_state == "ENDING" and self._seen_number:
             self._ending = self.run_number
-        elif self.run_state in ACTIVE_STATES:  # e.g. an end that didn't happen
-            self._ending = ""
         if self._final_due and not self.replaying and self.run_state != "ENDING":  # begun: the counts are the next run's
             self._end_unseen(now, waited=self.run_state != "SETUP")
         if self.run_state not in ACTIVE_STATES:
@@ -289,12 +290,8 @@ class RunTracker:
         self._seen_title = title is not None
         if title:
             self._retitle(title)
-        run = self.run
-        if (self._seen_title and self._rebegun_untitled is not None and not self.replaying
-                and run.number == self.run_number):
-            previous_title, self._rebegun_untitled, run.begun_title = self._rebegun_untitled, None, run.title
-            if self.listener and run.title != previous_title:
-                self.listener.run_rebegun(run, previous_title)
+        if self._seen_title and not self.replaying:  # (while replaying, see _replayed)
+            self._retitled_rebegin(now)
         self._maybe_start(now)
 
     def _retitle(self, title: str) -> None:
@@ -436,7 +433,7 @@ class RunTracker:
             self._schedule(SETTLE - (now - self._pending[1]))
 
     def _start(self, now: datetime, adopted: bool = False) -> None:
-        previous, self._rebegun_untitled = self.run, None
+        previous = self.run
         if previous and self.last_completed != previous.number:  # its end wasn't seen, e.g. the daemon was down
             self._complete(now, final_known=False)
         target, auto_runs = self._target()
@@ -486,12 +483,23 @@ class RunTracker:
         run.last_counts, run.end_notified = 0.0, False
         previous_title, run.begun_title = run.begun_title or run.title, run.title
         logger.info(f"{self._log}: run {run.number} begun again (an abort)")
-        if not self._seen_title:  # its title may be on its way: a retitle's card waits for it (see on_title)
-            if self._rebegun_untitled is None:
-                self._rebegun_untitled = previous_title
+        if not self._seen_title:  # its title may be on its way: a retitle's card waits for it
+            if self._rebegun_untitled is None:  # the title it had before the first
+                self._rebegun_untitled = (previous_title, now + REPLAY_TIMEOUT)
             previous_title = run.title
         if self.listener:
             self.listener.run_rebegun(run, previous_title)
+
+    def _retitled_rebegin(self, now: datetime) -> None:
+        """A title has come since a re-begin that came without one: the restart
+        card it waited for, if it was retitled (and its title came in time)."""
+        pending, self._rebegun_untitled = self._rebegun_untitled, None
+        run = self.run
+        if pending is None or now > pending[1] or run.number != self.run_number:
+            return
+        run.begun_title = run.title
+        if self.listener and run.title != pending[0]:
+            self.listener.run_rebegun(run, pending[0])
 
     # --- Persistence -----------------------------------------------------
 
