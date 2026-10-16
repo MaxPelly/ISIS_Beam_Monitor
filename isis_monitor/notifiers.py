@@ -282,8 +282,9 @@ class TeamsNotifier(HTTPNotifier):
 def signed_json(payload: dict, secret: bytes) -> dict:
     """session.post() keyword arguments sending `payload` as JSON signed for
     the push site: X-Timestamp (Unix seconds) and X-Signature, the hex
-    HMAC-SHA256 of "<timestamp>.<body>" under the shared secret."""
-    body = json.dumps(payload, ensure_ascii=False).encode()
+    HMAC-SHA256 of "<timestamp>.<body>" under the shared secret. A lone
+    surrogate (e.g. in a PV's text), which UTF-8 can't carry, is sent as "?"."""
+    body = json.dumps(payload, ensure_ascii=False).encode(errors="replace")
     timestamp = str(int(time.time()))
     signature = hmac.new(secret, timestamp.encode() + b"." + body, hashlib.sha256).hexdigest()
     return {"data": body, "headers": {

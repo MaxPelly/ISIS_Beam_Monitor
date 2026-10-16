@@ -116,7 +116,7 @@ async def test_webhook_notifier_posts_signed_json():
     when = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
 
     await notifier.send(Notification(
-        title="PEARL: New run started", text="Run 2", severity=Severity.GOOD, emoji="🚀",
+        title="PEARL: New run started", text="Run 2 \ud800", severity=Severity.GOOD, emoji="🚀",
         facts=[("Duration", "1h 0m")], timestamp=when, topic="PEARL",
     ), "Experiment Updates")
 
@@ -128,7 +128,7 @@ async def test_webhook_notifier_posts_signed_json():
     assert headers["Content-Type"] == "application/json"
     payload = json.loads(body)
     assert payload["v"] == 1 and payload["id"]
-    assert payload["title"] == "PEARL: New run started"
+    assert payload["title"] == "PEARL: New run started" and payload["text"] == "Run 2 ?"  # a lone surrogate
     assert payload["severity"] == "good"
     assert payload["facts"] == [["Duration", "1h 0m"]]
     assert payload["timestamp"] == "2026-01-02T03:04:00+00:00"

@@ -193,14 +193,13 @@ def test_refusals_are_warned_of_once_and_recovery_noted(caplog):
     assert "503" not in caplog.text  # passing, so only at debug
 
 
-async def test_a_failing_build_or_unencodable_status_is_logged_and_retried(caplog):
-    # (A lone surrogate, e.g. from a bug, can't be encoded.)
-    build = MagicMock(side_effect=itertools.chain([RuntimeError("bug"), {"t": "\ud800"}], itertools.repeat({"n": 2})))
+async def test_a_failing_build_is_logged_and_retried_and_a_lone_surrogate_sent_as_a_question_mark(caplog):
+    build = MagicMock(side_effect=itertools.chain([RuntimeError("bug")], itertools.repeat({"t": "\ud800"})))
     async with receiver() as server:
         async with publishing(str(server.make_url("/ingest")), build=build):
             await wait_until(lambda: server.received)
-    assert "Failed to build the status" in caplog.text and "Failed to send the status" in caplog.text
-    assert server.received[0] == {"n": 2}
+    assert "Failed to build the status" in caplog.text
+    assert server.received[0] == {"t": "?"}
 
 
 def test_every_string_fits_the_push_sites_limits():
