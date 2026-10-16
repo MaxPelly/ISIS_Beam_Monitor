@@ -40,7 +40,10 @@ def configure_logging(mode: str, config) -> None:
         return
     handlers = [logging.StreamHandler()]
     if config.log_file:
-        handlers.append(RotatingFileHandler(config.log_file, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT))
+        try:
+            handlers.append(RotatingFileHandler(config.log_file, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT))
+        except OSError as exc:
+            raise ConfigError(f"[LOGGING] file {config.log_file} can't be written: {exc}") from None
     logging.basicConfig(level=config.log_level, format=LOG_FORMAT, handlers=handlers)
 
 
@@ -140,15 +143,14 @@ def main():
 
     try:
         config = load_config(args.config)
-        if args.mode == "daemon":
+        if args.mode == "daemon" and not args.dummy:  # a dummy daemon pushes nothing
             config.push_secret = read_push_secret(config)
+        set_timezone(config.notifications_timezone)
+        configure_logging(args.mode, config)
     except ConfigError as e:
         print(f"Configuration error: {e}", file=sys.stderr)
         raise SystemExit(1) from None
 
-    set_timezone(config.notifications_timezone)
-
-    configure_logging(args.mode, config)
     if args.mode == "daemon":  # once, now they can reach the log (the other commands needn't repeat them)
         for warning in config.warnings:
             logger.warning(warning)

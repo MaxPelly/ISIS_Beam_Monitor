@@ -131,6 +131,20 @@ def test_main_reports_config_errors_and_reads_the_push_secret_only_for_the_daemo
         run_cli("daemon", ini)
     run_daemon.assert_not_called()
     assert "Configuration error" in (err := capsys.readouterr().err) and "secret_file could not be read" in err
+    with patch("isis_monitor.cli.run_daemon", new_callable=AsyncMock, return_value=False) as run_daemon:
+        run_cli("daemon", "--dummy", ini)  # which pushes nothing
+    run_daemon.assert_awaited_once()
+
+
+def test_an_unwritable_log_file_is_a_config_error(tmp_path, capsys):
+    config = app_config(tmp_path, log_file=str(tmp_path / "missing" / "monitor.log"))
+    with pytest.raises(cli.ConfigError, match=r"\[LOGGING\] file .*missing/monitor.log can't be written"):
+        cli.configure_logging("daemon", config)
+    ini = Path(write_ini(tmp_path))
+    ini.write_text(ini.read_text() + f"[LOGGING]\nfile = {tmp_path / 'missing' / 'monitor.log'}\n")
+    with patch.object(cli.sys, "argv", ["isis-monitor", "daemon", str(ini)]), pytest.raises(SystemExit):
+        cli.main()
+    assert "Configuration error: [LOGGING] file" in capsys.readouterr().err
 
 
 def test_keyboard_interrupt_exits_quietly(tmp_path, capsys):
