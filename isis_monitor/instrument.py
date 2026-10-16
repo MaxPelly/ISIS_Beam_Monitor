@@ -278,12 +278,12 @@ class InstrumentTracker:
 
     def view(self) -> dict:
         """The snapshot plus what clients show: the run (the last, between
-        runs), its progress, the effective beam target, and the DAE's run
-        number and state ("" while unknown, e.g. its IOC is down)."""
+        runs) with its number and progress, the effective beam target, and
+        the DAE's run state ("" while unknown, e.g. its IOC is down)."""
         run = self.runs.run
         return {
             **self.to_snapshot(), "beam_target": self.beam_target,
-            "run_number": shown(self.runs.run_number), "run_state": self.runs.run_state,
+            "run_number": shown(run.number if run else self.runs.run_number), "run_state": self.runs.run_state,
             "run_name": run.title if run else "", "run_started_at": run.started_at.isoformat() if run else None,
             "counts": run.last_counts if run else -1.0, "target": run.target if run else self.instrument.notify_counts,
             "auto_runs": run.auto_runs if run else 0, "rb_number": self.runs.rb,

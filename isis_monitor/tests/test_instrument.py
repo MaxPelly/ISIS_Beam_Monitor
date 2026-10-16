@@ -449,6 +449,10 @@ async def test_the_view_shows_the_run():
     view = r.tracker.view()
     assert (view["run_number"], view["run_state"], view["run_name"], view["run_started_at"], view["counts"],
             view["rb_number"]) == ("10", "RUNNING", "Run ten", "2026-10-13T08:00:00+00:00", 5.0, "123")
+    # Between runs, the DAE has the next number, but the details are still run 10's.
+    await r(*NEXT_RUN[:4])
+    view = r.tracker.view()
+    assert (view["run_number"], view["run_state"], view["run_name"]) == ("10", "SETUP", "Run ten")
 
 
 # ---------------------------------------------------------------------------
