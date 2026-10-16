@@ -111,6 +111,7 @@ from unittest.mock import MagicMock, patch  # noqa: E402
 import aiohttp  # noqa: E402
 from aiohttp import web  # noqa: E402
 from aiohttp.test_utils import TestServer  # noqa: E402
+import pytest  # noqa: E402
 
 from isis_monitor.status import StatusPublisher  # noqa: E402
 from isis_monitor.tests.helpers import wait_until  # noqa: E402
@@ -239,10 +240,33 @@ def test_render_text_shows_beams_instruments_and_news_in_local_time():
                           "Beam on"]
 
 
+@pytest.mark.parametrize("replies, unheard", [
+    # Timeouts (0, none), 5xx and 409s (e.g. after a clock step) pass until the site would show the monitor offline.
+    ([204, 503, 0, 409, 503, 204], 1),
+    ([204, 401, 401, 401, 401, 204], 0),  # a refusal is warned of as such
+    ([204, 503, 503, 503, 401, 204], 1),  # and says when it's over, once
+], ids=["passing failures", "refused", "refused after"])
+async def test_a_site_that_keeps_not_taking_the_status_is_warned_of_once(caplog, replies, unheard):
+    caplog.set_level("INFO")
+    publisher = StatusPublisher("http://x/ingest", SECRET, lambda: {"n": 1}, 5, MagicMock())
+
+    async def send(status):  # as _send does
+        if replies[now // 30]:
+            publisher._took(replies[now // 30])
+        return replies[now // 30]
+
+    with patch.object(publisher, "_send", send):
+        for now in range(0, 30 * len(replies), 30):  # every heartbeat, the status being unchanged
+            await publisher.publish(now)
+            assert ("hasn't taken the status for 90s" in caplog.text) is (bool(unheard) and now >= 90)
+    assert caplog.text.count("hasn't taken the status") == unheard
+    assert caplog.text.count("takes the status again") == 1
+
+
 async def test_a_slow_site_isnt_reported_unreachable(caplog):
     """A timeout may pass; only a site that can't be connected to is warned of."""
     caplog.set_level("DEBUG")
     publisher = StatusPublisher("http://x/ingest", SECRET, dict, 60, MagicMock())
     publisher.session.post.side_effect = TimeoutError
-    assert await publisher._send({"n": 1}) is False
+    assert await publisher._send({"n": 1}) == 0
     assert "Failed to send the status" in caplog.text and "Can't reach" not in caplog.text

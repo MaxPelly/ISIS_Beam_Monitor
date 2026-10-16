@@ -119,6 +119,7 @@ class StatusPublisher:
     queues: each send is the latest status, and one the site didn't take is
     sent again next time."""
     HEARTBEAT = 30.0
+    UNHEARD = 3  # heartbeats without the site taking one (as the site judges the monitor offline) before a warning
 
     def __init__(self, url: str, secret: bytes, build: Callable[[], dict], interval: float,
                  session: aiohttp.ClientSession, timeout: float = 2.0, where: str = ""):
@@ -130,6 +131,8 @@ class StatusPublisher:
         self._refused: Optional[int] = None  # the HTTP status the site last refused one with, 0 if unreachable
         self._sent: Optional[dict] = None  # the last status the site took, but for generated_at
         self._sent_at = -math.inf  # when, by time.monotonic()
+        self._taken_at: Optional[float] = None  # when the site last took one (204), or publishing began
+        self._unheard = False  # whether it's been warned that the site isn't taking them
 
     async def run(self) -> None:
         while True:
@@ -137,15 +140,29 @@ class StatusPublisher:
             await asyncio.sleep(self.interval)
 
     async def publish(self, now: float) -> None:
-        """Send the status if it has changed, or the last was HEARTBEAT ago."""
+        """Send the status if it has changed, or the last was HEARTBEAT ago;
+        warn once if the site hasn't taken one for UNHEARD heartbeats."""
         try:
             status = self.build()
         except Exception:  # a bug: logged, and the next try builds it again
             logger.exception("Failed to build the status")
             return
         content = {k: v for k, v in status.items() if k != "generated_at"}
-        if (content != self._sent or now - self._sent_at >= self.HEARTBEAT) and await self._send(status):
+        self._taken_at = now if self._taken_at is None else self._taken_at
+        if content == self._sent and now - self._sent_at < self.HEARTBEAT:
+            return
+        code = await self._send(status)
+        if code in (204, 409):  # 409: no newer than its last, so not worth re-sending
             self._sent, self._sent_at = content, now
+        if code == 204:
+            if self._unheard:
+                logger.info("Push site takes the status again")
+            self._taken_at, self._unheard = now, False
+        elif not self._unheard and self._refused is None and now - self._taken_at >= self.UNHEARD * self.HEARTBEAT:
+            # E.g. timing out, busy (5xx) or 409 after a clock step: a refusal is warned of in _took.
+            logger.warning(f"Push site at {self.where} hasn't taken the status for {now - self._taken_at:.0f}s; "
+                           "its Status page shows the monitor offline")
+            self._unheard = True
 
     def _took(self, status: int) -> None:
         """Warns once when the site starts refusing the status (e.g. 400 for one it
@@ -159,6 +176,7 @@ class StatusPublisher:
             return
         refused = None if status in (204, 409) else status
         if refused != self._refused:
+            self._unheard = False  # this says why, and when it's over
             if refused == 0:
                 logger.warning(f"Can't reach the push site at {self.where} to send the status; its Status page won't update")
             elif refused:
@@ -169,23 +187,23 @@ class StatusPublisher:
         if status == 409:
             logger.debug("Push site didn't take the status: HTTP 409 (not newer than the last)")
 
-    async def _send(self, status: dict) -> bool:
-        """Whether the site took the status (204, or 409 for one no newer than
-        its last); any failure is only logged, and never stops the publisher."""
+    async def _send(self, status: dict) -> int:
+        """The site's HTTP status, or 0 if there was none; any failure is only
+        logged, and never stops the publisher."""
         try:
             async with self.session.post(
                 self.url, timeout=aiohttp.ClientTimeout(total=self.timeout), allow_redirects=False,
                 **signed_json(status, self.secret),
             ) as resp:
                 self._took(resp.status)
-                return resp.status in (204, 409)
+                return resp.status
         except (aiohttp.ClientError, TimeoutError) as exc:
             logger.debug(f"Failed to send the status: {exc!r}")
             if isinstance(exc, aiohttp.ClientConnectorError):  # not a slow or dropped send, which may pass
                 self._took(0)
         except Exception:  # a bug: logged, and the next send tries again
             logger.exception("Failed to send the status")
-        return False
+        return 0
 
 
 SPARK_BINS = 3  # 10-minute bins per sparkline character: 48 characters for 24h
