@@ -8,6 +8,10 @@ works with (before 2.1.0, the version its `push_site` submodule pointed at).
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-10-16
+
+Works with push site 2.0.0 and later (2.0.2 alongside it). No config change: update the checkout and restart the daemon.
+
 - A run's "Previous run" on the next run's card is its own title, not the next run's: a title that comes once a run is ending, before its number moves on (live or re-sent after a reconnect), is the next run's. So is a start time then, which could have been taken as a re-begin, with a spurious restart card and a 0 µA·h completion.
 - After a reconnect or an IOC outage, WDTITLE can come back seconds after the rest. A run begun meanwhile now waits up to 10s for its title before its card is sent, rather than being announced with the last run's; a run that ends within that wait is recorded without a card. A run re-begun meanwhile gets its restart card (if it was retitled) once its title comes, if within 10s, and that title is the one later restarts are compared with.
 - A run that begins in the hour repeated when the clocks go back gets its real start time, not one an hour earlier.
