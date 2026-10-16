@@ -484,7 +484,7 @@ class RunTracker:
         previous_title, run.begun_title = run.begun_title or run.title, run.title
         logger.info(f"{self._log}: run {run.number} begun again (an abort)")
         if not self._seen_title:  # its title may be on its way: a retitle's card waits for it
-            if self._rebegun_untitled is None:  # the title it had before the first
+            if self._rebegun_untitled is None or now > self._rebegun_untitled[1]:  # the title before the first
                 self._rebegun_untitled = (previous_title, now + REPLAY_TIMEOUT)
             previous_title = run.title
         if self.listener:

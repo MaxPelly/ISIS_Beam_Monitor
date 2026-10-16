@@ -458,21 +458,23 @@ GAP_REBEGIN = [reconnect(), (100, "STARTTIME", "Tue 13-Oct-2026 10:01:30"), (100
 @pytest.mark.parametrize("then, restarted", [
     # Its title re-sent after another reconnect, before RUNNUMBER and RUNSTATE: the replay settles it.
     ([reconnect(101), (101, "WDTITLE", "Run ten b"), (101, "RUNNUMBER", "00010"), (101, "RUNSTATE_STR", "RUNNING")],
-     "Run ten b"),
+     ("Run ten", "Run ten b")),
     # Twice re-begun: retitled since the title before the first.
-    ([(101, "STARTTIME", "Tue 13-Oct-2026 10:01:31"), (102, "WDTITLE", "Run ten x")], "Run ten x"),
+    ([(101, "STARTTIME", "Tue 13-Oct-2026 10:01:31"), (102, "WDTITLE", "Run ten x")], ("Run ten", "Run ten x")),
     # Its number moved on first: the title is the next run's.
     ([(101, "RUNSTATE_STR", "ENDING"), (102, "RUNNUMBER", "00011"), (103, "WDTITLE", "Run eleven")], None),
     # Too late to be the re-begin's: a retitle later in the run.
     ([(100 + REPLAY_TIMEOUT.total_seconds() + 1, "WDTITLE", "Run ten b")], None),
-], ids=["in a replay", "twice", "number moved on", "too late"])
+    # Re-begun again once the first wait was over: a wait of its own.
+    ([(200, "STARTTIME", "Tue 13-Oct-2026 10:03:20"), (202, "WDTITLE", "Run ten y")], ("Run ten x", "Run ten y")),
+], ids=["in a replay", "twice", "number moved on", "too late", "again later"])
 def test_a_rebegin_waiting_for_its_title(then, restarted):
     r = running()((50, "WDTITLE", "Run ten x"), *GAP_REBEGIN, *then).settle()
     rebegins = [d for d in r.log if d[0] == "rebegin"]
     assert len(rebegins) == 1 + bool(restarted) + (then[0][1] == "STARTTIME")
     assert r.tracker._rebegun_untitled is None
     if restarted:
-        assert r.decisions.retitled == ("Run ten", restarted)
+        assert r.decisions.retitled == restarted
 
 
 def test_a_title_replayed_while_a_run_is_ending_is_the_next_runs():
