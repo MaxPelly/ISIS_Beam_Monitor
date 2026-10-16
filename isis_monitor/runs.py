@@ -42,7 +42,9 @@ SETTLE = timedelta(seconds=1)
 # An RB number change this soon after a run began makes it the new experiment's
 # first run (counts arrive within a second of RUNNING, so they can't tell).
 NEW_EXPERIMENT_WINDOW = timedelta(seconds=30)
-REPLAY_TIMEOUT = timedelta(seconds=10)  # after a resubscribe, at most this long without RUNNUMBER and RUNSTATE
+# After a resubscribe, at most this long without RUNNUMBER and RUNSTATE, and after one or an outage,
+# the longest a start waits for WDTITLE.
+REPLAY_TIMEOUT = timedelta(seconds=10)
 START_TIME_FORMAT = "%a %d-%b-%Y %H:%M:%S"  # DAE:STARTTIME, UK local time, e.g. "Tue 13-Oct-2026 10:49:43"
 CLOCK_SLACK = timedelta(minutes=1)  # how far ahead of the daemon's clock the DAE's may be
 # notify_counts = auto: a run's target is the median of the experiment's last
@@ -151,6 +153,7 @@ class RunTracker:
         self._replay_deadline: Optional[datetime] = None
         self._seen_number = self._seen_state = False
         self._seen_title = False  # since resubscribing or its last NaN: see _maybe_start
+        self._rebegun_untitled: Optional[str] = None  # a re-begin's previous title, while its own hasn't come
         self.rb_resync = True  # the first RB number after (re)subscribing may have changed unwatched
         self._pending: Optional[Tuple[str, datetime]] = None  # (number, since) of a start that's settling
         self._final_due = False  # a run ended unseen, and its final counts are still to come
@@ -193,7 +196,8 @@ class RunTracker:
             # A STARTTIME that changed under the same number is a re-begin
             # (under the title re-sent); checked before the counts, which are
             # then the new attempt's.
-            run.title = self.title or run.title
+            if self._ending != run.number:  # see _retitle
+                run.title = self.title or run.title
             if run.start_text and self.start_text and self.start_text != run.start_text:
                 self._rebegin(now)
             if self.counts is not None and self.credited():
@@ -266,6 +270,8 @@ class RunTracker:
         self._seen_state = True
         if self.run_state == "ENDING" and self._seen_number:
             self._ending = self.run_number
+        elif self.run_state in ACTIVE_STATES:  # e.g. an end that didn't happen
+            self._ending = ""
         if self._final_due and not self.replaying and self.run_state != "ENDING":  # begun: the counts are the next run's
             self._end_unseen(now, waited=self.run_state != "SETUP")
         if self.run_state not in ACTIVE_STATES:
@@ -283,6 +289,12 @@ class RunTracker:
         self._seen_title = title is not None
         if title:
             self._retitle(title)
+        run = self.run
+        if (self._seen_title and self._rebegun_untitled is not None and not self.replaying
+                and run.number == self.run_number):
+            previous_title, self._rebegun_untitled, run.begun_title = self._rebegun_untitled, None, run.title
+            if self.listener and run.title != previous_title:
+                self.listener.run_rebegun(run, previous_title)
         self._maybe_start(now)
 
     def _retitle(self, title: str) -> None:
@@ -424,7 +436,7 @@ class RunTracker:
             self._schedule(SETTLE - (now - self._pending[1]))
 
     def _start(self, now: datetime, adopted: bool = False) -> None:
-        previous = self.run
+        previous, self._rebegun_untitled = self.run, None
         if previous and self.last_completed != previous.number:  # its end wasn't seen, e.g. the daemon was down
             self._complete(now, final_known=False)
         target, auto_runs = self._target()
@@ -474,6 +486,10 @@ class RunTracker:
         run.last_counts, run.end_notified = 0.0, False
         previous_title, run.begun_title = run.begun_title or run.title, run.title
         logger.info(f"{self._log}: run {run.number} begun again (an abort)")
+        if not self._seen_title:  # its title may be on its way: a retitle's card waits for it (see on_title)
+            if self._rebegun_untitled is None:
+                self._rebegun_untitled = previous_title
+            previous_title = run.title
         if self.listener:
             self.listener.run_rebegun(run, previous_title)
 
@@ -590,7 +606,7 @@ def pv_handlers(tracker: "RunTracker") -> dict:
         return handler
 
     def title(b64: Any, now: datetime) -> None:
-        if pv_text(b64) is None:  # NaN: the IOC is down
+        if str(b64).lower() == "nan":  # the IOC is down
             tracker.on_title(None, now)
             return
         try:

@@ -32,6 +32,7 @@ class Decisions:
         self.log.append(("done", run.number, round(run.last_counts, 3) if run.final_known else None))
 
     def run_rebegun(self, run, previous_title):
+        self.retitled = (previous_title, run.title)
         self.log.append(("rebegin", run.number))
 
     def experiment_finished(self, rb, runs, uah, since, partial, now):
@@ -408,15 +409,60 @@ def test_a_title_or_start_time_once_a_run_is_ending_is_the_next_runs(ending):
 ], ids=["outage", "reconnect"])
 def test_a_run_begun_in_a_gap_waits_for_its_title(gap):
     """As in osiris_late_nan, WDTITLE can come back seconds after the rest."""
-    r = running()(*gap, (42.1, "WDTITLE", "Run eleven")).settle()
-    assert r.log[1:] == [("done", "00010", None), ("start", "00011", "00010")]
+    r = running()(*gap, (42.1, "WDTITLE", "Run eleven"))
+    assert r.log[1:] == [("done", "00010", None), ("start", "00011", "00010")]  # as soon as it came
     assert (r.decisions.previous.title, r.tracker.run.title, r.tracker.run.begun_title) == (
         "Run ten", "Run eleven", "Run eleven")
-    # Without one, it starts anyway, REPLAY_TIMEOUT after it was due.
+    # A blank one counts.
+    r = running()(*gap, (42.1, "WDTITLE", ""))
+    assert r.tracker.run.number == "00011"
+    # Without one, it starts anyway, REPLAY_TIMEOUT after it was first seen under way.
     r = running()(*gap).at(40 + REPLAY_TIMEOUT.total_seconds() - 0.1)
     assert r.tracker.run.number == "00010"
     r.at(40 + REPLAY_TIMEOUT.total_seconds())
     assert r.tracker.run.number == "00011"
+
+
+def test_a_start_waiting_for_its_title_is_timed():
+    scheduled = []
+    tracker = RunTracker(InstrumentConfig("PEARL", 100.0), call_later=lambda d, cb: scheduled.append(d))
+    tracker.resubscribed(T0)
+    handlers = {pv.split(":DAE:")[1]: h for pv, h in pv_handlers(tracker).items()}
+    for suffix, value in (("RUNNUMBER", "00011"), ("RUNSTATE_STR", "RUNNING")):
+        handlers[suffix](update(suffix, value), T0)
+    tracker.tick(T0 + SETTLE)
+    assert tracker.run is None and scheduled[-1] == pytest.approx((REPLAY_TIMEOUT - SETTLE).total_seconds() + 0.05)
+    handlers["WDTITLE"]({"b64byt": ""}, T0 + 2 * SETTLE)  # blank, as PVWS may send it: not NaN
+    assert tracker.run.number == "00011"
+
+
+@pytest.mark.parametrize("before, title, restarted", [
+    ("Run ten", "Run ten b", True),
+    ("Run ten", "Run ten", False),
+    ("Run ten x", "Run ten x", True),  # retitled before the gap: its card still waits for the title
+])
+def test_a_rebegin_in_a_gap_waits_for_its_title_to_tell_a_retitle(before, title, restarted):
+    r = running()((50, "WDTITLE", before), reconnect(), (100, "STARTTIME", "Tue 13-Oct-2026 10:01:30"),
+                  (100, "TOTALUAMPS", 0.2), (100, "RUNNUMBER", "00010"), (100, "RUNSTATE_STR", "RUNNING"))
+    assert r.log[1:] == [("rebegin", "00010")] and r.decisions.retitled == (before, before)  # no card yet
+    r((102.1, "WDTITLE", title)).settle()
+    assert r.log[1:] == [("rebegin", "00010")] * (2 if restarted else 1)
+    assert r.decisions.retitled == (("Run ten", title) if restarted else (before, before))
+    assert r.tracker.run.begun_title == title
+
+
+def test_a_title_replayed_while_a_run_is_ending_is_the_next_runs():
+    r = running()((20, "RUNSTATE_STR", "ENDING"), (20.5, "WDTITLE", "Run eleven"), reconnect(25),
+                  (25, "WDTITLE", "Run eleven"), (25, "RUNNUMBER", "00010"), (25, "RUNSTATE_STR", "ENDING"),
+                  *[(t + 10, suffix, value) for t, suffix, value in NEXT_RUN[1:]]).settle()
+    assert r.log[1:] == [("done", "00010", 8.0), ("start", "00011", "00010")]
+    assert r.decisions.previous.title == "Run ten"
+
+
+def test_a_run_that_goes_back_from_ending_can_be_retitled_and_rebegun():
+    r = running()((20, "RUNSTATE_STR", "ENDING"), (21, "RUNSTATE_STR", "RUNNING"), (22, "WDTITLE", "Run ten b"),
+                  (23, "STARTTIME", "Tue 13-Oct-2026 10:00:23")).settle()
+    assert r.log[1:] == [("rebegin", "00010")] and r.tracker.run.title == "Run ten b"
 
 
 def test_resubscribe_replays():
