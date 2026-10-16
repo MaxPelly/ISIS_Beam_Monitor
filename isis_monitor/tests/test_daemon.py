@@ -661,12 +661,28 @@ def test_restarted_daemon_does_not_replay_notify_current(tmp_path, monkeypatch, 
 def test_a_corrupt_database_is_moved_aside_and_the_daemon_starts_afresh(tmp_path, caplog):
     db = tmp_path / "beam_monitor.db"
     db.write_bytes(b"not a database" * 100)
-    store, snapshot, samples = daemon.open_store(db)
+    connections = []
+    with patch("isis_monitor.storage.sqlite3.connect",
+               side_effect=lambda *args, connect=sqlite3.connect, **kwargs: connections.append(
+                   connect(*args, **kwargs)) or connections[-1]):
+        store, snapshot, samples = daemon.open_store(db)
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        connections[0].execute("SELECT 1")  # the corrupt one's
     store.close()
     assert (snapshot, samples) == (None, [])
     (aside,) = tmp_path.glob("beam_monitor.db.corrupt-*")
     assert aside.read_bytes().startswith(b"not a database")
     assert "is corrupt" in caplog.text and f"moved it to {aside}" in caplog.text
+
+
+def test_a_bug_reading_a_good_database_doesnt_move_it_aside(tmp_path):
+    db = tmp_path / "beam_monitor.db"
+    daemon.open_store(db)[0].close()
+    with patch.object(SQLiteStateStore, "load_snapshot", side_effect=sqlite3.ProgrammingError("bindings")), \
+            patch.object(SQLiteStateStore, "close", autospec=True) as close, pytest.raises(sqlite3.ProgrammingError):
+        daemon.open_store(db)
+    close.assert_called_once()
+    assert list(tmp_path.iterdir()) == [db]
 
 
 def test_a_database_that_cant_be_opened_is_left_alone(tmp_path):

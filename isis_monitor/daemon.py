@@ -191,7 +191,7 @@ async def state_persistence_loop(config, state: DaemonState, store: SQLiteStateS
             logger.exception("Failed to persist daemon state; will retry next interval")
 
 
-def open_store(path: Path):
+def open_store(path: Path) -> tuple:
     """The store, its saved daemon state and the last 24h of samples. A
     corrupt database is moved aside, and the daemon starts afresh, rather
     than failing to start every time; one it can't use for another reason
@@ -207,11 +207,11 @@ def open_store(path: Path):
 
     try:
         return load()
-    except sqlite3.OperationalError:
-        raise
     except sqlite3.DatabaseError as exc:
+        if getattr(exc, "sqlite_errorcode", None) not in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
+            raise  # e.g. a bug (ProgrammingError): not to be taken for a corrupt file
         aside = path.with_name(f"{path.name}.corrupt-{datetime.now():%Y%m%d-%H%M%S}")
-        path.rename(aside)
+        path.rename(aside)  # any journal was rolled back or dropped by SQLite on opening it
         logger.error(f"The database {path} is corrupt ({exc}); moved it to {aside} and starting afresh")
         return load()
 

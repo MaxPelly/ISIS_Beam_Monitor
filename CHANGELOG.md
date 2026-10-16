@@ -13,7 +13,7 @@ works with (before 2.1.0, the version its `push_site` submodule pointed at).
 - A run that begins in the hour repeated when the clocks go back gets its real start time, not one an hour earlier.
 - Between runs, the status shows the last run's number beside its title and counts, not the next number the DAE is ready with.
 - A corrupt database no longer stops the daemon from starting: it's moved aside as `beam_monitor.db.corrupt-<time>`, with an error logged, and the daemon starts afresh. One that can't be opened for another reason (e.g. locked or unreadable) still stops it.
-- A push site that hasn't taken the status for 90s (timing out, busy, or refusing it as no newer after the clock steps back) is warned of once, as its Status page then shows the monitor offline, and its taking it again is logged.
+- A push site that hasn't taken the status for as long as it takes to show the monitor offline (90s by default: 3 of the status's `interval_s`), timing out, busy, or refusing it as no newer after the clock steps back, is warned of once, as its Status page then shows the monitor offline, and its taking it again is logged.
 - A blank `[DAEMON] db_path`, `socket_path` or `lock_file` is the default, rather than a temporary database (nothing saved) or a traceback.
 - An unwritable `[LOGGING] file` is a configuration error rather than a traceback, and `daemon --dummy` no longer needs the push secret.
 - `-n` posts the current MCR news straight away, not after the first poll interval.

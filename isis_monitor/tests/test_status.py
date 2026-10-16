@@ -106,7 +106,7 @@ import contextlib  # noqa: E402
 import hashlib  # noqa: E402
 import hmac  # noqa: E402
 import itertools  # noqa: E402
-from unittest.mock import MagicMock, patch  # noqa: E402
+from unittest.mock import AsyncMock, MagicMock, patch  # noqa: E402
 
 import aiohttp  # noqa: E402
 from aiohttp import web  # noqa: E402
@@ -239,27 +239,43 @@ def test_render_text_shows_beams_instruments_and_news_in_local_time():
                           "Beam on"]
 
 
-@pytest.mark.parametrize("replies, unheard", [
+T = 1000.0  # time.monotonic() is far from 0
+
+
+@pytest.mark.parametrize("replies, interval_s, warned_at, again", [
     # Timeouts (0, none), 5xx and 409s (e.g. after a clock step) pass until the site would show the monitor offline.
-    ([204, 503, 0, 409, 503, 204], 1),
-    ([204, 401, 401, 401, 401, 204], 0),  # a refusal is warned of as such
-    ([204, 503, 503, 503, 401, 204], 1),  # and says when it's over, once
-], ids=["passing failures", "refused", "refused after"])
-async def test_a_site_that_keeps_not_taking_the_status_is_warned_of_once(caplog, replies, unheard):
+    ([204, 503, 0, 409, 503, 204], 30, 90, 1),
+    ([204, 204, 503, 503, 503, 204], 30, 120, 1),  # 90s from the last it took
+    ([503, 503, 503, 503, 204], 30, 90, 1),  # or from the first try
+    ([204, 503, 503, 503, 503, 503, 204], 45, 150, 1),  # as the site judges, by its interval_s
+    ([204, 401, 401, 401, 401, 204], 30, None, 1),  # a refusal is warned of as such
+    ([204, 503, 503, 503, 401, 204], 30, 90, 1),  # and says when it's over, once
+    ([204, 401, 401, 401, 409, 503], 30, None, 1),  # even with a 409: not "not taken" at once
+])
+async def test_a_site_that_keeps_not_taking_the_status_is_warned_of_once(caplog, replies, interval_s, warned_at, again):
     caplog.set_level("INFO")
-    publisher = StatusPublisher("http://x/ingest", SECRET, lambda: {"n": 1}, 5, MagicMock())
+    publisher = StatusPublisher("http://x/ingest", SECRET, lambda: {"interval_s": interval_s}, 5, MagicMock())
 
     async def send(status):  # as _send does
-        if replies[now // 30]:
-            publisher._took(replies[now // 30])
-        return replies[now // 30]
+        if reply := replies[int(now - T) // 30]:
+            publisher._took(reply)
+        return reply
 
     with patch.object(publisher, "_send", send):
-        for now in range(0, 30 * len(replies), 30):  # every heartbeat, the status being unchanged
+        for now in range(int(T), int(T) + 30 * len(replies), 30):  # every heartbeat, the status being unchanged
             await publisher.publish(now)
-            assert ("hasn't taken the status for 90s" in caplog.text) is (bool(unheard) and now >= 90)
-    assert caplog.text.count("hasn't taken the status") == unheard
-    assert caplog.text.count("takes the status again") == 1
+            warned = warned_at is not None and now - T >= warned_at
+            assert ("hasn't taken the status" in caplog.text) is warned, now - T
+    assert caplog.text.count("hasn't taken the status") == (warned_at is not None)
+    assert caplog.text.count("takes the status again") == again
+
+
+async def test_a_409_isnt_sent_again_before_the_heartbeat():
+    publisher = StatusPublisher("http://x/ingest", SECRET, lambda: {"n": 1}, 5, MagicMock())
+    with patch.object(publisher, "_send", AsyncMock(return_value=409)) as send:
+        for now in (T, T + 5, T + 10):
+            await publisher.publish(now)
+    assert send.await_count == 1
 
 
 async def test_a_slow_site_isnt_reported_unreachable(caplog):

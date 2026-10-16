@@ -119,7 +119,7 @@ class StatusPublisher:
     queues: each send is the latest status, and one the site didn't take is
     sent again next time."""
     HEARTBEAT = 30.0
-    UNHEARD = 3  # heartbeats without the site taking one (as the site judges the monitor offline) before a warning
+    UNHEARD = 3  # of the status's interval_s without the site taking one: as long as the site shows it offline
 
     def __init__(self, url: str, secret: bytes, build: Callable[[], dict], interval: float,
                  session: aiohttp.ClientSession, timeout: float = 2.0, where: str = ""):
@@ -131,7 +131,8 @@ class StatusPublisher:
         self._refused: Optional[int] = None  # the HTTP status the site last refused one with, 0 if unreachable
         self._sent: Optional[dict] = None  # the last status the site took, but for generated_at
         self._sent_at = -math.inf  # when, by time.monotonic()
-        self._taken_at: Optional[float] = None  # when the site last took one (204), or publishing began
+        # When the site last took one (204), or publishing began or a refusal ended; None until then
+        self._taken_at: Optional[float] = None
         self._unheard = False  # whether it's been warned that the site isn't taking them
 
     async def run(self) -> None:
@@ -141,14 +142,13 @@ class StatusPublisher:
 
     async def publish(self, now: float) -> None:
         """Send the status if it has changed, or the last was HEARTBEAT ago;
-        warn once if the site hasn't taken one for UNHEARD heartbeats."""
+        warn once if the site hasn't taken one for UNHEARD of its interval_s."""
         try:
             status = self.build()
         except Exception:  # a bug: logged, and the next try builds it again
             logger.exception("Failed to build the status")
             return
         content = {k: v for k, v in status.items() if k != "generated_at"}
-        self._taken_at = now if self._taken_at is None else self._taken_at
         if content == self._sent and now - self._sent_at < self.HEARTBEAT:
             return
         code = await self._send(status)
@@ -158,7 +158,10 @@ class StatusPublisher:
             if self._unheard:
                 logger.info("Push site takes the status again")
             self._taken_at, self._unheard = now, False
-        elif not self._unheard and self._refused is None and now - self._taken_at >= self.UNHEARD * self.HEARTBEAT:
+        elif self._taken_at is None:
+            self._taken_at = now
+        elif (not self._unheard and self._refused is None
+              and now - self._taken_at >= self.UNHEARD * status.get("interval_s", self.HEARTBEAT)):
             # E.g. timing out, busy (5xx) or 409 after a clock step: a refusal is warned of in _took.
             logger.warning(f"Push site at {self.where} hasn't taken the status for {now - self._taken_at:.0f}s; "
                            "its Status page shows the monitor offline")
@@ -176,7 +179,7 @@ class StatusPublisher:
             return
         refused = None if status in (204, 409) else status
         if refused != self._refused:
-            self._unheard = False  # this says why, and when it's over
+            self._unheard, self._taken_at = False, None  # this says why, and when it's over
             if refused == 0:
                 logger.warning(f"Can't reach the push site at {self.where} to send the status; its Status page won't update")
             elif refused:
