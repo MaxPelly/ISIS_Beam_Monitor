@@ -101,9 +101,10 @@ class MCRNewsMonitor:
         # TCPConnector with DNS TTL avoids stale connections on long-running sessions
         connector = aiohttp.TCPConnector(ttl_dns_cache=300)
         async with aiohttp.ClientSession(connector=connector) as session:
-            # With news restored from before a restart, the first poll
-            # announces anything posted since; otherwise take a baseline.
-            poll_now = self.old_news is not None
+            # With news restored from before a restart, the first poll, straight
+            # away, announces anything posted since; with -n, the current news;
+            # otherwise take a baseline.
+            poll_now = self.old_news is not None or self.notify_current
             if self.old_news is None and self.notify_current:
                 self.old_news = ""  # so the first successful poll is broadcast
             elif self.old_news is None:

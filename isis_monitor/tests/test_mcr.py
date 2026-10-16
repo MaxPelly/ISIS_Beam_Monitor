@@ -127,7 +127,7 @@ async def test_mcr_run_broadcasts_only_on_news_change_and_survives_a_failed_send
 
 
 @pytest.mark.parametrize("old_news, feed, sent, waits", [
-    (None, "News A", 1, 2),  # nothing restored, but -n: the first poll is announced
+    (None, "News A", 1, 1),  # nothing restored, but -n: the first poll, straight away, is announced
     # With the news restored from before a restart, there's no baseline fetch:
     # the first poll, straight away, announces anything posted since.
     ("News A", "News B", 1, 1),
@@ -162,7 +162,7 @@ async def test_mcr_run_backoff_on_consecutive_failures(mock_config, mock_channel
     delays = await run_script(monitor, None, None, None, None, "News", None)
 
     base = mock_config.mcr_poll_interval
-    assert delays == [base, base * 2, base * 4, base * 8, base * 8, base, base * 2]
+    assert delays == [base * 2, base * 4, base * 8, base * 8, base, base * 2]  # (with -n, the first poll is at once)
     statuses = [c.args[1] for c in sink.update_health.call_args_list]
     assert statuses[0] == "starting"
     assert "error" in statuses and "connected" in statuses
@@ -182,6 +182,8 @@ async def test_mcr_request_reconnect_polls_immediately_and_shutdown_cancels_the_
 
     with fake_session(), patch.object(monitor, "get_news", side_effect=get_news):
         task = asyncio.create_task(monitor.run())
+        await asyncio.wait_for(polled.wait(), timeout=1.0)  # -n: the first poll is at once
+        polled.clear()
         await asyncio.sleep(0.05)
         assert not polled.is_set()
         assert monitor.request_reconnect() is True
