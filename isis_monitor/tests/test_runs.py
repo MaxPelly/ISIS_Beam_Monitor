@@ -520,6 +520,10 @@ def test_start_time_parsing():
     assert parse_start_time("Tue 13-Oct-2026 10:49:43", now) == utc(2026, 10, 13, 9, 49, 43)
     assert parse_start_time("Tue 13-Oct-2025 10:49:43", now) is None  # more than a day away
     assert parse_start_time("soon", now) is None
+    # 01:30 comes twice on 25 Oct 2026: BST (00:30 UTC), then GMT (01:30 UTC).
+    assert parse_start_time("Sun 25-Oct-2026 01:30:00", utc(2026, 10, 25, 0, 31)) == utc(2026, 10, 25, 0, 30)
+    assert parse_start_time("Sun 25-Oct-2026 01:30:00", utc(2026, 10, 25, 1, 31)) == utc(2026, 10, 25, 1, 30)
+    assert parse_start_time("Sun 25-Oct-2026 01:30:00", utc(2026, 10, 25, 1, 29, 30)) == utc(2026, 10, 25, 1, 30)
 
 
 # --- Saved state ------------------------------------------------------------------

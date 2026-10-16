@@ -44,6 +44,7 @@ SETTLE = timedelta(seconds=1)
 NEW_EXPERIMENT_WINDOW = timedelta(seconds=30)
 REPLAY_TIMEOUT = timedelta(seconds=10)  # after a resubscribe, at most this long without RUNNUMBER and RUNSTATE
 START_TIME_FORMAT = "%a %d-%b-%Y %H:%M:%S"  # DAE:STARTTIME, UK local time, e.g. "Tue 13-Oct-2026 10:49:43"
+CLOCK_SLACK = timedelta(minutes=1)  # how far ahead of the daemon's clock the DAE's may be
 # notify_counts = auto: a run's target is the median of the experiment's last
 # AUTO_RUNS run totals, leaving out very short ones (e.g. a mistaken setup),
 # once AUTO_MIN_RUNS are left; AUTO_HISTORY totals are kept to allow for them.
@@ -75,12 +76,16 @@ def pv_text(value: Any) -> Optional[str]:
 
 
 def parse_start_time(text: str, now: datetime) -> Optional[datetime]:
-    """DAE:STARTTIME as a time, if it's readable and within a day of now."""
+    """DAE:STARTTIME as a time, if it's readable and within a day of now. In
+    the hour repeated when the clocks go back, it's the later reading that
+    isn't after now (give or take CLOCK_SLACK): a run is seen as it begins."""
     try:
-        started = datetime.strptime(text, START_TIME_FORMAT).replace(tzinfo=UK_TZ)
+        local = datetime.strptime(text, START_TIME_FORMAT)
     except ValueError:
         return None
-    return started.astimezone(timezone.utc) if abs(started - now) <= timedelta(days=1) else None
+    readings = [local.replace(tzinfo=UK_TZ, fold=fold).astimezone(timezone.utc) for fold in (0, 1)]
+    started = max((t for t in readings if t <= now + CLOCK_SLACK), default=readings[0])
+    return started if abs(started - now) <= timedelta(days=1) else None
 
 
 @dataclass
