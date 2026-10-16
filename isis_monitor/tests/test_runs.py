@@ -402,6 +402,23 @@ def test_a_title_or_start_time_once_a_run_is_ending_is_the_next_runs(ending):
     assert (r.decisions.previous.title, r.tracker.run.title) == ("Run ten", "Run eleven")
 
 
+@pytest.mark.parametrize("gap", [
+    [*OUTAGE, (30, "WDTITLE", "NaN"), (40, "RUNNUMBER", "00011"), (40, "RUNSTATE_STR", "RUNNING")],
+    [reconnect(40), (40, "RUNSTATE_STR", "RUNNING"), (40, "RUNNUMBER", "00011")],
+], ids=["outage", "reconnect"])
+def test_a_run_begun_in_a_gap_waits_for_its_title(gap):
+    """As in osiris_late_nan, WDTITLE can come back seconds after the rest."""
+    r = running()(*gap, (42.1, "WDTITLE", "Run eleven")).settle()
+    assert r.log[1:] == [("done", "00010", None), ("start", "00011", "00010")]
+    assert (r.decisions.previous.title, r.tracker.run.title, r.tracker.run.begun_title) == (
+        "Run ten", "Run eleven", "Run eleven")
+    # Without one, it starts anyway, REPLAY_TIMEOUT after it was due.
+    r = running()(*gap).at(40 + REPLAY_TIMEOUT.total_seconds() - 0.1)
+    assert r.tracker.run.number == "00010"
+    r.at(40 + REPLAY_TIMEOUT.total_seconds())
+    assert r.tracker.run.number == "00011"
+
+
 def test_resubscribe_replays():
     # Counts while replaying aren't credited.
     r = running()(reconnect(50), (50, "TOTALUAMPS", 0.0))

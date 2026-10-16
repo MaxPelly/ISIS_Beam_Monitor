@@ -145,6 +145,7 @@ class RunTracker:
         self.replaying = True  # see resubscribed()
         self._replay_deadline: Optional[datetime] = None
         self._seen_number = self._seen_state = False
+        self._seen_title = False  # since resubscribing or its last NaN: see _maybe_start
         self.rb_resync = True  # the first RB number after (re)subscribing may have changed unwatched
         self._pending: Optional[Tuple[str, datetime]] = None  # (number, since) of a start that's settling
         self._final_due = False  # a run ended unseen, and its final counts are still to come
@@ -159,7 +160,7 @@ class RunTracker:
         RUNNUMBER and RUNSTATE have come (or RUNNUMBER, after REPLAY_TIMEOUT),
         nothing starts and no counts are credited to a run."""
         self._suspend()
-        self._seen_number = self._seen_state = False
+        self._seen_number = self._seen_state = self._seen_title = False
         # What was seen before may have changed unseen.
         self.run_state, self.counts, self.start_text, self._start_text_fresh = "", None, None, False
         self._replay_deadline = now + REPLAY_TIMEOUT
@@ -270,9 +271,16 @@ class RunTracker:
         self._seen(now)
         self._maybe_start(now)
 
-    def on_title(self, title: str, now: datetime) -> None:
-        """The decoded WDTITLE. It names the run under its number, and may
-        change several times before BEGIN; it never starts a run."""
+    def on_title(self, title: Optional[str], now: datetime) -> None:
+        """The decoded WDTITLE, "" if blank or None if unknown (NaN). It names
+        the run under its number, and may change several times before BEGIN;
+        it never starts a run, but a start waits for it: see _maybe_start."""
+        self._seen_title = title is not None
+        if title:
+            self._retitle(title)
+        self._maybe_start(now)
+
+    def _retitle(self, title: str) -> None:
         self.title = title
         run = self.run
         # While replaying, or once the run's been seen ending, it may be the next run's: see _seen.
@@ -391,7 +399,9 @@ class RunTracker:
 
     def _maybe_start(self, now: datetime) -> None:
         """Start a run once it's been under way under a new number for SETTLE
-        (one first seen ending: see on_run_number)."""
+        (one first seen ending: see on_run_number). After a resubscribe or an
+        outage, WDTITLE can come seconds after the rest, so a start waits for
+        it, for up to REPLAY_TIMEOUT, rather than take the last run's."""
         run = self.run
         if (self.replaying or not self.run_number or (run is not None and run.number == self.run_number)
                 or self.run_state not in STARTED_STATES):
@@ -400,9 +410,11 @@ class RunTracker:
         if not self._pending or self._pending[0] != self.run_number:
             self._pending = (self.run_number, now)
             self._schedule(SETTLE)
-        elif now - self._pending[1] >= SETTLE:
+        elif now - self._pending[1] >= (SETTLE if self._seen_title else REPLAY_TIMEOUT):
             self._pending = None
             self._start(now)
+        elif now - self._pending[1] >= SETTLE:  # waiting for the title
+            self._schedule(REPLAY_TIMEOUT - (now - self._pending[1]))
         else:  # e.g. a timer that fired early: wait out the rest
             self._schedule(SETTLE - (now - self._pending[1]))
 
@@ -574,13 +586,13 @@ def pv_handlers(tracker: "RunTracker") -> dict:
 
     def title(b64: Any, now: datetime) -> None:
         if pv_text(b64) is None:  # NaN: the IOC is down
+            tracker.on_title(None, now)
             return
         try:
             text = strip_controls(base64.b64decode(str(b64)).decode(errors="replace"))  # e.g. NUL padding
         except ValueError:
             return
-        if text:
-            tracker.on_title(text, now)
+        tracker.on_title(text, now)
 
     return {
         inst.rb_number_pv: on("text", tracker.on_rb),
