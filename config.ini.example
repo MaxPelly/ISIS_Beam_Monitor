@@ -99,8 +99,8 @@ news_teams_url =
 
 # One section per monitored instrument (at least one is required). The name may
 # contain letters, digits, _ and -, and is upper-cased. Its PVs are
-# <prefix>DAE:TOTALUAMPS (µA·h collected), WDTITLE, RUNSTATE_STR, RUNNUMBER and
-# _RBNUMBER, where the prefix is the instrument's from CS:INSTLIST, usually
+# <prefix>DAE:TOTALUAMPS (µA·h collected), WDTITLE, RUNSTATE_STR, RUNNUMBER,
+# STARTTIME and _RBNUMBER, where the prefix is the instrument's from CS:INSTLIST, usually
 # IN:<NAME>: (used until the list arrives, or if it doesn't name it).
 [INSTRUMENT:PEARL]
 # Required: the run's target in total µA·h collected; the "run about to finish"

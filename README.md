@@ -104,8 +104,9 @@ instrument name in the card title (e.g. "PEARL: New run started").
 
 The PVs are derived from the name: progress (total µA·h collected this run) from
 `IN:<NAME>:DAE:TOTALUAMPS`, the run name from `IN:<NAME>:DAE:WDTITLE`, the run state
-from `IN:<NAME>:DAE:RUNSTATE_STR`, the run number from `IN:<NAME>:DAE:RUNNUMBER` and
-the experiment's RB number from `IN:<NAME>:DAE:_RBNUMBER`.
+from `IN:<NAME>:DAE:RUNSTATE_STR`, the run number from `IN:<NAME>:DAE:RUNNUMBER`, its
+start time from `IN:<NAME>:DAE:STARTTIME` and the experiment's RB number from
+`IN:<NAME>:DAE:_RBNUMBER`.
 
 Runs are told apart by their run number, which the DAE moves on (+1) as a run ends. A
 run starts once it's been under way (past BEGINNING) for 1s under a new number, and
@@ -115,8 +116,9 @@ number: the run is begun again under it (seen by its `DAE:STARTTIME`), which isn
 another run; if its title changed since it began (e.g. a new temperature), a "Run …
 restarted" card says so. After a reconnect, a restart or an outage, PVWS re-sends every
 PV in no fixed order, so nothing is decided until both the run number and state have
-come; a run begun and ended unseen meanwhile is still recorded, with its final total
-if the DAE's counts still show it.
+come, and a run begun meanwhile waits up to 10s for its title; a run begun and ended
+unseen meanwhile is still recorded, with its final total if the DAE's counts still
+show it.
 A daemon started mid-run picks the run up without a card. Stalls are only checked while
 a run is under way and the DAE is RUNNING or VETOING, so a paused run, a run-control
 wait or a run ended short of its target isn't reported as one.

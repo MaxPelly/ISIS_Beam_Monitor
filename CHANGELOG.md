@@ -12,6 +12,13 @@ works with (before 2.1.0, the version its `push_site` submodule pointed at).
 - After a reconnect or an IOC outage, WDTITLE can come back seconds after the rest. A run begun meanwhile now waits up to 10s for its title before its card is sent, rather than being announced with the last run's; a run that ends within that wait is recorded without a card. A run re-begun meanwhile gets its restart card (if it was retitled) once its title comes, if within 10s, and that title is the one later restarts are compared with.
 - A run that begins in the hour repeated when the clocks go back gets its real start time, not one an hour earlier.
 - Between runs, the status shows the last run's number beside its title and counts, not the next number the DAE is ready with.
+- A corrupt database no longer stops the daemon from starting: it's moved aside as `beam_monitor.db.corrupt-<time>`, with an error logged, and the daemon starts afresh. One that can't be opened for another reason (e.g. locked or unreadable) still stops it.
+- A push site that hasn't taken the status for 90s (timing out, busy, or refusing it as no newer after the clock steps back) is warned of once, as its Status page then shows the monitor offline, and its taking it again is logged.
+- A blank `[DAEMON] db_path`, `socket_path` or `lock_file` is the default, rather than a temporary database (nothing saved) or a traceback.
+- An unwritable `[LOGGING] file` is a configuration error rather than a traceback, and `daemon --dummy` no longer needs the push secret.
+- `-n` posts the current MCR news straight away, not after the first poll interval.
+- A lone surrogate in a notification or the status (e.g. in a PV's text) is sent as "?" rather than dropping it.
+- The docs list `DAE:STARTTIME` among each instrument's PVs.
 
 ## [2.1.0] - 2026-10-16
 
