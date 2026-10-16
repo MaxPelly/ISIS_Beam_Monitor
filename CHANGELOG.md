@@ -8,7 +8,9 @@ works with (before 2.1.0, the version its `push_site` submodule pointed at).
 
 ## [Unreleased]
 
-Works with push site 2.0.0, which must be installed by then (see its README).
+## [2.1.0] - 2026-10-16
+
+Works with push site 2.0.0, deployed with it (see its README). The daemon's config, database, socket, lock and log move out of the checkout; the database and the instruments' saved state carry over when copied to the new `db_path`.
 
 - The status goes to the push site within `[DAEMON] status_interval` (default 5s) of any change, including each beam's current and each run's µA·h, and at least every 30s, instead of every `sample_interval` (60s) and soon after a significant change. With the push site's 5s polling, its Status page is at most about 10s behind.
 - **Breaking (deployment):** the `push_site` submodule is gone: the push site is installed on its own. `deploy/isis-beam-monitor.service` keeps the checkout read-only and the daemon's files outside it: the config in `/etc/isis-beam-monitor` (the daemon's user's, for `isis-monitor config`), the database in `/var/lib/isis-beam-monitor`, the socket and lock in `/run/isis-beam-monitor` and the log file in `/var/log/isis-beam-monitor`, with those paths set in `config.ini` (see the README). Copy the old `beam_monitor.db` to the new `db_path` before starting it, or the daemon starts afresh. With the push site, the unit gives the daemon the site's secret as its `push-secret` credential and the `isis-ingest` group for the site's socket.
