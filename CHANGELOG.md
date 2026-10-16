@@ -8,6 +8,11 @@ works with (before 2.1.0, the version its `push_site` submodule pointed at).
 
 ## [Unreleased]
 
+- A run's "Previous run" on the next run's card is its own title, not the next run's: a title (or start time) that comes once a run is ending, before its number moves on, is the next run's.
+- After a reconnect or an IOC outage, a run begun meanwhile waits up to 10s for its title before its card is sent, rather than being announced (and its restart cards decided) with the last run's.
+- A run that begins in the hour repeated when the clocks go back gets its real start time, not one an hour earlier.
+- Between runs, the status shows the last run's number beside its title and counts, not the next number the DAE is ready with.
+
 ## [2.1.0] - 2026-10-16
 
 Works with push site 2.0.0, deployed with it (see its README). The daemon's config, database, socket, lock and log move out of the checkout; the database and the instruments' saved state carry over when copied to the new `db_path`.
