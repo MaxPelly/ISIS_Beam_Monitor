@@ -409,7 +409,13 @@ class RunTracker:
             except RuntimeError:  # no loop (e.g. set up outside one): the next update ticks instead
                 return
         self.cancel()
-        self._timer = call_later(delay.total_seconds() + 0.05, lambda: self.tick(datetime.now(timezone.utc)))
+        self._timer = call_later(delay.total_seconds() + 0.05, self._fire)
+
+    def _fire(self) -> None:
+        try:
+            self.tick(datetime.now(timezone.utc))
+        except Exception:  # a bug: logged like a PV update's, and the next update carries on
+            logger.exception(f"{self._log}: run tracking failed")
 
     def _maybe_start(self, now: datetime) -> None:
         """Start a run once it's been under way under a new number for SETTLE

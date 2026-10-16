@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from operator import attrgetter
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -579,6 +580,15 @@ def test_a_timer_that_fires_early_waits_out_the_rest():
     handlers["RUNSTATE_STR"](update("RUNSTATE_STR", "RUNNING"), T0)
     tracker.tick(T0 + SETTLE / 2)
     assert tracker.run is None and scheduled[-1] == pytest.approx((SETTLE / 2).total_seconds() + 0.05)
+
+
+def test_a_failing_timer_is_logged(caplog):
+    scheduled = []
+    tracker = RunTracker(InstrumentConfig("PEARL", 100.0), call_later=lambda d, cb: scheduled.append(cb))
+    tracker.resubscribed(T0)
+    with patch.object(tracker, "tick", side_effect=RuntimeError("bug")):
+        scheduled[-1]()
+    assert "PEARL: run tracking failed" in caplog.text and "bug" in caplog.text
 
 
 def test_start_time_parsing():
