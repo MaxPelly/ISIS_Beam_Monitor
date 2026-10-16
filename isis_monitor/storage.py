@@ -14,10 +14,14 @@ class SQLiteStateStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        # Lets an external reader (e.g. the sqlite3 CLI) holding a lock delay
-        # our writes briefly instead of failing with "database is locked".
-        self.conn.execute("PRAGMA busy_timeout = 5000")
-        self._init_schema()
+        try:
+            # Lets an external reader (e.g. the sqlite3 CLI) holding a lock delay
+            # our writes briefly instead of failing with "database is locked".
+            self.conn.execute("PRAGMA busy_timeout = 5000")
+            self._init_schema()
+        except BaseException:  # e.g. a corrupt file
+            self.conn.close()
+            raise
         # One connection is shared by every caller, and concurrent use of a
         # sqlite3 connection from several threads corrupts its state, so all
         # async callers go through run(), which uses this single thread.

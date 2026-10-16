@@ -656,3 +656,22 @@ def test_restarted_daemon_does_not_replay_notify_current(tmp_path, monkeypatch, 
         run_cli("daemon", write_ini(tmp_path), "-n")
     assert run_daemon.await_args.args[1].notify_current is expected
     assert daemon.RESTARTED_ENV not in os.environ
+
+
+def test_a_corrupt_database_is_moved_aside_and_the_daemon_starts_afresh(tmp_path, caplog):
+    db = tmp_path / "beam_monitor.db"
+    db.write_bytes(b"not a database" * 100)
+    store, snapshot, samples = daemon.open_store(db)
+    store.close()
+    assert (snapshot, samples) == (None, [])
+    (aside,) = tmp_path.glob("beam_monitor.db.corrupt-*")
+    assert aside.read_bytes().startswith(b"not a database")
+    assert "is corrupt" in caplog.text and f"moved it to {aside}" in caplog.text
+
+
+def test_a_database_that_cant_be_opened_is_left_alone(tmp_path):
+    db = tmp_path / "beam_monitor.db"
+    db.mkdir()  # e.g. unreadable: not corrupt, so not to be thrown away
+    with pytest.raises(sqlite3.OperationalError):
+        daemon.open_store(db)
+    assert list(tmp_path.iterdir()) == [db]

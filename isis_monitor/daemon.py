@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import signal
+import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -190,18 +191,38 @@ async def state_persistence_loop(config, state: DaemonState, store: SQLiteStateS
             logger.exception("Failed to persist daemon state; will retry next interval")
 
 
+def open_store(path: Path):
+    """The store, its saved daemon state and the last 24h of samples. A
+    corrupt database is moved aside, and the daemon starts afresh, rather
+    than failing to start every time; one it can't use for another reason
+    (e.g. locked, or unreadable) is left for its owner."""
+    def load():
+        store = SQLiteStateStore(path)
+        try:
+            cutoff = datetime.now(timezone.utc) - HISTORY_WINDOW
+            return store, store.load_snapshot("daemon_state"), store.load_recent_samples(cutoff)
+        except BaseException:
+            store.close()
+            raise
+
+    try:
+        return load()
+    except sqlite3.OperationalError:
+        raise
+    except sqlite3.DatabaseError as exc:
+        aside = path.with_name(f"{path.name}.corrupt-{datetime.now():%Y%m%d-%H%M%S}")
+        path.rename(aside)
+        logger.error(f"The database {path} is corrupt ({exc}); moved it to {aside} and starting afresh")
+        return load()
+
+
 async def run_daemon(config, args, stop_event: asyncio.Event) -> bool:
     """Run until stopped; returns True if the daemon should restart itself."""
     install_signal_handlers(stop_event)
 
     state = DaemonState(instrument_names=[inst.name for inst in config.instruments])  # health starts as "starting"
 
-    def _init_db():
-        store = SQLiteStateStore(Path(config.daemon_db_path))
-        cutoff = datetime.now(timezone.utc) - HISTORY_WINDOW
-        return store, store.load_snapshot("daemon_state"), store.load_recent_samples(cutoff)
-
-    store, raw_snap, recent_samples = await asyncio.to_thread(_init_db)
+    store, raw_snap, recent_samples = await asyncio.to_thread(open_store, Path(config.daemon_db_path))
     state.restore_from_snapshot_json(raw_snap)
     for row in recent_samples:
         state.append_beam_sample(
