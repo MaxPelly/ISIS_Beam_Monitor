@@ -390,6 +390,18 @@ def test_a_title_re_sent_while_replaying_is_not_given_to_the_old_run():
     assert (r.decisions.previous.title, r.tracker.run.title) == ("Run ten", "Run eleven")
 
 
+@pytest.mark.parametrize("ending", [
+    [(20, "RUNSTATE_STR", "ENDING"), (20.5, "WDTITLE", "Run eleven")],  # as POLARIS sends them
+    [(20, "RUNSTATE_STR", "ENDING"), (20.2, "RUNSTATE_STR", "SETUP"), (20.5, "WDTITLE", "Run eleven")],
+    # Only if RUNNUMBER comes after the next run's STARTTIME: not a re-begin.
+    [(20, "RUNSTATE_STR", "ENDING"), (20.5, "STARTTIME", "Tue 13-Oct-2026 10:00:20")],
+], ids=["title", "title in SETUP", "start time"])
+def test_a_title_or_start_time_once_a_run_is_ending_is_the_next_runs(ending):
+    r = running()(*ending, *NEXT_RUN[1:]).settle()
+    assert r.log[1:] == [("done", "00010", 8.0), ("start", "00011", "00010")]
+    assert (r.decisions.previous.title, r.tracker.run.title) == ("Run ten", "Run eleven")
+
+
 def test_resubscribe_replays():
     # Counts while replaying aren't credited.
     r = running()(reconnect(50), (50, "TOTALUAMPS", 0.0))

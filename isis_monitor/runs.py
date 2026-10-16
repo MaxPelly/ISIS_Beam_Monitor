@@ -274,9 +274,11 @@ class RunTracker:
         """The decoded WDTITLE. It names the run under its number, and may
         change several times before BEGIN; it never starts a run."""
         self.title = title
-        if not self.replaying and self.run and self.run.number == self.run_number:
-            self.run.title = title  # while replaying, it may be the next run's: see _seen
-            self.run.begun_title = self.run.begun_title or title  # it began before any title came
+        run = self.run
+        # While replaying, or once the run's been seen ending, it may be the next run's: see _seen.
+        if not self.replaying and run and run.number == self.run_number and self._ending != run.number:
+            run.title = title
+            run.begun_title = run.begun_title or title  # it began before any title came
 
     def credited(self) -> bool:
         """Whether counts now belong to the run (see on_counts)."""
@@ -319,7 +321,7 @@ class RunTracker:
         if run.start_text is None:  # its first: when it really began
             run.start_text = text
             run.started_at = parse_start_time(text, now) or run.started_at
-        elif text != run.start_text:
+        elif text != run.start_text and self._ending != run.number:  # once it's ending, the next run's
             self._rebegin(now)
 
     def on_rb(self, value: Any, now: datetime) -> None:
