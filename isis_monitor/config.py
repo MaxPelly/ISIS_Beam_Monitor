@@ -464,7 +464,7 @@ def parse_config(parser: configparser.ConfigParser, config_path: Path) -> AppCon
             raise ConfigError(f"[{section}] {key}: {exc}") from exc
 
     for name in _PATH_FIELDS:
-        path = values.get(name, getattr(AppConfig, name))
+        path = values.get(name) or getattr(AppConfig, name)  # blank is the default, as for other settings
         if path:
             values[name] = str(config_path.absolute().parent / path)  # an absolute path is kept as is
     if len(os.fsencode(values["daemon_socket_path"])) > MAX_SOCKET_PATH:

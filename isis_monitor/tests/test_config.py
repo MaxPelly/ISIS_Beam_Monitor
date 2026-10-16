@@ -103,9 +103,12 @@ def test_an_unreadable_config_is_reported(tmp_path):
 
 
 def test_load_config_blank_values(tmp_path):
-    """Blank numbers fall back to their defaults; an empty isis_websocket_url is a warning, not an error."""
-    config = load_config(_write(tmp_path, "isis_websocket_url =\n[DAEMON]\nretention_days =\nsample_interval =\n"))
+    """Blank numbers and paths fall back to their defaults; an empty isis_websocket_url is a warning, not an error."""
+    config = load_config(_write(tmp_path, "isis_websocket_url =\n[DAEMON]\nretention_days =\nsample_interval =\n"
+                                          "db_path =\nsocket_path =\nlock_file =\n"))
     assert (config.retention_days, config.sample_interval) == (7, 60)
+    assert (config.daemon_db_path, config.daemon_socket_path, config.daemon_lock_file) == tuple(
+        str(tmp_path / name) for name in ("beam_monitor.db", "isis_beam_monitor.sock", "isis_beam_monitor.lock"))
     assert config.isis_websocket_url == ""
     assert any("isis_websocket_url" in w for w in config.warnings)
 
