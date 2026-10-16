@@ -658,9 +658,24 @@ def test_restarted_daemon_does_not_replay_notify_current(tmp_path, monkeypatch, 
     assert daemon.RESTARTED_ENV not in os.environ
 
 
-def test_a_corrupt_database_is_moved_aside_and_the_daemon_starts_afresh(tmp_path, caplog):
-    db = tmp_path / "beam_monitor.db"
+def not_a_database(db):
     db.write_bytes(b"not a database" * 100)
+
+
+def malformed(db):
+    store = SQLiteStateStore(db)
+    store.write_samples([(datetime.now(timezone.utc), "TS1", 1.0, "high")] * 2000)
+    store.commit()
+    store.close()
+    data = db.read_bytes()
+    db.write_bytes(data[:4096] + b"\xff" * (len(data) - 4096))  # a good header, its pages garbled
+
+
+@pytest.mark.parametrize("damage", [not_a_database, malformed])
+def test_a_corrupt_database_is_moved_aside_and_the_daemon_starts_afresh(tmp_path, caplog, damage):
+    db = tmp_path / "beam_monitor.db"
+    damage(db)
+    first = db.read_bytes()[:64]
     connections = []
     with patch("isis_monitor.storage.sqlite3.connect",
                side_effect=lambda *args, connect=sqlite3.connect, **kwargs: connections.append(
@@ -671,7 +686,7 @@ def test_a_corrupt_database_is_moved_aside_and_the_daemon_starts_afresh(tmp_path
     store.close()
     assert (snapshot, samples) == (None, [])
     (aside,) = tmp_path.glob("beam_monitor.db.corrupt-*")
-    assert aside.read_bytes().startswith(b"not a database")
+    assert aside.read_bytes().startswith(first)
     assert "is corrupt" in caplog.text and f"moved it to {aside}" in caplog.text
 
 
